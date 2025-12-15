@@ -1,0 +1,779 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '@core/database/prisma.service';
+import { OnboardingSession, OnboardingStep } from '@prisma/client';
+import { OnboardingData, OnboardingResponse } from './dto/onboarding.dto';
+import { EmailValidator } from './validators/email.validator';
+import { NameValidator } from './validators/name.validator';
+import { PhoneValidator } from './validators/phone.validator';
+import { IntentMatcher } from '@core/utils/intent-matcher.util';
+import {
+  VERIFICATION_CODE_INTENTS,
+  CONFIRMATION_INTENTS,
+  PHONE_REQUEST_INTENTS,
+  NEGATIVE_INTENTS,
+} from './constants/onboarding-intents.constant';
+
+@Injectable()
+export class OnboardingStateService {
+  private readonly logger = new Logger(OnboardingStateService.name);
+  private readonly TIMEOUT_MS = 1800000; // 30 minutos
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly emailValidator: EmailValidator,
+    private readonly nameValidator: NameValidator,
+    private readonly phoneValidator: PhoneValidator,
+  ) {}
+
+  /**
+   * Inicia novo fluxo de onboarding
+   */
+  async startOnboarding(
+    phoneNumber: string,
+    platform?: 'telegram' | 'whatsapp',
+  ): Promise<OnboardingResponse> {
+    try {
+      // Verificar se já existe sessão ativa
+      const existingSession = await this.getActiveSession(phoneNumber);
+
+      if (existingSession && !this.isExpired(existingSession)) {
+        this.logger.debug(`Sessão de onboarding já existe: ${phoneNumber}`);
+        return this.buildResponse(existingSession);
+      }
+
+      // Preparar dados iniciais com platform
+      const initialData: any = {};
+      if (platform) {
+        initialData.platform = platform;
+      }
+
+      // Usar upsert para criar ou atualizar sessão
+      const session = await this.prisma.onboardingSession.upsert({
+        where: { platformId: phoneNumber },
+        create: {
+          platformId: phoneNumber, // Telegram chatId ou WhatsApp number
+          phoneNumber: null, // Será preenchido quando coletar o telefone
+          currentStep: OnboardingStep.COLLECT_NAME,
+          data: initialData,
+          expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
+        },
+        update: {
+          currentStep: OnboardingStep.COLLECT_NAME,
+          data: initialData,
+          attempts: 0,
+          completed: false,
+          expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
+          updatedAt: new Date(),
+        },
+      });
+
+      this.logger.log(`✅ Onboarding iniciado: ${phoneNumber} (${platform || 'unknown'})`);
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_NAME,
+        message: this.getWelcomeMessage(),
+        data: initialData,
+      };
+    } catch (error) {
+      this.logger.error('Erro ao iniciar onboarding:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Processa mensagem do usuário no fluxo de onboarding
+   */
+  async processMessage(
+    phoneNumber: string,
+    message: string,
+    metadata?: any,
+  ): Promise<OnboardingResponse> {
+    try {
+      const session = await this.getActiveSession(phoneNumber);
+
+      if (!session) {
+        // Iniciar novo onboarding
+        return this.startOnboarding(phoneNumber);
+      }
+
+      // Verificar expiração
+      if (this.isExpired(session)) {
+        this.logger.log(`Sessão expirada, reativando: ${phoneNumber}`);
+
+        // Reativar sessão com nova data de expiração
+        const reactivatedSession = await this.prisma.onboardingSession.update({
+          where: { id: session.id },
+          data: {
+            expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
+            updatedAt: new Date(),
+          },
+        });
+
+        // Retornar mensagem do step atual com aviso de reativação
+        const stepMessage = this.getStepMessage(
+          reactivatedSession.currentStep,
+          reactivatedSession.data as OnboardingData,
+        );
+
+        return {
+          completed: false,
+          currentStep: reactivatedSession.currentStep,
+          message:
+            '⏱️ Opa! Seu cadastro ficou parado por um tempo e expirou.\n\n' +
+            'Mas sem problemas! Vamos continuar de onde paramos. 😊\n\n' +
+            stepMessage,
+          data: reactivatedSession.data as OnboardingData,
+        };
+      }
+
+      // Processar baseado no step atual
+      switch (session.currentStep) {
+        case OnboardingStep.COLLECT_NAME:
+          return this.handleNameCollection(session, message);
+
+        case OnboardingStep.COLLECT_EMAIL:
+          return this.handleEmailCollection(session, message);
+
+        case OnboardingStep.REQUEST_PHONE:
+          return this.handlePhoneRequest(session, message, metadata);
+
+        case OnboardingStep.CHECK_EXISTING_USER:
+          // Este step é processado automaticamente pelo OnboardingService
+          return this.buildResponse(session);
+
+        case OnboardingStep.REQUEST_VERIFICATION_CODE:
+          return this.handleVerificationCodeRequest(session, message);
+
+        case OnboardingStep.VERIFY_CODE:
+          return this.handleCodeVerification(session, message);
+
+        case OnboardingStep.CONFIRM_DATA:
+          return this.handleDataConfirmation(session, message);
+
+        case OnboardingStep.CREATING_ACCOUNT:
+          // Este step é processado automaticamente pelo OnboardingService
+          return this.buildResponse(session);
+
+        default:
+          this.logger.warn(`Step desconhecido: ${session.currentStep}`);
+          return this.buildResponse(session);
+      }
+    } catch (error) {
+      this.logger.error('Erro ao processar mensagem:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Processa coleta de nome
+   */
+  private async handleNameCollection(
+    session: OnboardingSession,
+    message: string,
+  ): Promise<OnboardingResponse> {
+    const validation = this.nameValidator.validate(message);
+
+    if (!validation.isValid) {
+      // Incrementar tentativas
+      await this.incrementAttempts(session.id);
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_NAME,
+        message: `❌ ${validation.error}\n\nPor favor, tente novamente:`,
+      };
+    }
+
+    // Verificar se parece real
+    if (!this.nameValidator.seemsReal(validation.normalizedName!)) {
+      await this.incrementAttempts(session.id);
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_NAME,
+        message: '❌ Por favor, informe seu nome real.\n\nDigite seu nome completo:',
+      };
+    }
+
+    // Salvar nome e avançar para coleta de email
+    const data = (session.data as OnboardingData) || {};
+    data.name = validation.normalizedName!;
+
+    const updated = await this.updateSessionById(session.id, {
+      currentStep: OnboardingStep.COLLECT_EMAIL,
+      data: data as any,
+    });
+
+    return {
+      completed: false,
+      currentStep: OnboardingStep.COLLECT_EMAIL,
+      message: `Prazer em conhecer você, ${data.name}! 😊\n\nAgora preciso do seu *email* para finalizar o cadastro:`,
+      data,
+    };
+  }
+
+  /**
+   * Processa coleta de email
+   */
+  private async handleEmailCollection(
+    session: OnboardingSession,
+    message: string,
+  ): Promise<OnboardingResponse> {
+    // Converter email para minúsculo antes de validar
+    const emailLowerCase = message.trim().toLowerCase();
+    const validation = this.emailValidator.validate(emailLowerCase);
+
+    if (!validation.isValid) {
+      // Verificar se há sugestão de correção
+      const suggestion = this.emailValidator.suggestCorrection(message);
+      let errorMessage = `❌ ${validation.error}`;
+
+      if (suggestion) {
+        errorMessage += `\n\n💡 Você quis dizer: *${suggestion}*?\n\nPor favor, confirme ou digite novamente:`;
+      } else {
+        errorMessage += '\n\nPor favor, tente novamente:';
+      }
+
+      await this.incrementAttempts(session.id);
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_EMAIL,
+        message: errorMessage,
+      };
+    }
+
+    // Salvar email e avançar para solicitação de telefone (Telegram) ou verificação de usuário (WhatsApp)
+    const data = (session.data as OnboardingData) || {};
+    data.email = validation.normalizedEmail!;
+
+    // Para Telegram, solicitar telefone antes de verificar usuário
+    const nextStep =
+      data.platform === 'telegram'
+        ? OnboardingStep.REQUEST_PHONE
+        : OnboardingStep.CHECK_EXISTING_USER;
+
+    const updated = await this.updateSessionById(session.id, {
+      currentStep: nextStep,
+      data: data as any,
+    });
+
+    if (nextStep === OnboardingStep.REQUEST_PHONE) {
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_PHONE,
+        message:
+          '📞 *Quase lá!*\n\n' +
+          'Para finalizarmos, preciso do seu número de telefone.\n\n' +
+          '🔒 *Seu telefone estará seguro!*\n' +
+          'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
+          'ℹ️ Se preferir *pular esta etapa*, digite "pular".',
+        data,
+      };
+    }
+
+    return {
+      completed: false,
+      currentStep: OnboardingStep.CHECK_EXISTING_USER,
+      message: '⏳ Verificando seu cadastro...',
+      data,
+    };
+  }
+
+  /**
+   * Processa solicitação de telefone (Telegram)
+   * Aceita compartilhamento de contato ou comando "pular"
+   */
+  private async handlePhoneRequest(
+    session: OnboardingSession,
+    message: string,
+    metadata?: any,
+  ): Promise<OnboardingResponse> {
+    const data = (session.data as OnboardingData) || {};
+
+    this.logger.log(`[handlePhoneRequest] Mensagem recebida: "${message}"`);
+
+    // Analisar intenção do usuário (incluindo intents negativos)
+    const allIntents = [...PHONE_REQUEST_INTENTS, ...NEGATIVE_INTENTS];
+    const intent = await IntentMatcher.matchIntent(message, allIntents);
+    this.logger.log(
+      `Intent detectado: ${intent.intent} (confiança: ${(intent.confidence * 100).toFixed(1)}%)`,
+    );
+
+    // Verificar se usuário quer cancelar
+    if (intent.matched && intent.intent === 'cancel') {
+      this.logger.log('Usuário solicitou cancelamento');
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_PHONE,
+        message:
+          '❌ *Cadastro cancelado*\n\n' +
+          'Se mudar de ideia, é só começar novamente digitando "oi".\n\n' +
+          'Até logo! 👋',
+        data,
+      };
+    }
+
+    // Verificar se usuário pulou o telefone
+    if (intent.matched && intent.intent === 'skip') {
+      this.logger.log('Usuário pulou compartilhamento de telefone');
+
+      const updated = await this.updateSessionById(session.id, {
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        data: data as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        message: '⏳ Verificando seu cadastro...',
+        data,
+      };
+    }
+
+    // Verificar se recebeu telefone via contact sharing
+    if (metadata?.phoneNumber) {
+      this.logger.log(`Telefone recebido via contact: ${metadata.phoneNumber}`);
+
+      data.realPhoneNumber = metadata.phoneNumber;
+
+      const updated = await this.updateSessionById(session.id, {
+        phoneNumber: metadata.phoneNumber, // Atualizar telefone real na sessão
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        data: data as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        message: `✅ Telefone recebido!\n\n⏳ Verificando seu cadastro...`,
+        data,
+      };
+    }
+
+    // Intent de ajuda
+    if (intent.matched && intent.intent === 'help') {
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_PHONE,
+        message:
+          '❓ *Como compartilhar seu telefone:*\n\n' +
+          '1️⃣ Clique no botão 📞 "Compartilhar Telefone" abaixo\n' +
+          '2️⃣ O Telegram pedirá permissão - clique em "OK"\n' +
+          '3️⃣ Seu telefone será enviado de forma segura\n\n' +
+          '🔒 *Seu número estará protegido!*\n\n' +
+          'Ou digite *"pular"* para continuar sem telefone.',
+        data,
+      };
+    }
+
+    // Tentar validar se usuário digitou um número de telefone manualmente
+    const phoneValidation = this.phoneValidator.validate(message);
+    if (phoneValidation.isValid) {
+      this.logger.log(`Telefone válido digitado: ${phoneValidation.formattedPhone}`);
+
+      data.realPhoneNumber = phoneValidation.normalizedPhone;
+
+      await this.updateSessionById(session.id, {
+        phoneNumber: phoneValidation.normalizedPhone, // Atualizar telefone real na sessão
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        data: data as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.CHECK_EXISTING_USER,
+        message: `✅ Telefone ${phoneValidation.formattedPhone} recebido!\n\n⏳ Verificando seu cadastro...`,
+        data,
+      };
+    }
+
+    // Se tentou digitar número mas está inválido, mostrar erro específico
+    if (phoneValidation.error && /\d/.test(message)) {
+      this.logger.log(`Telefone inválido digitado: ${message}`);
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_PHONE,
+        message: phoneValidation.error,
+        data,
+      };
+    }
+
+    // Se recebeu texto mas não é "pular", explicar novamente
+    return {
+      completed: false,
+      currentStep: OnboardingStep.REQUEST_PHONE,
+      message:
+        '📞 Por favor, use o *botão "Compartilhar telefone"* abaixo.\n\n' +
+        'Digite *"ajuda"* para ver como funciona.\n' +
+        'Ou digite *"pular"* se preferir continuar sem informar o telefone.',
+      data,
+    };
+  }
+
+  /**
+   * Processa solicitação de código de verificação
+   * Permite reenviar código ou corrigir email
+   */
+  private async handleVerificationCodeRequest(
+    session: OnboardingSession,
+    message: string,
+  ): Promise<OnboardingResponse> {
+    const data = session.data as OnboardingData;
+
+    this.logger.log(`[handleVerificationCodeRequest] Mensagem recebida: "${message}"`);
+
+    // Detectar intenção da mensagem (incluindo intents negativos)
+    const allIntents = [...VERIFICATION_CODE_INTENTS, ...NEGATIVE_INTENTS];
+    const intent = await IntentMatcher.matchIntent(message, allIntents);
+    this.logger.log(
+      `Intent detectado: ${intent.intent} (confiança: ${(intent.confidence * 100).toFixed(1)}%)`,
+    );
+
+    // Reenviar código
+    if (intent.matched && intent.intent === 'resend_code') {
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_VERIFICATION_CODE,
+        message: '📨 Reenviando código de verificação...\n\nAguarde um momento.',
+        data: { ...data, resendCode: true },
+      };
+    }
+
+    // Corrigir email
+    if (intent.matched && intent.intent === 'correct_email') {
+      // Voltar para coleta de email
+      await this.updateSessionById(session.id, {
+        currentStep: OnboardingStep.COLLECT_EMAIL,
+        data: { name: data.name, platform: data.platform } as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_EMAIL,
+        message: '✏️ Ok! Vamos corrigir seu email.\n\nPor favor, informe o email correto:',
+        data: { name: data.name },
+      };
+    }
+
+    // Se parecer um código (6 dígitos)
+    if (/^\d{6}$/.test(message)) {
+      // Avançar para verificação
+      const updatedData = { ...data, verificationCode: message };
+      await this.updateSessionById(session.id, {
+        currentStep: OnboardingStep.VERIFY_CODE,
+        data: updatedData as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.VERIFY_CODE,
+        message: '🔍 Verificando código...',
+        data: updatedData,
+      };
+    }
+
+    // Mensagem de ajuda
+    return {
+      completed: false,
+      currentStep: OnboardingStep.REQUEST_VERIFICATION_CODE,
+      message:
+        `❓ Não entendi. Você pode:\n\n` +
+        `📨 *Digite o código* de 6 dígitos que enviamos para ${data.email}\n` +
+        `🔄 Digite *"reenviar"* para receber um novo código\n` +
+        `✏️ Digite *"corrigir email"* se o email está errado\n\n` +
+        `O que deseja fazer?`,
+      data,
+    };
+  }
+
+  /**
+   * Processa verificação de código
+   * Este step é processado automaticamente pelo OnboardingService
+   */
+  private async handleCodeVerification(
+    session: OnboardingSession,
+    message: string,
+  ): Promise<OnboardingResponse> {
+    const data = session.data as OnboardingData;
+
+    // Se o OnboardingService não processar, dar feedback ao usuário
+    return {
+      completed: false,
+      currentStep: OnboardingStep.VERIFY_CODE,
+      message: '⏳ Verificando seu código...\n\nAguarde um momento.',
+      data,
+    };
+  }
+
+  /**
+   * Processa confirmação de dados
+   */
+  private async handleDataConfirmation(
+    session: OnboardingSession,
+    message: string,
+  ): Promise<OnboardingResponse> {
+    const data = session.data as OnboardingData;
+
+    this.logger.log(`[handleDataConfirmation] Mensagem recebida: "${message}"`);
+
+    // Detectar intenção do usuário (incluindo intents negativos)
+    const allIntents = [...CONFIRMATION_INTENTS, ...NEGATIVE_INTENTS];
+    const intent = await IntentMatcher.matchIntent(message, allIntents);
+    this.logger.log(
+      `Intent confirmado: ${intent.intent} (confiança: ${(intent.confidence * 100).toFixed(1)}%)`,
+    );
+
+    // Verificar resposta afirmativa
+    if (intent.matched && intent.intent === 'confirm') {
+      // Marcar como pronto para criar conta
+      const updated = await this.updateSessionById(session.id, {
+        currentStep: OnboardingStep.CREATING_ACCOUNT,
+        data: data as any,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.CREATING_ACCOUNT,
+        message: '⏳ Perfeito! Estou criando sua conta no GastoCerto...',
+        data,
+      };
+    }
+
+    // Verificar resposta negativa (recomeçar)
+    if (intent.matched && intent.intent === 'restart') {
+      // Reiniciar fluxo
+      const updated = await this.updateSessionById(session.id, {
+        currentStep: OnboardingStep.COLLECT_NAME,
+        data: { platform: data.platform },
+        attempts: 0,
+      });
+
+      return {
+        completed: false,
+        currentStep: OnboardingStep.COLLECT_NAME,
+        message: 'Tranquilo! Vamos corrigir então. 😊\n\nQual é o seu *nome completo*?',
+      };
+    }
+
+    // Resposta inválida
+    return {
+      completed: false,
+      currentStep: OnboardingStep.CONFIRM_DATA,
+      message:
+        '❓ Não entendi sua resposta.\n\n' +
+        'Por favor, responda:\n' +
+        '✅ *"Sim"* para confirmar\n' +
+        '❌ *"Não"* para corrigir',
+    };
+  }
+
+  /**
+   * Marca onboarding como completo
+   */
+  async completeOnboarding(platformId: string): Promise<void> {
+    try {
+      this.logger.log(`🔄 Iniciando completeOnboarding para: ${platformId}`);
+
+      const result = await this.prisma.onboardingSession.updateMany({
+        where: { platformId },
+        data: {
+          completed: true,
+          currentStep: OnboardingStep.COMPLETED,
+        },
+      });
+
+      this.logger.log(
+        `✅ Onboarding completo: ${platformId} (${result.count} registro(s) atualizado(s))`,
+      );
+
+      // Verificar se realmente foi atualizado
+      const updated = await this.prisma.onboardingSession.findFirst({
+        where: { platformId },
+        select: { id: true, completed: true, currentStep: true },
+      });
+      this.logger.log(`🔍 Verificação: ${JSON.stringify(updated)}`);
+    } catch (error) {
+      this.logger.error('Erro ao completar onboarding:', error);
+      throw error; // Propagar erro para debug
+    }
+  }
+
+  /**
+   * Busca sessão ativa de onboarding por platformId
+   */
+  async getActiveSession(platformId: string): Promise<OnboardingSession | null> {
+    return this.prisma.onboardingSession.findFirst({
+      where: {
+        platformId,
+        completed: false,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
+  /**
+   * Atualiza sessão de onboarding (método interno)
+   */
+  private async updateSessionById(
+    sessionId: string,
+    data: Partial<OnboardingSession>,
+  ): Promise<OnboardingSession> {
+    return this.prisma.onboardingSession.update({
+      where: { id: sessionId },
+      data: {
+        ...data,
+        lastMessageAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Atualiza sessão de onboarding por telefone (método público)
+   */
+  async updateSession(
+    phoneNumberOrId: string,
+    data: Partial<{ currentStep: OnboardingStep; data?: any }>,
+  ): Promise<OnboardingSession> {
+    const session = await this.getActiveSession(phoneNumberOrId);
+    if (!session) {
+      throw new Error(`Sessão não encontrada para: ${phoneNumberOrId}`);
+    }
+
+    return this.prisma.onboardingSession.update({
+      where: { id: session.id },
+      data: {
+        ...data,
+        lastMessageAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Incrementa contador de tentativas
+   */
+  private async incrementAttempts(sessionId: string): Promise<void> {
+    await this.prisma.onboardingSession.update({
+      where: { id: sessionId },
+      data: {
+        attempts: { increment: 1 },
+        lastMessageAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Expira sessão
+   */
+  private async expireSession(sessionId: string): Promise<void> {
+    await this.prisma.onboardingSession.update({
+      where: { id: sessionId },
+      data: { completed: true },
+    });
+  }
+
+  /**
+   * Verifica se sessão expirou
+   */
+  private isExpired(session: OnboardingSession): boolean {
+    return new Date() > session.expiresAt;
+  }
+
+  /**
+   * Constrói resposta baseada na sessão atual
+   */
+  private buildResponse(session: OnboardingSession): OnboardingResponse {
+    const data = session.data as OnboardingData;
+
+    let message = '';
+
+    switch (session.currentStep) {
+      case OnboardingStep.COLLECT_NAME:
+        message = this.getWelcomeMessage();
+        break;
+      case OnboardingStep.COLLECT_EMAIL:
+        message = `Por favor, informe seu *email*:`;
+        break;
+      case OnboardingStep.CONFIRM_DATA:
+        message = this.getConfirmationMessage(data);
+        break;
+      case OnboardingStep.COMPLETED:
+        message = '✅ Seu cadastro já foi concluído!';
+        break;
+      default:
+        message = 'Continuando seu cadastro...';
+    }
+
+    return {
+      completed: session.completed,
+      currentStep: session.currentStep,
+      message,
+      data,
+    };
+  }
+
+  /**
+   * Mensagem de boas-vindas
+   */
+  private getWelcomeMessage(): string {
+    return `Olá! 👋 Que bom ter você aqui no *GastoCerto*!\n\nSou seu assistente financeiro e vou te ajudar a controlar seus gastos de forma simples e rápida.\n\nPara começar, qual é o seu *nome completo*?`;
+  }
+
+  /**
+   * Mensagem de confirmação de dados
+   */
+  private getConfirmationMessage(data: OnboardingData): string {
+    return `📋 Perfeito! Vamos confirmar seus dados:\n\n👤 *Nome:* ${data.name}\n📧 *Email:* ${data.email}\n\nEstá tudo certinho? Digite *sim* para continuar ou *não* para corrigir.`;
+  }
+
+  /**
+   * Retorna apenas a pergunta do step atual (sem saudação)
+   * Usado quando reativa sessão expirada
+   */
+  private getStepMessage(step: OnboardingStep, data: OnboardingData): string {
+    switch (step) {
+      case OnboardingStep.COLLECT_NAME:
+        return '📝 Qual é o seu *nome completo*?';
+
+      case OnboardingStep.COLLECT_EMAIL:
+        return '📧 Agora, qual é o seu *email*?';
+
+      case OnboardingStep.REQUEST_PHONE:
+        return (
+          '📞 Quase lá!\n\n' +
+          'Para finalizarmos, preciso do seu número de telefone.\n\n' +
+          '🔒 Seu telefone estará seguro!\n' +
+          'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
+          'ℹ️ Se preferir pular esta etapa, digite "pular".'
+        );
+
+      case OnboardingStep.REQUEST_VERIFICATION_CODE:
+        return (
+          '📧 *Código enviado para seu email!*\n\n' +
+          `Enviamos um código de verificação para *${data.email}*\n\n` +
+          'Digite o código de 6 dígitos que você recebeu:'
+        );
+
+      case OnboardingStep.CONFIRM_DATA:
+        return this.getConfirmationMessage(data);
+
+      case OnboardingStep.CHECK_EXISTING_USER:
+        return '⏳ Verificando seu cadastro...';
+
+      case OnboardingStep.VERIFY_CODE:
+        return '🔍 Verificando código...';
+
+      case OnboardingStep.CREATING_ACCOUNT:
+        return '✨ Criando sua conta...';
+
+      case OnboardingStep.COMPLETED:
+        return '✅ Seu cadastro já foi concluído!';
+
+      default:
+        return 'Continuando seu cadastro...';
+    }
+  }
+}

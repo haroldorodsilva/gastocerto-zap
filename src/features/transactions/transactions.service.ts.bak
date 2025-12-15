@@ -1,0 +1,1228 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PrismaService } from '@common/prisma.service';
+import { AIProviderFactory } from '../ai/ai-provider.factory';
+import { TransactionValidatorService } from './transaction-validator.service';
+import { TransactionConfirmationService } from './transaction-confirmation.service';
+import { GastoCertoApiService } from '../users/gasto-certo-api.service';
+import { UserCacheService } from '../users/user-cache.service';
+import { IntentAnalyzerService, MessageIntent } from '../intent/intent-analyzer.service';
+import { TransactionData } from '../ai/ai.interface';
+import { UserCache, TransactionConfirmation } from '@prisma/client';
+import {
+  CreateTransactionConfirmationDto,
+  CreateGastoCertoTransactionDto,
+} from './dto/transaction.dto';
+
+export interface ProcessMessageResult {
+  success: boolean;
+  message: string;
+  requiresConfirmation: boolean;
+  confirmationId?: string;
+  autoRegistered?: boolean;
+}
+
+@Injectable()
+export class TransactionsService {
+  private readonly logger = new Logger(TransactionsService.name);
+  private readonly requireConfirmation: boolean;
+  private readonly autoRegisterThreshold: number;
+  private readonly minConfidenceThreshold: number;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiFactory: AIProviderFactory,
+    private readonly validator: TransactionValidatorService,
+    private readonly confirmationService: TransactionConfirmationService,
+    private readonly gastoCertoApi: GastoCertoApiService,
+    private readonly userCache: UserCacheService,
+    private readonly configService: ConfigService,
+    private readonly intentAnalyzer: IntentAnalyzerService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {
+    this.requireConfirmation = this.configService.get<boolean>('REQUIRE_CONFIRMATION', true);
+    this.autoRegisterThreshold = this.configService.get<number>('AUTO_REGISTER_THRESHOLD', 0.8);
+    this.minConfidenceThreshold = this.configService.get<number>('MIN_CONFIDENCE_THRESHOLD', 0.5);
+
+    this.logger.log(
+      `🎯 Configuração de confirmações: ` +
+        `requireConfirmation=${this.requireConfirmation}, ` +
+        `autoRegisterThreshold=${this.autoRegisterThreshold}, ` +
+        `minConfidenceThreshold=${this.minConfidenceThreshold}`,
+    );
+  }
+
+  /**
+   * ✨ Helper para emitir eventos de resposta para o usuário
+   * 
+   * Usa platformId (phoneNumber) para garantir roteamento correto via MessageContextService
+   */
+  private emitReply(
+    platformId: string,
+    message: string,
+    context: 'INTENT_RESPONSE' | 'CONFIRMATION_REQUEST' | 'TRANSACTION_RESULT' | 'ERROR',
+    metadata?: any,
+  ): void {
+    this.eventEmitter.emit('message.reply', {
+      platformId, // Usando platformId ao invés de phoneNumber
+      message,
+      context,
+      metadata,
+    });
+  }
+
+  /**
+   * Helper para tratar erros de IA de forma amigável
+   */
+  private handleAIError(error: any, context: 'texto' | 'imagem' | 'áudio'): string {
+    const errorMessage = error.message || '';
+
+    // Erro de rate limit
+    if (errorMessage.includes('Rate limit atingido')) {
+      return (
+        '⏰ *Muitas requisições no momento*\n\n' +
+        'Estamos processando muitas mensagens. Por favor, aguarde alguns instantes e tente novamente.\n\n' +
+        '_Se o problema persistir, entre em contato com o suporte._'
+      );
+    }
+
+    // Erro de fallback não configurado (provider principal falhou)
+    if (errorMessage.includes('Configure AI_FALLBACK_ENABLED')) {
+      return (
+        '🤖 *Serviço de IA temporariamente indisponível*\n\n' +
+        'Estamos com problema no processamento de mensagens. Nossa equipe já foi notificada.\n\n' +
+        'Por favor, tente novamente em alguns minutos.'
+      );
+    }
+
+    // Erro de quota/créditos (OpenAI, Gemini, etc)
+    if (
+      errorMessage.includes('quota') ||
+      errorMessage.includes('insufficient_quota') ||
+      errorMessage.includes('billing')
+    ) {
+      return (
+        '💳 *Limite de processamento atingido*\n\n' +
+        'Atingimos o limite de processamento de IA para este período.\n\n' +
+        'Nossa equipe já foi notificada e o serviço será restabelecido em breve.\n\n' +
+        '_Desculpe pelo inconveniente._'
+      );
+    }
+
+    // Erro de timeout
+    if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+      return (
+        '⏱️ *Tempo esgotado*\n\n' +
+        'O processamento está demorando mais que o esperado.\n\n' +
+        'Por favor, tente novamente.'
+      );
+    }
+
+    // Erro genérico por tipo de mídia
+    const contextMessages = {
+      texto:
+        '❌ *Não consegui processar sua mensagem*\n\n' +
+        'Ocorreu um erro inesperado. Por favor:\n' +
+        '1. Tente reformular sua mensagem\n' +
+        '2. Se o problema persistir, entre em contato com o suporte\n\n' +
+        '_Exemplo: "Gastei 50 reais em alimentação no mercado"_',
+      imagem:
+        '❌ *Não consegui processar a imagem*\n\n' +
+        'Ocorreu um erro ao analisar a imagem. Por favor:\n' +
+        '1. Tente enviar a imagem novamente\n' +
+        '2. Certifique-se que a imagem está legível\n' +
+        '3. Ou digite manualmente: "Gastei 50 reais em alimentação"',
+      áudio:
+        '❌ *Não consegui processar o áudio*\n\n' +
+        'Ocorreu um erro ao transcrever o áudio. Por favor:\n' +
+        '1. Tente gravar o áudio novamente\n' +
+        '2. Fale de forma clara\n' +
+        '3. Ou digite manualmente: "Gastei 50 reais em alimentação"',
+    };
+
+    return contextMessages[context];
+  }
+
+  /**
+   * Processa mensagem de texto e extrai transação
+   */
+  async processTextMessage(
+    phoneNumber: string,
+    text: string,
+    messageId: string,
+  ): Promise<ProcessMessageResult> {
+    try {
+      this.logger.log(`📝 Processando texto de ${phoneNumber}: "${text}"`);
+
+      // 1. Buscar usuário
+      const user = await this.userCache.getUser(phoneNumber);
+      if (!user) {
+        return {
+          success: false,
+          message: '❌ Usuário não encontrado. Complete o cadastro primeiro.',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 2. Analisar intenção da mensagem com NLP ANTES de chamar IA
+      this.logger.log(`🧠 Analisando intenção da mensagem com NLP...`);
+      const intentResult = await this.intentAnalyzer.analyzeIntent(text, phoneNumber, user.id);
+
+      this.logger.log(
+        `🎯 Intent detectado: ${intentResult.intent} | Confiança: ${(intentResult.confidence * 100).toFixed(1)}% | Processar com IA: ${intentResult.shouldProcess ? 'SIM' : 'NÃO'}`,
+      );
+
+      // Se NLP detectou que NÃO é transação, retornar resposta sugerida
+      if (!intentResult.shouldProcess) {
+        this.logger.log(`⛔ Mensagem não será processada pela IA - Retornando sugestão`);
+
+        const responseMessage =
+          intentResult.suggestedResponse ||
+          'Mensagem recebida. Para registrar transações, envie algo como: "Gastei R$50 no mercado"';
+
+        // Emitir evento para enviar resposta ao usuário
+        this.emitReply(phoneNumber, responseMessage, 'INTENT_RESPONSE', {
+          intent: intentResult.intent,
+          confidence: intentResult.confidence,
+        });
+
+        return {
+          success: true,
+          message: responseMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      this.logger.log(`✅ Intenção válida para processamento com IA`);
+
+      // 3. Buscar categorias completas (com accounts se necessário)
+      this.logger.log(`🔍 Buscando categorias para análise de transação...`);
+      const categoriesData = await this.userCache.getUserCategories(phoneNumber);
+
+      this.logger.log(
+        `📊 Categorias disponíveis: ${categoriesData.categories.length} categoria(s) de ${categoriesData.accounts.length} conta(s)`,
+      );
+
+      if (categoriesData.hasCategories) {
+        // Log das categorias para análise
+        categoriesData.categories.forEach((cat: any) => {
+          this.logger.log(
+            `  📂 ${cat.name} (ID: ${cat.id}) - Tipo: ${cat.type} - Conta: ${cat.accountName || 'N/A'} (Default: ${cat.isDefaultAccount ? 'Sim' : 'Não'})`,
+          );
+        });
+      }
+
+      // 3. Extrair dados com IA
+      let transactionData: TransactionData;
+      let responseTime: number;
+
+      try {
+        const startTime = Date.now();
+        transactionData = await this.aiFactory.extractTransaction(text, {
+          name: user.name,
+          email: user.email,
+          categories: categoriesData.categories,
+        });
+        responseTime = Date.now() - startTime;
+
+        // Estimar tokens (aproximado: 1 token ≈ 4 caracteres)
+        const inputTokens = Math.ceil(text.length / 4);
+        const outputTokens = Math.ceil(JSON.stringify(transactionData).length / 4);
+
+        // Registrar uso de IA
+        await this.aiFactory.logAIUsage({
+          phoneNumber,
+          userCacheId: user.id,
+          operation: 'TRANSACTION_EXTRACTION',
+          inputType: 'TEXT',
+          inputText: text,
+          inputTokens,
+          outputTokens,
+          metadata: {
+            confidence: transactionData.confidence,
+            category: transactionData.category,
+            amount: transactionData.amount,
+            type: transactionData.type,
+            responseTimeMs: responseTime,
+          },
+        });
+      } catch (aiError: any) {
+        this.logger.error(`❌ Erro ao processar com IA: ${aiError.message}`, aiError.stack);
+
+        // Identificar tipo de erro
+        let errorMessage = '❌ *Erro ao processar sua mensagem*\n\n';
+        let errorType = 'ai_error';
+
+        if (aiError.message?.includes('timeout') || aiError.message?.includes('ETIMEDOUT')) {
+          errorType = 'ai_timeout';
+          errorMessage +=
+            '⏱️ A inteligência artificial demorou muito para responder.\n\n' +
+            'Por favor, tente novamente em alguns instantes.';
+        } else if (aiError.message?.includes('rate limit') || aiError.message?.includes('429')) {
+          errorType = 'ai_rate_limit';
+          errorMessage +=
+            '🚦 Muitas requisições em pouco tempo.\n\n' +
+            'Aguarde alguns segundos e tente novamente.';
+        } else if (aiError.message?.includes('API key') || aiError.message?.includes('401')) {
+          errorType = 'ai_auth_error';
+          errorMessage +=
+            '🔐 Erro de autenticação com a IA.\n\n' + 'Entre em contato com o suporte técnico.';
+        } else {
+          errorMessage +=
+            '🤖 Ocorreu um erro inesperado ao processar sua mensagem.\n\n' +
+            'Por favor, tente reformular e enviar novamente.\n\n' +
+            '*Dica:* Use o formato "Gastei R$50 no mercado"';
+        }
+
+        // Emitir evento de erro
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType,
+            errorMessage: aiError.message,
+            originalText: text,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      this.logger.log(`\n🤖 ========== RESULTADO EXTRAÇÃO IA ==========`);
+      this.logger.log(
+        `💰 Tipo: ${transactionData.type} | Valor: R$ ${(transactionData.amount / 100).toFixed(2)}`,
+      );
+      this.logger.log(`📂 Categoria extraída: "${transactionData.category}"`);
+      this.logger.log(`📝 Descrição: "${transactionData.description || 'N/A'}"`);
+      this.logger.log(`🎯 Confidence: ${(transactionData.confidence * 100).toFixed(0)}%`);
+      this.logger.log(`=============================================\n`);
+
+      // 4. Validar dados extraídos
+      const validation = this.validator.validate(transactionData);
+      if (!validation.isValid) {
+        return {
+          success: false,
+          message: `❌ Não consegui entender a transação:\n${validation.errors.join('\n')}`,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 5. Verificar confidence e decidir fluxo
+      const confidence = transactionData.confidence;
+
+      // 5.1. Rejeitar se confidence muito baixo
+      if (confidence < this.minConfidenceThreshold) {
+        this.logger.warn(
+          `⚠️ Confidence muito baixo (${(confidence * 100).toFixed(0)}%) - Rejeitando transação`,
+        );
+        return {
+          success: false,
+          message:
+            `❌ Não tenho certeza suficiente sobre essa transação (${(confidence * 100).toFixed(0)}% de confiança).\n\n` +
+            `Por favor, tente reformular de forma mais clara. Exemplo:\n` +
+            `"Gastei 50 reais em alimentação no mercado"`,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 5.2. Auto-registrar se:
+      //      - Confirmações desabilitadas globalmente OU
+      //      - Confidence alto suficiente
+      const shouldAutoRegister =
+        !this.requireConfirmation || confidence >= this.autoRegisterThreshold;
+
+      if (shouldAutoRegister) {
+        this.logger.log(
+          `✅ Auto-registrando transação (confidence: ${(confidence * 100).toFixed(0)}%)`,
+        );
+
+        // Emitir evento IMEDIATO informando que está processando
+        const typeEmoji = transactionData.type === 'EXPENSES' ? '💸' : '💰';
+        const typeText = transactionData.type === 'EXPENSES' ? 'Gasto' : 'Receita';
+        const amountFormatted = this.validator.formatAmount(transactionData.amount);
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message:
+            `🤖 *${typeText} detectado com alta confiança!*\n\n` +
+            `${typeEmoji} *Valor:* ${amountFormatted}\n` +
+            `📂 *Categoria:* ${transactionData.category}\n` +
+            `${transactionData.description ? `📝 *Descrição:* ${transactionData.description}\n` : ''}` +
+            `\n⏳ Registrando automaticamente...`,
+          context: 'INTENT_RESPONSE',
+          metadata: {
+            action: 'auto_register_started',
+            confidence,
+          },
+        });
+
+        // Criar confirmação temporária para registro
+        const tempConfirmation = await this.createConfirmation(
+          phoneNumber,
+          messageId,
+          transactionData,
+        );
+
+        // Registrar imediatamente
+        const registerResult = await this.registerTransaction(tempConfirmation);
+
+        // O registerTransaction já emite o evento de sucesso/erro final
+        // então não precisamos emitir novamente aqui
+
+        return {
+          success: registerResult.success,
+          message: registerResult.message,
+          requiresConfirmation: false,
+          autoRegistered: true,
+        };
+      }
+
+      // 4.3. Pedir confirmação (confidence médio)
+      this.logger.log(`❓ Solicitando confirmação (confidence: ${(confidence * 100).toFixed(0)}%)`);
+
+      const confirmation = await this.createConfirmation(phoneNumber, messageId, transactionData);
+
+      // 5. Formatar mensagem de confirmação
+      const confirmationMessage = this.confirmationService.formatConfirmationMessage(confirmation);
+
+      // Adicionar avisos se houver
+      let finalMessage = confirmationMessage;
+      if (validation.warnings.length > 0) {
+        finalMessage += `\n\n⚠️ *Avisos:*\n${validation.warnings.join('\n')}`;
+      }
+
+      // Emitir evento para enviar mensagem de confirmação
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber,
+        message: finalMessage,
+        context: 'CONFIRMATION_REQUEST',
+        metadata: {
+          confirmationId: confirmation.id,
+          confidence,
+        },
+      });
+
+      return {
+        success: true,
+        message: finalMessage,
+        requiresConfirmation: true,
+        confirmationId: confirmation.id,
+      };
+    } catch (error) {
+      this.logger.error('Erro ao processar mensagem de texto:', error);
+      return {
+        success: false,
+        message: this.handleAIError(error, 'texto'),
+        requiresConfirmation: false,
+      };
+    }
+  }
+
+  /**
+   * Processa imagem (NFe, comprovante)
+   */
+  async processImageMessage(
+    phoneNumber: string,
+    imageBuffer: Buffer,
+    mimeType: string,
+    messageId: string,
+  ): Promise<ProcessMessageResult> {
+    try {
+      this.logger.log(`📸 Processando imagem de ${phoneNumber}`);
+
+      // 1. Buscar usuário
+      const user = await this.userCache.getUser(phoneNumber);
+      if (!user) {
+        return {
+          success: false,
+          message: '❌ Usuário não encontrado. Complete o cadastro primeiro.',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 2. Validar tamanho da imagem (max 10MB)
+      const maxSize = 10 * 1024 * 1024; // 10MB
+      if (imageBuffer.length > maxSize) {
+        return {
+          success: false,
+          message: '❌ Imagem muito grande (máx: 10MB).\n\nCompacte a imagem ou tire uma foto com menor qualidade.',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3. Analisar imagem com IA
+      let transactionData: TransactionData;
+      try {
+        const startTime = Date.now();
+        transactionData = await this.aiFactory.analyzeImage(imageBuffer, mimeType);
+        const responseTime = Date.now() - startTime;
+
+        this.logger.log(
+          `📸 Imagem analisada em ${responseTime}ms | Confidence: ${(transactionData.confidence * 100).toFixed(0)}%`,
+        );
+      } catch (aiError: any) {
+        this.logger.error(`❌ Erro ao analisar imagem com IA: ${aiError.message}`, aiError.stack);
+
+        let errorMessage = '❌ *Erro ao processar imagem*\n\n';
+
+        if (aiError.message?.includes('timeout') || aiError.message?.includes('ETIMEDOUT')) {
+          errorMessage +=
+            '⏱️ A análise da imagem demorou muito.\n\nTente novamente ou digite os dados manualmente.';
+        } else if (aiError.message?.includes('rate limit') || aiError.message?.includes('429')) {
+          errorMessage += '🚦 Muitas requisições. Aguarde alguns segundos e tente novamente.';
+        } else {
+          errorMessage +=
+            '🤖 Não consegui processar a imagem.\n\n*Dicas:*\n• Envie uma imagem mais clara\n• Tire foto com boa iluminação\n• Ou digite os dados manualmente';
+        }
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'ai_image_error',
+            errorMessage: aiError.message,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 4. Validar dados extraídos
+      const validation = this.validator.validate(transactionData);
+      if (!validation.isValid) {
+        const errorMessage =
+          `❌ *Não consegui extrair dados válidos da imagem*\n\n` +
+          `${validation.errors.join('\n')}\n\n` +
+          `*Dicas:*\n` +
+          `• Envie uma foto mais clara da nota fiscal\n` +
+          `• Certifique-se que o valor está visível\n` +
+          `• Ou digite: "Gastei R$50 no mercado"`;
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'validation_error',
+            errors: validation.errors,
+            confidence: transactionData.confidence,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 5. Verificar confiança muito baixa
+      if (transactionData.confidence < 0.5) {
+        const errorMessage =
+          `❌ *Confiança muito baixa na extração* (${(transactionData.confidence * 100).toFixed(0)}%)\n\n` +
+          `A imagem está muito borrada ou não é uma nota fiscal válida.\n\n` +
+          `*Por favor:*\n` +
+          `• Envie uma imagem mais clara\n` +
+          `• Tire foto com melhor iluminação\n` +
+          `• Ou digite os dados manualmente`;
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'low_confidence',
+            confidence: transactionData.confidence,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 6. Criar confirmação pendente
+      const confirmation = await this.createConfirmation(phoneNumber, messageId, transactionData);
+
+      // 7. Formatar mensagem de confirmação
+      let message = '📸 *Dados extraídos da imagem:*\n\n';
+      message += this.confirmationService.formatConfirmationMessage(confirmation);
+
+      // Adicionar avisos
+      if (validation.warnings.length > 0) {
+        message += `\n\n⚠️ *Avisos:*\n${validation.warnings.join('\n')}`;
+      }
+
+      if (transactionData.confidence < 0.7) {
+        message += '\n\n⚠️ *Confiança média na extração. Por favor, revise os dados.*';
+      }
+
+      // Emitir evento para enviar confirmação
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber,
+        message,
+        context: 'CONFIRMATION_REQUEST',
+        metadata: {
+          confirmationId: confirmation.id,
+          confidence: transactionData.confidence,
+          fromImage: true,
+        },
+      });
+
+      return {
+        success: true,
+        message,
+        requiresConfirmation: true,
+        confirmationId: confirmation.id,
+      };
+    } catch (error: any) {
+      this.logger.error('Erro ao processar imagem:', error);
+
+      const errorMessage =
+        '❌ *Erro inesperado ao processar imagem*\n\n' +
+        'Por favor, tente novamente ou digite os dados manualmente.';
+
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber,
+        message: errorMessage,
+        context: 'ERROR',
+        metadata: {
+          errorType: 'exception',
+          errorMessage: error.message,
+        },
+      });
+
+      return {
+        success: false,
+        message: errorMessage,
+        requiresConfirmation: false,
+      };
+    }
+  }
+
+  /**
+   * Processa áudio (transcreve e extrai transação)
+   */
+  async processAudioMessage(
+    phoneNumber: string,
+    audioBuffer: Buffer,
+    mimeType: string,
+    messageId: string,
+  ): Promise<ProcessMessageResult> {
+    try {
+      this.logger.log(`🎤 Processando áudio de ${phoneNumber}`);
+
+      // 1. Buscar usuário
+      const user = await this.userCache.getUser(phoneNumber);
+      if (!user) {
+        return {
+          success: false,
+          message: '❌ Usuário não encontrado. Complete o cadastro primeiro.',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 2. Estimar duração do áudio (aproximação: 16kHz mono)
+      const estimatedDurationSeconds = audioBuffer.length / 16000;
+      const maxDurationSeconds = 120; // 2 minutos
+
+      this.logger.log(
+        `🎤 Duração estimada do áudio: ${estimatedDurationSeconds.toFixed(1)}s (max: ${maxDurationSeconds}s)`,
+      );
+
+      // 3. Validar duração - áudios muito longos provavelmente não são transações
+      if (estimatedDurationSeconds > maxDurationSeconds) {
+        const errorMessage =
+          `⏱️ *Áudio muito longo* (${Math.floor(estimatedDurationSeconds)}s)\n\n` +
+          `Áudios de transações geralmente têm menos de 2 minutos.\n\n` +
+          `*Por favor:*\n` +
+          `• Envie um áudio mais curto\n` +
+          `• Ou digite: "Gastei R$50 no mercado"`;
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'audio_too_long',
+            durationSeconds: estimatedDurationSeconds,
+            maxDurationSeconds,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 4. Transcrever áudio
+      let transcription: string;
+      try {
+        const startTimeAudio = Date.now();
+        transcription = await this.aiFactory.transcribeAudio(audioBuffer, mimeType);
+        const responseTimeAudio = Date.now() - startTimeAudio;
+
+        // Estimar tokens para áudio (1 minuto ≈ 150-200 tokens)
+        const audioTokens = Math.ceil((estimatedDurationSeconds / 60) * 175);
+
+        // Registrar transcrição de áudio
+        await this.aiFactory.logAIUsage({
+          phoneNumber,
+          userCacheId: user.id,
+          operation: 'AUDIO_TRANSCRIPTION',
+          inputType: 'AUDIO',
+          inputTokens: audioTokens,
+          outputTokens: Math.ceil(transcription.length / 4),
+          metadata: {
+            transcription,
+            mimeType,
+            bufferSize: audioBuffer.length,
+            durationSeconds: estimatedDurationSeconds,
+            responseTimeMs: responseTimeAudio,
+          },
+        });
+
+        this.logger.log(`🎤 Transcrição (${responseTimeAudio}ms): "${transcription}"`);
+      } catch (aiError: any) {
+        this.logger.error(`❌ Erro ao transcrever áudio: ${aiError.message}`, aiError.stack);
+
+        let errorMessage = '❌ *Erro ao transcrever áudio*\n\n';
+
+        if (aiError.message?.includes('timeout') || aiError.message?.includes('ETIMEDOUT')) {
+          errorMessage += '⏱️ A transcrição demorou muito. Tente enviar um áudio mais curto.';
+        } else if (aiError.message?.includes('rate limit') || aiError.message?.includes('429')) {
+          errorMessage += '🚦 Muitas requisições. Aguarde alguns segundos e tente novamente.';
+        } else {
+          errorMessage +=
+            '🤖 Não consegui processar o áudio.\n\n*Dicas:*\n• Grave em ambiente silencioso\n• Fale mais próximo do microfone\n• Ou digite a mensagem';
+        }
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'ai_audio_transcription_error',
+            errorMessage: aiError.message,
+            durationSeconds: estimatedDurationSeconds,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 5. Validar transcrição
+      if (!transcription || transcription.trim().length === 0) {
+        const errorMessage =
+          '❌ *Não consegui entender o áudio*\n\n' +
+          'O áudio está muito baixo ou com muito ruído.\n\n' +
+          '*Por favor:*\n' +
+          '• Grave em local silencioso\n' +
+          '• Fale mais próximo do microfone\n' +
+          '• Ou digite a mensagem';
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'empty_transcription',
+            durationSeconds: estimatedDurationSeconds,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 6. Buscar categorias completas (com accounts se necessário)
+      this.logger.log(`🔍 Buscando categorias para análise de transação de áudio...`);
+      const categoriesData = await this.userCache.getUserCategories(phoneNumber);
+
+      this.logger.log(
+        `📊 Categorias disponíveis: ${categoriesData.categories.length} categoria(s) de ${categoriesData.accounts.length} conta(s)`,
+      );
+
+      if (categoriesData.hasCategories) {
+        categoriesData.categories.forEach((cat: any) => {
+          this.logger.log(
+            `  📂 ${cat.name} (ID: ${cat.id}) - Tipo: ${cat.type} - Conta: ${cat.accountName || 'N/A'} (Default: ${cat.isDefaultAccount ? 'Sim' : 'Não'})`,
+          );
+        });
+      }
+
+      // 7. Extrair transação do texto transcrito
+      let transactionData: TransactionData;
+      try {
+        const startTimeExtract = Date.now();
+        transactionData = await this.aiFactory.extractTransaction(transcription, {
+          name: user.name,
+          email: user.email,
+          categories: categoriesData.categories,
+        });
+        const responseTimeExtract = Date.now() - startTimeExtract;
+
+        // Registrar extração de transação
+        await this.aiFactory.logAIUsage({
+          phoneNumber,
+          userCacheId: user.id,
+          operation: 'TRANSACTION_EXTRACTION',
+          inputType: 'TEXT',
+          inputText: transcription,
+          inputTokens: Math.ceil(transcription.length / 4),
+          outputTokens: Math.ceil(JSON.stringify(transactionData).length / 4),
+          metadata: {
+            confidence: transactionData.confidence,
+            category: transactionData.category,
+            amount: transactionData.amount,
+            type: transactionData.type,
+            responseTimeMs: responseTimeExtract,
+            fromAudio: true,
+          },
+        });
+
+        this.logger.log(
+          `🤖 Extração (${responseTimeExtract}ms) | Confidence: ${(transactionData.confidence * 100).toFixed(0)}%`,
+        );
+      } catch (aiError: any) {
+        this.logger.error(`❌ Erro ao extrair transação do áudio: ${aiError.message}`, aiError.stack);
+
+        let errorMessage = `❌ *Erro ao processar transcrição*\n\n🎤 Ouvi: "${transcription}"\n\n`;
+
+        if (aiError.message?.includes('timeout') || aiError.message?.includes('ETIMEDOUT')) {
+          errorMessage += '⏱️ A análise demorou muito. Tente novamente ou digite a mensagem.';
+        } else if (aiError.message?.includes('rate limit') || aiError.message?.includes('429')) {
+          errorMessage += '🚦 Muitas requisições. Aguarde alguns segundos e tente novamente.';
+        } else {
+          errorMessage += 'Não consegui entender a transação. Por favor, digite manualmente.';
+        }
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'ai_audio_extraction_error',
+            errorMessage: aiError.message,
+            transcription,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 8. Validar dados extraídos
+      const validation = this.validator.validate(transactionData);
+      if (!validation.isValid) {
+        const errorMessage =
+          `❌ *Não consegui extrair dados válidos*\n\n` +
+          `🎤 Ouvi: "${transcription}"\n\n` +
+          `${validation.errors.join('\n')}\n\n` +
+          `*Dica:* Fale algo como "Gastei 50 reais no mercado"`;
+
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber,
+          message: errorMessage,
+          context: 'ERROR',
+          metadata: {
+            errorType: 'validation_error',
+            errors: validation.errors,
+            transcription,
+            confidence: transactionData.confidence,
+          },
+        });
+
+        return {
+          success: false,
+          message: errorMessage,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 9. Criar confirmação
+      const confirmation = await this.createConfirmation(phoneNumber, messageId, transactionData);
+
+      // 10. Formatar mensagem
+      let message = `🎤 *Ouvi:* "${transcription}"\n\n`;
+      message += this.confirmationService.formatConfirmationMessage(confirmation);
+
+      if (validation.warnings.length > 0) {
+        message += `\n\n⚠️ *Avisos:*\n${validation.warnings.join('\n')}`;
+      }
+
+      if (transactionData.confidence < 0.7) {
+        message += '\n\n⚠️ *Confiança média na extração. Por favor, revise os dados.*';
+      }
+
+      // Emitir evento para enviar confirmação
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber,
+        message,
+        context: 'CONFIRMATION_REQUEST',
+        metadata: {
+          confirmationId: confirmation.id,
+          confidence: transactionData.confidence,
+          transcription,
+          fromAudio: true,
+        },
+      });
+
+      return {
+        success: true,
+        message,
+        requiresConfirmation: true,
+        confirmationId: confirmation.id,
+      };
+    } catch (error: any) {
+      this.logger.error('Erro ao processar áudio:', error);
+
+      const errorMessage =
+        '❌ *Erro inesperado ao processar áudio*\n\n' +
+        'Por favor, tente novamente ou digite a mensagem manualmente.';
+
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber,
+        message: errorMessage,
+        context: 'ERROR',
+        metadata: {
+          errorType: 'exception',
+          errorMessage: error.message,
+        },
+      });
+
+      return {
+        success: false,
+        message: errorMessage,
+        requiresConfirmation: false,
+      };
+    }
+  }
+
+  /**
+   * Processa confirmação do usuário (sim/não)
+   */
+  async processConfirmation(
+    phoneNumber: string,
+    response: string,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      const result = await this.confirmationService.processResponse(phoneNumber, response);
+
+      if (result.action === 'invalid') {
+        return {
+          success: false,
+          message: '❓ Não há transação pendente de confirmação.',
+        };
+      }
+
+      if (result.action === 'rejected') {
+        return {
+          success: true,
+          message: '❌ Ok, transação cancelada.',
+        };
+      }
+
+      if (result.action === 'confirmed' && result.confirmation) {
+        // Registrar na API Gasto Certo
+        const registered = await this.registerTransaction(result.confirmation);
+
+        if (registered.success) {
+          return {
+            success: true,
+            message: registered.message,
+          };
+        } else {
+          return {
+            success: false,
+            message: registered.message,
+          };
+        }
+      }
+
+      return {
+        success: false,
+        message: '❓ Não entendi sua resposta. Por favor, responda com "sim" ou "não".',
+      };
+    } catch (error) {
+      this.logger.error('Erro ao processar confirmação:', error);
+      return {
+        success: false,
+        message: '❌ Erro ao processar confirmação. Tente novamente.',
+      };
+    }
+  }
+
+  /**
+   * Registra transação na API Gasto Certo
+   */
+  private async registerTransaction(
+    confirmation: TransactionConfirmation,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      // Buscar usuário
+      const user = await this.userCache.getUser(confirmation.phoneNumber);
+      if (!user) {
+        return {
+          success: false,
+          message: '❌ Erro: usuário não encontrado.',
+        };
+      }
+
+      this.logger.log(`\n🔍 ========== ANÁLISE DE CATEGORIA ==========`);
+      this.logger.log(`📋 Categoria extraída pela IA: "${confirmation.category}"`);
+
+      // Buscar categorias completas para análise
+      const categoriesData = await this.userCache.getUserCategories(confirmation.phoneNumber);
+
+      if (categoriesData.hasCategories) {
+        this.logger.log(`📊 ${categoriesData.categories.length} categorias disponíveis:`);
+
+        // Procurar categoria por nome
+        const matchingByName = categoriesData.categories.filter(
+          (cat: any) => cat.name.toLowerCase() === confirmation.category.toLowerCase(),
+        );
+
+        // Procurar categoria por ID (caso já seja um UUID)
+        const matchingById = categoriesData.categories.filter(
+          (cat: any) => cat.id === confirmation.category,
+        );
+
+        if (matchingByName.length > 0) {
+          this.logger.log(`\n✅ Categorias encontradas por NOME (${matchingByName.length}):`);
+          matchingByName.forEach((cat: any) => {
+            this.logger.log(
+              `  🎯 ${cat.name} | ID: ${cat.id} | Conta: ${cat.accountName} (${cat.accountId}) | Default: ${cat.isDefaultAccount ? 'Sim' : 'Não'}`,
+            );
+          });
+
+          // Priorizar conta default
+          const defaultCat = matchingByName.find((cat: any) => cat.isDefaultAccount);
+          if (defaultCat) {
+            this.logger.log(`\n⭐ USANDO categoria da conta DEFAULT:`);
+            this.logger.log(
+              `   ID: ${defaultCat.id} | Conta: ${defaultCat.accountName} (${defaultCat.accountId})`,
+            );
+            // Atualizar confirmation.category com o ID correto
+            confirmation.category = defaultCat.id;
+          } else {
+            this.logger.log(`\n⚠️ NENHUMA conta default - usando primeira encontrada:`);
+            this.logger.log(
+              `   ID: ${matchingByName[0].id} | Conta: ${matchingByName[0].accountName} (${matchingByName[0].accountId})`,
+            );
+            confirmation.category = matchingByName[0].id;
+          }
+        } else if (matchingById.length > 0) {
+          this.logger.log(`\n✅ Categoria encontrada por ID:`);
+          matchingById.forEach((cat: any) => {
+            this.logger.log(
+              `  🎯 ${cat.name} | ID: ${cat.id} | Conta: ${cat.accountName} (${cat.accountId}) | Default: ${cat.isDefaultAccount ? 'Sim' : 'Não'}`,
+            );
+          });
+        } else {
+          this.logger.warn(
+            `\n⚠️ NENHUMA categoria encontrada! Usando valor original: "${confirmation.category}"`,
+          );
+        }
+      } else {
+        this.logger.warn(`⚠️ Nenhuma categoria disponível no cache ou API`);
+      }
+
+      this.logger.log(`\n📤 Category ID que será enviado para API: "${confirmation.category}"`);
+      this.logger.log(`============================================\n`);
+
+      // Criar DTO para API
+      const dto: CreateGastoCertoTransactionDto = {
+        userId: user.gastoCertoId,
+        type: confirmation.type,
+        amount: Number(confirmation.amount),
+        categoryId: confirmation.category,
+        description: confirmation.description || undefined,
+        date: confirmation.date ? confirmation.date.toISOString() : new Date().toISOString(),
+        merchant: (confirmation.extractedData as any)?.merchant,
+        source: 'whatsapp',
+        isCreditCard: false, // Por padrão usa banco
+      };
+
+      // Registrar via API
+      const response = await this.gastoCertoApi.createTransaction(dto);
+
+      // Verificar se foi sucesso
+      if (!response.success || !response.transaction) {
+        this.logger.error(`❌ Erro ao registrar transação: ${response.error?.message}`);
+
+        // 🔴 Emitir evento de erro de API
+        this.eventEmitter.emit('message.reply', {
+          phoneNumber: confirmation.phoneNumber,
+          message: `❌ *Erro ao registrar transação*\n\n${response.error?.message || response.message || 'Erro desconhecido na API.'}\n\nPor favor, tente novamente mais tarde.`,
+          context: 'ERROR',
+          metadata: {
+            confirmationId: confirmation.id,
+            errorType: 'api_error',
+            errorMessage: response.error?.message || response.message,
+          },
+        });
+
+        return {
+          success: false,
+          message: `❌ ${response.message}`,
+        };
+      }
+
+      // Registrar em audit log
+      await this.logTransaction(confirmation.phoneNumber, confirmation, response.transaction.id);
+
+      // Formatar mensagem de sucesso
+      const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
+      const typeText = confirmation.type === 'EXPENSES' ? 'Gasto' : 'Receita';
+      const amountFormatted = this.validator.formatAmount(Number(confirmation.amount));
+
+      let successMessage = `✅ *${typeText} registrado com sucesso!*\n\n`;
+      successMessage += `${typeEmoji} *Valor:* ${amountFormatted}\n`;
+      successMessage += `📂 *Categoria:* ${confirmation.category}\n`;
+
+      if (confirmation.description) {
+        successMessage += `📝 *Descrição:* ${confirmation.description}\n`;
+      }
+
+      successMessage += `\n💡 Continue enviando suas transações por texto, áudio ou imagem!`;
+
+      // ✅ Emitir evento de sucesso
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber: confirmation.phoneNumber,
+        message: successMessage,
+        context: 'TRANSACTION_RESULT',
+        metadata: {
+          confirmationId: confirmation.id,
+          transactionId: response.transaction.id,
+          type: confirmation.type,
+          amount: confirmation.amount,
+          category: confirmation.category,
+        },
+      });
+
+      this.logger.log(
+        `✅ Evento 'message.reply' emitido para sucesso de registro | Transaction ID: ${response.transaction.id}`,
+      );
+
+      return {
+        success: true,
+        message: successMessage,
+      };
+    } catch (error: any) {
+      this.logger.error('Erro ao registrar transação na API:', error);
+
+      // 🔴 Emitir evento de erro genérico
+      this.eventEmitter.emit('message.reply', {
+        phoneNumber: confirmation.phoneNumber,
+        message:
+          '❌ *Erro ao registrar transação*\n\n' +
+          'Ocorreu um erro inesperado. Por favor, tente novamente mais tarde.\n\n' +
+          'Se o problema persistir, entre em contato com o suporte.',
+        context: 'ERROR',
+        metadata: {
+          confirmationId: confirmation.id,
+          errorType: 'exception',
+          errorMessage: error.message,
+        },
+      });
+
+      return {
+        success: false,
+        message: '❌ Erro ao registrar transação na API Gasto Certo. Tente novamente mais tarde.',
+      };
+    }
+  }
+
+  /**
+   * Cria confirmação pendente
+   */
+  private async createConfirmation(
+    phoneNumber: string,
+    messageId: string,
+    transactionData: TransactionData,
+  ): Promise<TransactionConfirmation> {
+    this.logger.log(`\n🔨 ========== PREPARANDO DTO CONFIRMAÇÃO ==========`);
+    this.logger.log(`📞 Phone: ${phoneNumber}`);
+    this.logger.log(`📨 Message ID: ${messageId}`);
+    this.logger.log(`📦 Transaction Data:`, JSON.stringify(transactionData, null, 2));
+
+    const normalizedCategory = this.validator.normalizeCategory(transactionData.category);
+    const sanitizedDescription = transactionData.description
+      ? this.validator.sanitizeDescription(transactionData.description)
+      : undefined;
+
+    this.logger.log(
+      `📂 Category original: "${transactionData.category}" → normalized: "${normalizedCategory}"`,
+    );
+    this.logger.log(`📝 Description sanitized: "${sanitizedDescription || 'N/A'}"`);
+
+    const dto: CreateTransactionConfirmationDto = {
+      phoneNumber,
+      messageId,
+      type: transactionData.type as any,
+      amount: transactionData.amount,
+      category: normalizedCategory,
+      description: sanitizedDescription,
+      date: transactionData.date,
+      extractedData: transactionData.rawData,
+    };
+
+    this.logger.log(`📤 DTO Final:`, JSON.stringify(dto, null, 2));
+    this.logger.log(`===============================================\n`);
+
+    return this.confirmationService.create(dto);
+  }
+
+  /**
+   * Registra transação em audit log
+   */
+  private async logTransaction(
+    phoneNumber: string,
+    confirmation: TransactionConfirmation,
+    gastoCertoTransactionId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          phoneNumber,
+          action: 'transaction_registered',
+          metadata: {
+            confirmationId: confirmation.id,
+            gastoCertoTransactionId,
+            type: confirmation.type,
+            amount: Number(confirmation.amount),
+            category: confirmation.category,
+          },
+        },
+      });
+    } catch (error) {
+      this.logger.error('Erro ao registrar audit log:', error);
+    }
+  }
+}

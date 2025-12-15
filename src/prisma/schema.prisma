@@ -1,0 +1,391 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Sessões WhatsApp
+model WhatsAppSession {
+  id          String        @id @default(uuid())
+  sessionId   String        @unique
+  phoneNumber String // Removido @unique - será preenchido após QR code
+  name        String?
+  status      SessionStatus @default(INACTIVE)
+  creds       Json? // Credenciais Baileys (chaves, tokens)
+  isActive    Boolean       @default(true)
+  lastSeen    DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([phoneNumber])
+  @@index([status])
+  @@map("whatsapp_sessions")
+}
+
+// Sessões Telegram
+model TelegramSession {
+  id        String        @id @default(uuid())
+  sessionId String        @unique
+  name      String
+  token     String // Token do bot obtido via @BotFather
+  status    SessionStatus @default(INACTIVE)
+  isActive  Boolean       @default(true)
+  lastSeen  DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([status])
+  @@map("telegram_sessions")
+}
+
+enum SessionStatus {
+  INACTIVE
+  CONNECTING
+  QR_PENDING
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+// Sessões de Onboarding (cadastro de novos usuários)
+model OnboardingSession {
+  id            String         @id @default(uuid())
+  platformId    String         @unique // Telegram chatId ou WhatsApp number
+  phoneNumber   String? // Telefone real do usuário (opcional até ser coletado)
+  currentStep   OnboardingStep @default(COLLECT_NAME)
+  data          Json           @default("{}")
+  attempts      Int            @default(0)
+  lastMessageAt DateTime       @default(now())
+  expiresAt     DateTime // 30 minutos de inatividade
+  completed     Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([platformId])
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@map("onboarding_sessions")
+}
+
+enum OnboardingStep {
+  COLLECT_NAME
+  COLLECT_EMAIL
+  REQUEST_PHONE
+  CHECK_EXISTING_USER
+  REQUEST_VERIFICATION_CODE
+  VERIFY_CODE
+  CHOOSE_ACCOUNT
+  CONFIRM_DATA
+  CREATING_ACCOUNT
+  COMPLETED
+}
+
+// Cache de usuários da API Gasto Certo
+model UserCache {
+  id                    String  @id @default(uuid())
+  phoneNumber           String  @unique // Telefone normalizado SEM código do país: 66996285154 - CHAVE ÚNICA para suportar multi-plataforma
+  gastoCertoId          String  @unique // ID do usuário no sistema Gasto Certo
+  whatsappId            String? // ID do usuário no WhatsApp (ex: 5566996285154@s.whatsapp.net) - Pode ser null se não vinculado
+  telegramId            String? // ID do chat do usuário no Telegram (ex: 707624962) - Pode ser null se não vinculado
+  email                 String
+  name                  String
+  hasActiveSubscription Boolean @default(false)
+
+  // 🆕 Gerenciamento de múltiplas contas
+  activeAccountId String? // ID da conta ativa no momento (usado para todas operações)
+  accounts        Json    @default("[]") // Array de contas: [{ id, name, type, isPrimary }]
+
+  categories               Json                      @default("[]")
+  preferences              Json?
+  lastSyncAt               DateTime                  @default(now())
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  unrecognizedMessages     UnrecognizedMessage[] // Mensagens não reconhecidas deste usuário
+  transactionConfirmations TransactionConfirmation[] // Confirmações de transações deste usuário
+
+  @@index([phoneNumber])
+  @@index([gastoCertoId])
+  @@index([whatsappId])
+  @@index([telegramId])
+  @@index([activeAccountId])
+  @@map("user_cache")
+}
+
+// Confirmações de transações pendentes
+model TransactionConfirmation {
+  id               String             @id @default(uuid())
+  phoneNumber      String
+  userId           String? // ID do UserCache - relação com usuário
+  user             UserCache?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messageId        String             @unique
+  type             TransactionType
+  amount           Decimal            @db.Decimal(10, 2)
+  category         String
+  description      String?
+  date             DateTime           @default(now())
+  extractedData    Json // Dados brutos extraídos pela IA
+  status           ConfirmationStatus @default(PENDING)
+  confirmedAt      DateTime?
+  notifiedExpiring Boolean            @default(false) // Se já enviou aviso de expiração próxima
+
+  // Campos para controle de envio para API
+  apiSent          Boolean   @default(false) // Se foi enviado para API GastoCerto
+  apiSentAt        DateTime? // Quando foi enviado com sucesso
+  apiError         String? // Última mensagem de erro da API
+  apiRetryCount    Int       @default(0) // Número de tentativas de envio
+  apiTransactionId String? // ID da transação na API GastoCerto (quando sucesso)
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([phoneNumber])
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([apiSent])
+  @@index([status, apiSent])
+  @@map("transaction_confirmations")
+}
+
+enum TransactionType {
+  EXPENSES
+  INCOME
+}
+
+enum ConfirmationStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+}
+
+// Log de auditoria
+model AuditLog {
+  id          String   @id @default(uuid())
+  phoneNumber String
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([phoneNumber])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Log de uso de IA (tokens e custos)
+model AIUsageLog {
+  id            String          @id @default(uuid())
+  userCacheId   String? // ID do UserCache (pode ser null se usuário ainda não cadastrado)
+  phoneNumber   String // Telefone do usuário (sempre presente)
+  provider      String // openai, google-gemini, groq
+  model         String // gpt-4o, gemini-1.5-pro, etc
+  operation     AIOperationType // Tipo de operação
+  inputType     AIInputType // text, audio, image
+  inputText     String? // Texto de entrada (se aplicável)
+  inputTokens   Int // Tokens de entrada
+  outputTokens  Int // Tokens de saída
+  totalTokens   Int // Total de tokens
+  estimatedCost Decimal         @db.Decimal(10, 6) // Custo estimado em USD
+  responseTime  Int? // Tempo de resposta em ms
+  success       Boolean         @default(true)
+  errorMessage  String?
+  metadata      Json? // Dados adicionais (ex: confidence, categoria extraída)
+  createdAt     DateTime        @default(now())
+
+  @@index([userCacheId])
+  @@index([phoneNumber])
+  @@index([provider])
+  @@index([operation])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
+}
+
+// Log de tentativas de busca RAG (para analytics e melhoria contínua)
+model RAGSearchLog {
+  id              String   @id @default(uuid())
+  userId          String // gastoCertoId do UserCache
+  query           String // Texto de busca (ex: "rotativo", "gasolina")
+  queryNormalized String // Query normalizada (lowercase, sem acentos)
+  matches         Json // Array de matches encontrados com scores
+  bestMatch       String? // Nome da melhor categoria encontrada
+  bestScore       Decimal? @db.Decimal(5, 4) // Score do melhor match (0.0000 - 1.0000)
+  threshold       Decimal  @db.Decimal(5, 4) // Threshold usado na busca
+  success         Boolean // true se encontrou match >= threshold
+  ragMode         String   @default("BM25") // "BM25" ou "AI" (embeddings)
+  responseTime    Int? // Tempo de resposta em ms
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([success])
+  @@index([createdAt])
+  @@index([userId, success]) // Para queries falhas por usuário
+  @@map("rag_search_logs")
+}
+
+enum AIOperationType {
+  TRANSACTION_EXTRACTION // Extrair dados de transação
+  AUDIO_TRANSCRIPTION // Transcrever áudio
+  IMAGE_ANALYSIS // Analisar imagem/nota fiscal
+  CATEGORY_SUGGESTION // Sugerir categoria
+  RAG_EMBEDDING // Gerar embeddings para RAG (busca semântica)
+  INTENT_DETECTION // Detectar intenção do usuário
+}
+
+enum AIInputType {
+  TEXT
+  AUDIO
+  IMAGE
+}
+
+// Log de mensagens não reconhecidas (para treinamento de NLP)
+model UnrecognizedMessage {
+  id             String     @id @default(uuid())
+  userCacheId    String? // ID do UserCache (pode ser null se usuário ainda não cadastrado)
+  userCache      UserCache? @relation(fields: [userCacheId], references: [id], onDelete: SetNull)
+  phoneNumber    String // Telefone do usuário
+  messageText    String // Texto da mensagem enviada
+  detectedIntent String? // Intenção detectada pelo NLP (se houver)
+  confidence     Float? // Confiança da detecção (0-1)
+  wasProcessed   Boolean    @default(false) // Se foi processado pela IA depois
+  addedToContext Boolean    @default(false) // Se foi adicionado ao contexto de treinamento
+  userFeedback   String? // Feedback do usuário sobre o que queria fazer
+  metadata       Json? // Dados adicionais (contexto, tentativas, etc)
+  createdAt      DateTime   @default(now())
+
+  @@index([userCacheId])
+  @@index([phoneNumber])
+  @@index([wasProcessed])
+  @@index([addedToContext])
+  @@index([createdAt])
+  @@map("unrecognized_messages")
+}
+
+// Configurações de Provedores de IA
+model AIProviderConfig {
+  id          String  @id @default(uuid())
+  provider    String  @unique // openai, google_gemini, groq, deepseek
+  displayName String // Nome amigável para exibição
+  enabled     Boolean @default(true) // Se o provider está ativo
+  apiKey      String? // API Key (pode ser null se desabilitado)
+  baseUrl     String? // URL base da API (ex: https://api.deepseek.com)
+
+  // Modelos por tipo de operação
+  textModel   String? // Modelo para texto (ex: gpt-4o, deepseek-chat)
+  visionModel String? // Modelo para visão/imagem
+  audioModel  String? // Modelo para áudio/transcrição
+
+  // Rate Limits
+  rpmLimit Int? @default(0) // Requests per minute (0 = ilimitado)
+  tpmLimit Int? @default(0) // Tokens per minute (0 = ilimitado)
+
+  // Custos (USD por 1M tokens)
+  inputCostPer1M  Decimal? @db.Decimal(10, 6) // Custo de input por 1M tokens
+  outputCostPer1M Decimal? @db.Decimal(10, 6) // Custo de output por 1M tokens
+  cacheCostPer1M  Decimal? @db.Decimal(10, 6) // Custo de cache hit por 1M tokens
+
+  // Features
+  supportsVision Boolean @default(false)
+  supportsAudio  Boolean @default(false)
+  supportsCache  Boolean @default(false)
+  cacheEnabled   Boolean @default(false) // Se cache está ativo
+
+  // Prioridade e fallback
+  priority        Int     @default(999) // Menor = maior prioridade
+  fallbackEnabled Boolean @default(true) // Se pode ser usado como fallback
+
+  // Metadata e controle
+  metadata      Json?     @default("{}") // Configurações extras
+  lastUsedAt    DateTime?
+  totalRequests Int       @default(0)
+  totalErrors   Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provider])
+  @@index([enabled])
+  @@index([priority])
+  @@map("ai_provider_configs")
+}
+
+// Configurações Globais de IA
+model AISettings {
+  id String @id @default(uuid())
+
+  // Providers por tipo de operação
+  textProvider     String @default("openai") // Provider para extração de texto
+  imageProvider    String @default("google_gemini") // Provider para análise de imagens
+  audioProvider    String @default("groq") // Provider para transcrição de áudio
+  categoryProvider String @default("groq") // Provider para sugestão de categorias
+
+  // Provider Principal (deprecated - usar os campos acima)
+  primaryProvider String @default("groq") // Provider padrão a ser usado
+
+  // Fallback
+  fallbackEnabled       Boolean  @default(true) // Se fallback está ativo
+  fallbackTextChain     String[] @default(["groq", "deepseek", "google_gemini", "openai"]) // Sequência para texto
+  fallbackImageChain    String[] @default(["google_gemini", "openai"]) // Sequência para imagem
+  fallbackAudioChain    String[] @default(["openai", "groq"]) // Sequência para áudio
+  fallbackCategoryChain String[] @default(["groq", "deepseek", "google_gemini", "openai"]) // Sequência para categorias
+
+  // Cache
+  cacheEnabled Boolean @default(false) // Se cache global está ativo
+  cacheTTL     Int     @default(3600) // TTL do cache em segundos (1 hora)
+
+  // Rate Limiting
+  rateLimitEnabled Boolean @default(true) // Se rate limiting está ativo
+
+  // RAG (Retrieval-Augmented Generation)
+  ragEnabled      Boolean @default(false) // Se RAG está ativo (busca vetorial)
+  ragAiEnabled    Boolean @default(false) // Se usa IA para embeddings (true) ou BM25 (false)
+  ragAiProvider   String  @default("groq") // Provider de IA para embeddings: "openai", "groq", "google_gemini"
+  ragProvider     String  @default("bm25") // Método: "openai" (com IA paga), "local" (sentence-transformers), "bm25" (sem IA)
+  ragThreshold    Float   @default(0.75) // Threshold de similaridade (0-1)
+  ragAutoApply    Float   @default(0.88) // Auto-aplicar se similaridade >= este valor
+  ragCacheEnabled Boolean @default(true) // Cache de embeddings
+
+  // Assistente Conversacional
+  assistantEnabled        Boolean @default(true) // Assistente humanizado ativo
+  assistantPersonality    String  @default("friendly") // "friendly", "professional", "casual"
+  assistantMaxHistoryMsgs Int     @default(5) // Máximo de mensagens no histórico de contexto
+
+  // Segurança
+  securityEnabled          Boolean @default(true) // Camada de segurança ativa
+  securityMaxMessageLength Int     @default(500) // Tamanho máximo de mensagem
+  securityRateLimitMinute  Int     @default(20) // Máximo de mensagens por minuto
+  securityRateLimitHour    Int     @default(100) // Máximo de mensagens por hora
+  securityLogEvents        Boolean @default(true) // Logar eventos de segurança
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ai_settings")
+}
+
+// Logs de Segurança (leve, auto-limpeza)
+model SecurityLog {
+  id        String           @id @default(uuid())
+  userId    String // ID do UserCache ou "unknown"
+  eventType String // injection_attempt, rate_limit_exceeded, suspicious_content, etc
+  details   String           @db.VarChar(500) // Primeiros 500 chars da mensagem
+  severity  SecuritySeverity @default(low)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([severity, createdAt])
+  @@map("security_logs")
+}
+
+enum SecuritySeverity {
+  low
+  medium
+  high
+}

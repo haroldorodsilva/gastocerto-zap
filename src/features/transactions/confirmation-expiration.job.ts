@@ -1,0 +1,204 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PrismaService } from '@core/database/prisma.service';
+import { MessageContextService } from '../../infrastructure/whatsapp/messages/message-context.service';
+import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
+import { ConfirmationStatus } from '@prisma/client';
+
+/**
+ * Job para monitorar e notificar expirações de confirmações
+ *
+ * Executa a cada 30 segundos e:
+ * 1. Avisa confirmações que expiram em menos de 30 segundos
+ * 2. Marca como expiradas (REJECTED) as confirmações que já passaram do prazo
+ */
+@Injectable()
+export class ConfirmationExpirationJob {
+  private readonly logger = new Logger(ConfirmationExpirationJob.name);
+  private readonly WARNING_THRESHOLD_SECONDS = 30; // Avisar 30s antes de expirar
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly contextService: MessageContextService,
+  ) {}
+
+  /**
+   * Helper para emitir eventos de resposta para a plataforma correta
+   */
+  private emitReply(platformId: string, message: string, context: string, metadata?: any): void {
+    const messageContext = this.contextService.getContext(platformId);
+    const platform = messageContext?.platform || MessagingPlatform.WHATSAPP;
+    const eventName = platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
+
+    this.eventEmitter.emit(eventName, {
+      platformId,
+      message,
+      context,
+      metadata,
+      platform,
+    });
+  }
+
+  /**
+   * Job executado a cada 30 segundos
+   * Verifica confirmações pendentes próximas de expirar
+   */
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async checkExpiringConfirmations() {
+    try {
+      const now = new Date();
+      const warningTime = new Date(now.getTime() + this.WARNING_THRESHOLD_SECONDS * 1000);
+
+      // Buscar confirmações pendentes que expiram nos próximos 30 segundos
+      // e ainda não foram notificadas
+      const expiringSoon = await this.prisma.transactionConfirmation.findMany({
+        where: {
+          status: ConfirmationStatus.PENDING,
+          expiresAt: {
+            lte: warningTime,
+            gt: now,
+          },
+          notifiedExpiring: false,
+        },
+      });
+
+      if (expiringSoon.length > 0) {
+        this.logger.log(
+          `⏰ Encontradas ${expiringSoon.length} confirmação(ões) expirando em breve`,
+        );
+
+        for (const confirmation of expiringSoon) {
+          await this.notifyExpiring(confirmation);
+        }
+      }
+
+      // Buscar confirmações que já expiraram
+      const expired = await this.prisma.transactionConfirmation.findMany({
+        where: {
+          status: ConfirmationStatus.PENDING,
+          expiresAt: {
+            lte: now,
+          },
+        },
+      });
+
+      if (expired.length > 0) {
+        this.logger.log(`❌ Encontradas ${expired.length} confirmação(ões) expiradas`);
+
+        for (const confirmation of expired) {
+          await this.markAsExpired(confirmation);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Erro ao verificar expirações:`, error);
+    }
+  }
+
+  /**
+   * Notifica usuário que confirmação está prestes a expirar
+   */
+  private async notifyExpiring(confirmation: any) {
+    try {
+      const secondsLeft = Math.floor(
+        (new Date(confirmation.expiresAt).getTime() - Date.now()) / 1000,
+      );
+
+      const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
+      const typeText = confirmation.type === 'EXPENSES' ? 'Gasto' : 'Receita';
+      const amount = (Number(confirmation.amount) / 100).toFixed(2);
+
+      const message =
+        `⏰ *Atenção: Confirmação expirando!*\n\n` +
+        `Sua confirmação de ${typeText.toLowerCase()} expira em *${secondsLeft} segundos*.\n\n` +
+        `${typeEmoji} *Valor:* R$ ${amount}\n` +
+        `📂 *Categoria:* ${confirmation.category}\n` +
+        `${confirmation.description ? `📝 *Descrição:* ${confirmation.description}\n` : ''}` +
+        `\n✅ Digite *"sim"* para confirmar\n` +
+        `❌ Digite *"não"* para cancelar`;
+
+      // Emitir evento para enviar mensagem
+      this.emitReply(confirmation.phoneNumber, message, 'CONFIRMATION_REQUEST', {
+        confirmationId: confirmation.id,
+        action: 'expiring_warning',
+        secondsLeft,
+      });
+
+      // Marcar como notificado
+      await this.prisma.transactionConfirmation.update({
+        where: { id: confirmation.id },
+        data: { notifiedExpiring: true },
+      });
+
+      this.logger.log(
+        `⏰ Aviso de expiração enviado | Confirmation: ${confirmation.id} | Expires in: ${secondsLeft}s`,
+      );
+    } catch (error) {
+      this.logger.error(`Erro ao notificar expiração:`, error);
+    }
+  }
+
+  /**
+   * Marca confirmação como expirada e notifica usuário
+   */
+  private async markAsExpired(confirmation: any) {
+    try {
+      // Atualizar status para REJECTED
+      await this.prisma.transactionConfirmation.update({
+        where: { id: confirmation.id },
+        data: {
+          status: ConfirmationStatus.REJECTED,
+        },
+      });
+
+      const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
+      const typeText = confirmation.type === 'EXPENSES' ? 'Gasto' : 'Receita';
+      const amount = (Number(confirmation.amount) / 100).toFixed(2);
+
+      const message =
+        `⏱️ *Confirmação expirada*\n\n` +
+        `Sua confirmação de ${typeText.toLowerCase()} expirou sem resposta.\n\n` +
+        `${typeEmoji} *Valor:* R$ ${amount}\n` +
+        `📂 *Categoria:* ${confirmation.category}\n` +
+        `${confirmation.description ? `📝 *Descrição:* ${confirmation.description}\n` : ''}` +
+        `\n💡 *Dica:* Envie a transação novamente se ainda quiser registrar.`;
+
+      // Emitir evento para enviar mensagem
+      this.emitReply(confirmation.phoneNumber, message, 'TRANSACTION_RESULT', {
+        confirmationId: confirmation.id,
+        action: 'expired',
+      });
+
+      this.logger.log(`❌ Confirmação expirada e marcada como REJECTED | ID: ${confirmation.id}`);
+    } catch (error) {
+      this.logger.error(`Erro ao marcar confirmação como expirada:`, error);
+    }
+  }
+
+  /**
+   * Job executado a cada 5 minutos
+   * Limpa confirmações antigas (mais de 1 hora expiradas)
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async cleanupOldConfirmations() {
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+      const result = await this.prisma.transactionConfirmation.deleteMany({
+        where: {
+          status: ConfirmationStatus.REJECTED,
+          expiresAt: {
+            lt: oneHourAgo,
+          },
+        },
+      });
+
+      if (result.count > 0) {
+        this.logger.log(`🧹 Limpeza: ${result.count} confirmação(ões) antigas removidas`);
+      }
+    } catch (error) {
+      this.logger.error(`Erro ao limpar confirmações antigas:`, error);
+    }
+  }
+}
