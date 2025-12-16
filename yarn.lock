@@ -2053,7 +2053,7 @@
     "@webassemblyjs/ast" "1.14.1"
     "@xtuc/long" "4.2.2"
 
-"@whiskeysockets/baileys@7.0.0-rc.6":
+"@whiskeysockets/baileys@^7.0.0-rc.6":
   version "7.0.0-rc.6"
   resolved "https://registry.npmjs.org/@whiskeysockets/baileys/-/baileys-7.0.0-rc.6.tgz"
   integrity sha512-vSARE9ftvNwN2vttcFGhwqag2K8MRY35CD5zd1uMPSUQ0eomfAUVreNwXBUO1XO2eBExOW2N+mSmNGPn6mnqDQ==

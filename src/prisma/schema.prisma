@@ -121,12 +121,17 @@ model UserCache {
 model TransactionConfirmation {
   id               String             @id @default(uuid())
   phoneNumber      String
+  platform         String             @default("whatsapp") // Plataforma de origem: whatsapp | telegram
   userId           String? // ID do UserCache - relação com usuário
   user             UserCache?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  accountId        String? // ID da conta ativa no momento da transação
   messageId        String             @unique
   type             TransactionType
   amount           Decimal            @db.Decimal(10, 2)
-  category         String
+  category         String // Nome da categoria (mantido para compatibilidade)
+  categoryId       String? // ID da categoria resolvida
+  subCategoryId    String? // ID da subcategoria resolvida (se houver)
+  subCategoryName  String? // Nome da subcategoria (para exibir ao usuário)
   description      String?
   date             DateTime           @default(now())
   extractedData    Json // Dados brutos extraídos pela IA
@@ -135,17 +140,18 @@ model TransactionConfirmation {
   notifiedExpiring Boolean            @default(false) // Se já enviou aviso de expiração próxima
 
   // Campos para controle de envio para API
-  apiSent          Boolean   @default(false) // Se foi enviado para API GastoCerto
-  apiSentAt        DateTime? // Quando foi enviado com sucesso
-  apiError         String? // Última mensagem de erro da API
-  apiRetryCount    Int       @default(0) // Número de tentativas de envio
-  apiTransactionId String? // ID da transação na API GastoCerto (quando sucesso)
+  apiSent       Boolean   @default(false) // Se foi enviado para API GastoCerto
+  apiSentAt     DateTime? // Quando foi enviado com sucesso
+  apiError      String? // Última mensagem de erro da API
+  apiRetryCount Int       @default(0) // Número de tentativas de envio
 
   createdAt DateTime @default(now())
   expiresAt DateTime
 
   @@index([phoneNumber])
+  @@index([platform])
   @@index([userId])
+  @@index([accountId])
   @@index([status])
   @@index([expiresAt])
   @@index([apiSent])
@@ -163,19 +169,6 @@ enum ConfirmationStatus {
   CONFIRMED
   REJECTED
   EXPIRED
-}
-
-// Log de auditoria
-model AuditLog {
-  id          String   @id @default(uuid())
-  phoneNumber String
-  action      String
-  metadata    Json?
-  createdAt   DateTime @default(now())
-
-  @@index([phoneNumber])
-  @@index([createdAt])
-  @@map("audit_logs")
 }
 
 // Log de uso de IA (tokens e custos)
@@ -346,14 +339,17 @@ model AISettings {
   ragAiEnabled    Boolean @default(false) // Se usa IA para embeddings (true) ou BM25 (false)
   ragAiProvider   String  @default("groq") // Provider de IA para embeddings: "openai", "groq", "google_gemini"
   ragProvider     String  @default("bm25") // Método: "openai" (com IA paga), "local" (sentence-transformers), "bm25" (sem IA)
-  ragThreshold    Float   @default(0.75) // Threshold de similaridade (0-1)
-  ragAutoApply    Float   @default(0.88) // Auto-aplicar se similaridade >= este valor
+  ragThreshold    Float   @default(0.6) // Threshold de similaridade (0-1) - Reduzido para 60%
   ragCacheEnabled Boolean @default(true) // Cache de embeddings
 
   // Assistente Conversacional
   assistantEnabled        Boolean @default(true) // Assistente humanizado ativo
   assistantPersonality    String  @default("friendly") // "friendly", "professional", "casual"
   assistantMaxHistoryMsgs Int     @default(5) // Máximo de mensagens no histórico de contexto
+
+  // Transaction Processing
+  autoRegisterThreshold  Float @default(0.90) @map("auto_register_threshold") // Registra automaticamente se confidence >= 90%
+  minConfidenceThreshold Float @default(0.50) @map("min_confidence_threshold") // Rejeita transações com confidence < 50%
 
   // Segurança
   securityEnabled          Boolean @default(true) // Camada de segurança ativa

@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { UserCacheService } from '@features/users/user-cache.service';
+import { RAGService } from '@infrastructure/ai/rag/rag.service';
 
 export interface AccountOperationResult {
   success: boolean;
@@ -22,7 +23,10 @@ export interface AccountOperationResult {
 export class AccountManagementService {
   private readonly logger = new Logger(AccountManagementService.name);
 
-  constructor(private readonly userCache: UserCacheService) {}
+  constructor(
+    private readonly userCache: UserCacheService,
+    @Optional() private readonly ragService?: RAGService,
+  ) {}
 
   /**
    * Traduz role técnico para label amigável
@@ -165,6 +169,32 @@ export class AccountManagementService {
 
         // Trocar para a conta identificada
         await this.userCache.switchAccount(phoneNumber, targetAccount.id);
+
+        // Re-indexar categorias no RAG após trocar conta (apenas da nova conta ativa)
+        if (this.ragService) {
+          try {
+            const user = await this.userCache.getUser(phoneNumber);
+            if (user) {
+              const categoriesData = await this.userCache.getUserCategories(
+                phoneNumber,
+                targetAccount.id,
+              );
+              if (categoriesData.categories.length > 0) {
+                // Importar função helper
+                const { expandCategoriesForRAG } = await import('../users/user-cache.service');
+                const userCategories = expandCategoriesForRAG(categoriesData.categories);
+
+                await this.ragService.indexUserCategories(user.gastoCertoId, userCategories);
+                this.logger.log(
+                  `🧠 RAG re-indexado após trocar conta: ${userCategories.length} categorias | ` +
+                    `Conta: ${targetAccount.name}`,
+                );
+              }
+            }
+          } catch (ragError) {
+            this.logger.warn(`⚠️ Erro ao re-indexar RAG (não bloqueante):`, ragError);
+          }
+        }
 
         const roleLabel = this.getRoleLabel(targetAccount.type);
         this.logger.log(`✅ Conta trocada: ${targetAccount.name} (${targetAccount.type})`);

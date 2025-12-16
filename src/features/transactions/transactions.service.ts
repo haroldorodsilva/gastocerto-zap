@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { IntentAnalyzerService } from '@features/intent/intent-analyzer.service';
 import { AccountManagementService } from '@features/accounts/account-management.service';
+import { SecurityService } from '@features/security/security.service';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
@@ -39,6 +40,7 @@ export class TransactionsService {
     private readonly userCache: UserCacheService,
     private readonly intentAnalyzer: IntentAnalyzerService,
     private readonly accountManagement: AccountManagementService,
+    private readonly securityService: SecurityService,
     private readonly eventEmitter: EventEmitter2,
     private readonly registrationService: TransactionRegistrationService,
     private readonly listingService: TransactionListingService,
@@ -83,7 +85,28 @@ export class TransactionsService {
     platform: 'whatsapp' | 'telegram' = 'whatsapp',
   ): Promise<ProcessMessageResult> {
     try {
-      this.logger.log(`📝 [Orchestrator] Processando texto de ${phoneNumber}`);
+      this.logger.log(`📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform}`);
+
+      // 0. Validação de segurança (prompt injection, mensagens maliciosas)
+      const securityValidation = await this.securityService.validateUserMessage(
+        phoneNumber,
+        text,
+        platform,
+      );
+
+      if (!securityValidation.safe) {
+        this.logger.warn(
+          `⚠️ Mensagem bloqueada por segurança: ${securityValidation.reason} | ` +
+            `Severidade: ${securityValidation.severity}`,
+        );
+        return {
+          success: false,
+          message:
+            '🛡️ Sua mensagem contém conteúdo não permitido.\n\n' +
+            'Por favor, reformule e envie novamente.',
+          requiresConfirmation: false,
+        };
+      }
 
       // 1. Buscar usuário
       const user = await this.userCache.getUser(phoneNumber);
@@ -266,6 +289,7 @@ export class TransactionsService {
         text,
         messageId,
         user,
+        platform, // Passar platform da mensagem
       );
 
       // 4. Emitir resposta se houver mensagem
@@ -343,6 +367,7 @@ export class TransactionsService {
         mimeType,
         messageId,
         user,
+        platform, // Passar platform da mensagem
       );
 
       // Emitir resposta se houver mensagem
@@ -420,6 +445,7 @@ export class TransactionsService {
         mimeType,
         messageId,
         user,
+        platform, // Passar platform da mensagem
       );
 
       // Emitir resposta se houver mensagem

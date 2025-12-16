@@ -1,10 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
+import { IAIProvider, TransactionData, UserContext, TransactionType } from '../ai.interface';
 import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
   IMAGE_ANALYSIS_USER_PROMPT,
 } from '../../../features/transactions/contexts/registration/prompts/image-analysis.prompt';
+import {
+  getTransactionSystemPrompt,
+  TRANSACTION_USER_PROMPT_TEMPLATE,
+} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
 
 /**
  * Google Gemini Provider
@@ -24,25 +28,59 @@ import {
 @Injectable()
 export class GoogleGeminiProvider implements IAIProvider {
   private readonly logger = new Logger(GoogleGeminiProvider.name);
-  private readonly apiKey: string;
-  private readonly model: string;
+  private apiKey: string;
+  private model: string;
   private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  private initialized = false;
 
   constructor(private configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('ai.google.apiKey', '');
-    this.model = this.configService.get<string>('ai.google.model', 'gemini-1.5-pro');
+    // Inicialização assíncrona será feita no primeiro uso
+  }
 
-    if (!this.apiKey) {
-      this.logger.warn('⚠️  Google AI API Key não configurada - Provider desabilitado');
-    } else {
-      this.logger.log(`✅ Google Gemini Provider inicializado - Modelo: ${this.model}`);
+  /**
+   * Inicializa provider com configurações do banco ou ENV
+   */
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      // Tentar buscar do banco primeiro
+      const { PrismaService } = await import('../../../core/database/prisma.service');
+      const prisma = new PrismaService();
+      
+      const providerConfig = await prisma.aIProviderConfig.findUnique({
+        where: { provider: 'google_gemini' },
+      });
+
+      if (providerConfig?.apiKey && providerConfig.enabled) {
+        // Usar configuração do banco
+        this.apiKey = providerConfig.apiKey;
+        this.model = providerConfig.textModel || 'gemini-1.5-flash';
+        this.logger.log(`✅ Google Gemini Provider inicializado via BANCO - Modelo: ${this.model}`);
+      } else {
+        // Fallback para ENV (apenas dev)
+        this.apiKey = this.configService.get<string>('ai.google.apiKey', '');
+        this.model = this.configService.get<string>('ai.google.model', 'gemini-1.5-flash');
+        
+        if (this.apiKey) {
+          this.logger.warn('⚠️  Google Gemini usando ENV (configure no banco para produção)');
+        } else {
+          this.logger.warn('⚠️  Google AI API Key não configurada - Provider desabilitado');
+        }
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao inicializar Google Gemini:', error.message);
+      this.initialized = true;
     }
   }
 
   /**
    * Verifica se o provider está disponível
    */
-  private isAvailable(): boolean {
+  private async isAvailable(): Promise<boolean> {
+    await this.initialize();
     return !!this.apiKey;
   }
 
@@ -50,7 +88,7 @@ export class GoogleGeminiProvider implements IAIProvider {
    * Extrai transação de texto usando Gemini
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('Google Gemini Provider não está disponível (API Key não configurada)');
     }
 
@@ -58,7 +96,8 @@ export class GoogleGeminiProvider implements IAIProvider {
       const startTime = Date.now();
       this.logger.debug(`[Gemini] Extraindo transação de: "${text}"`);
 
-      const prompt = this.buildTransactionPrompt(text, userContext?.categories);
+      const systemPrompt = getTransactionSystemPrompt();
+      const prompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
 
       const response = await fetch(
         `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
@@ -66,7 +105,7 @@ export class GoogleGeminiProvider implements IAIProvider {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [{ parts: [{ text: `${systemPrompt}\n\n${prompt}` }] }],
             generationConfig: {
               temperature: 0.1,
               maxOutputTokens: 500,
@@ -216,26 +255,50 @@ export class GoogleGeminiProvider implements IAIProvider {
   }
 
   /**
-   * Constrói prompt de transação
+   * Gera embedding vetorial usando text-embedding-004
+   * Modelo leve e eficiente do Google
    */
-  private buildTransactionPrompt(text: string, userCategories?: string[]): string {
-    let prompt = `Extraia dados de transação financeira da seguinte mensagem: "${text}"`;
-
-    if (userCategories && userCategories.length > 0) {
-      prompt += `\n\nCategorias do usuário: ${userCategories.join(', ')}`;
+  async generateEmbedding(text: string): Promise<number[]> {
+    if (!(await this.isAvailable())) {
+      throw new Error('Google Gemini Provider não está disponível (API Key não configurada)');
     }
 
-    prompt += `\n\nRetorne um objeto JSON com:
-{
-  "type": "EXPENSES" ou "INCOME",
-  "amount": número,
-  "category": "string",
-  "description": "string ou null",
-  "date": "ISO 8601 ou null",
-  "merchant": "string ou null",
-  "confidence": número entre 0 e 1
-}`;
+    try {
+      const startTime = Date.now();
+      this.logger.debug(`[Gemini] Gerando embedding para: "${text}"`);
 
-    return prompt;
+      const response = await fetch(
+        `${this.baseUrl}/models/text-embedding-004:embedContent?key=${this.apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/text-embedding-004',
+            content: {
+              parts: [{ text }],
+            },
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Gemini API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const embedding = data.embedding?.values || [];
+      const processingTime = Date.now() - startTime;
+
+      this.logger.debug(
+        `✅ [Gemini] Embedding gerado em ${processingTime}ms - Dimensões: ${embedding.length}`,
+      );
+
+      return embedding;
+    } catch (error) {
+      this.logger.error('[Gemini] Erro ao gerar embedding:', error);
+      throw error;
+    }
   }
+
 }

@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessageContextService } from '../../infrastructure/whatsapp/messages/message-context.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 import { ConfirmationStatus } from '@prisma/client';
 
@@ -21,24 +20,41 @@ export class ConfirmationExpirationJob {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly contextService: MessageContextService,
   ) {}
 
   /**
    * Helper para emitir eventos de resposta para a plataforma correta
+   * Usa a coluna platform da confirmação
    */
-  private emitReply(platformId: string, message: string, context: string, metadata?: any): void {
-    const messageContext = this.contextService.getContext(platformId);
-    const platform = messageContext?.platform || MessagingPlatform.WHATSAPP;
-    const eventName = platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
+  private async emitReply(
+    confirmation: any,
+    message: string,
+    context: string,
+    metadata?: any,
+  ): Promise<void> {
+    try {
+      // Usar plataforma salva na confirmação ou WhatsApp como padrão
+      const platform = (confirmation.platform || 'whatsapp') as MessagingPlatform;
+      const eventName =
+        platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
 
-    this.eventEmitter.emit(eventName, {
-      platformId,
-      message,
-      context,
-      metadata,
-      platform,
-    });
+      this.logger.debug(
+        `📤 Emitindo evento ${eventName} para ${confirmation.phoneNumber} (platform: ${platform})`,
+      );
+
+      this.eventEmitter.emit(eventName, {
+        platformId: confirmation.phoneNumber,
+        message,
+        context,
+        metadata,
+        platform,
+      });
+    } catch (error) {
+      this.logger.error(
+        `❌ Erro ao emitir reply para ${confirmation.phoneNumber}:`,
+        error,
+      );
+    }
   }
 
   /**
@@ -108,18 +124,21 @@ export class ConfirmationExpirationJob {
       const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
       const typeText = confirmation.type === 'EXPENSES' ? 'Gasto' : 'Receita';
       const amount = (Number(confirmation.amount) / 100).toFixed(2);
+      const subCategoryText = confirmation.subCategoryName
+        ? ` > ${confirmation.subCategoryName}`
+        : '';
 
       const message =
         `⏰ *Atenção: Confirmação expirando!*\n\n` +
         `Sua confirmação de ${typeText.toLowerCase()} expira em *${secondsLeft} segundos*.\n\n` +
         `${typeEmoji} *Valor:* R$ ${amount}\n` +
-        `📂 *Categoria:* ${confirmation.category}\n` +
+        `📂 *Categoria:* ${confirmation.category}${subCategoryText}\n` +
         `${confirmation.description ? `📝 *Descrição:* ${confirmation.description}\n` : ''}` +
         `\n✅ Digite *"sim"* para confirmar\n` +
         `❌ Digite *"não"* para cancelar`;
 
       // Emitir evento para enviar mensagem
-      this.emitReply(confirmation.phoneNumber, message, 'CONFIRMATION_REQUEST', {
+      await this.emitReply(confirmation, message, 'CONFIRMATION_REQUEST', {
         confirmationId: confirmation.id,
         action: 'expiring_warning',
         secondsLeft,
@@ -155,17 +174,20 @@ export class ConfirmationExpirationJob {
       const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
       const typeText = confirmation.type === 'EXPENSES' ? 'Gasto' : 'Receita';
       const amount = (Number(confirmation.amount) / 100).toFixed(2);
+      const subCategoryText = confirmation.subCategoryName
+        ? ` > ${confirmation.subCategoryName}`
+        : '';
 
       const message =
         `⏱️ *Confirmação expirada*\n\n` +
         `Sua confirmação de ${typeText.toLowerCase()} expirou sem resposta.\n\n` +
         `${typeEmoji} *Valor:* R$ ${amount}\n` +
-        `📂 *Categoria:* ${confirmation.category}\n` +
+        `📂 *Categoria:* ${confirmation.category}${subCategoryText}\n` +
         `${confirmation.description ? `📝 *Descrição:* ${confirmation.description}\n` : ''}` +
         `\n💡 *Dica:* Envie a transação novamente se ainda quiser registrar.`;
 
       // Emitir evento para enviar mensagem
-      this.emitReply(confirmation.phoneNumber, message, 'TRANSACTION_RESULT', {
+      await this.emitReply(confirmation, message, 'TRANSACTION_RESULT', {
         confirmationId: confirmation.id,
         action: 'expired',
       });
@@ -187,7 +209,14 @@ export class ConfirmationExpirationJob {
 
       const result = await this.prisma.transactionConfirmation.deleteMany({
         where: {
-          status: ConfirmationStatus.REJECTED,
+          OR: [
+            {
+              status: ConfirmationStatus.REJECTED,
+            },
+            {
+              apiSent: true,
+            },
+          ],
           expiresAt: {
             lt: oneHourAgo,
           },

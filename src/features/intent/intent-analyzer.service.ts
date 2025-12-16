@@ -67,7 +67,8 @@ export class IntentAnalyzerService {
           '💰 Para registrar receitas:\n' +
           '   • "Recebi 1000 de salário"\n' +
           '   • "Ganhei 200 de freelance"\n\n' +
-          '📷 Também aceito fotos de notas fiscais e áudios!',
+          '📷 Também aceito fotos de notas fiscais e áudios!\n\n' +
+          'Digite "ajuda" caso precise de mais informações!',
       };
     }
 

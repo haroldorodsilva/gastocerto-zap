@@ -5,7 +5,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaService } from './core/database/prisma.service';
+import { PrismaModule } from './core/database/prisma.module';
 import { databaseConfig } from './core/config/database.config';
 import { redisConfig } from './core/config/redis.config';
 import { baileysConfig } from './core/config/baileys.config';
@@ -32,6 +32,9 @@ import { AdminModule } from '@features/admin/admin.module';
 
 @Module({
   imports: [
+    // Database - PrismaModule @Global (uma única instância para toda a app)
+    PrismaModule,
+
     // Configuração global
     ConfigModule.forRoot({
       isGlobal: true,
@@ -85,6 +88,6 @@ import { AdminModule } from '@features/admin/admin.module';
     // SubscriptionsModule, // TODO: Futuro
   ],
   controllers: [AppController],
-  providers: [AppService, PrismaService],
+  providers: [AppService],
 })
 export class AppModule {}

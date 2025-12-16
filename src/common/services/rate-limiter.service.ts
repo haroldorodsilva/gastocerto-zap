@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { AIProviderType } from '../../infrastructure/ai/ai.interface';
+import { PrismaService } from '../../core/database/prisma.service';
 
 interface RateLimit {
   rpm: number; // Requests per minute
@@ -17,16 +18,20 @@ interface UsageStats {
 /**
  * Rate Limiter Service
  * Controla limites de requisições por provider AI
+ * 
+ * ⚠️  Rate limits agora vêm do banco (AIProviderConfig)
  */
 @Injectable()
 export class RateLimiterService {
   private readonly logger = new Logger(RateLimiterService.name);
   private readonly redis: Redis;
-
-  // Limites padrão por provider (configuráveis via ENV)
   private readonly limits = new Map<AIProviderType, RateLimit>();
+  private initialized = false;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     // Inicializar Redis
     const redisUrl = this.configService.get<string>('REDIS_URL');
     const redisHost = this.configService.get<string>('REDIS_HOST', 'localhost');
@@ -41,60 +46,98 @@ export class RateLimiterService {
       });
     }
 
-    // Carregar limites (com fallback para valores padrão)
+    // Carregar limites do banco
     this.loadLimits();
-
-    this.logger.log('✅ RateLimiterService inicializado');
   }
 
   /**
-   * Carrega limites de rate limit por provider
+   * Carrega limites de rate limit do banco de dados (AIProviderConfig)
    */
-  private loadLimits(): void {
-    // OpenAI: https://platform.openai.com/docs/guides/rate-limits
-    this.limits.set(AIProviderType.OPENAI, {
-      rpm: this.configService.get<number>('OPENAI_RATE_LIMIT_RPM', 500),
-      tpm: this.configService.get<number>('OPENAI_RATE_LIMIT_TPM', 90000),
-    });
+  private async loadLimits(): Promise<void> {
+    if (this.initialized) return;
 
-    // Google Gemini: https://ai.google.dev/pricing
-    this.limits.set(AIProviderType.GOOGLE_GEMINI, {
-      rpm: this.configService.get<number>('GEMINI_RATE_LIMIT_RPM', 60),
-      tpm: this.configService.get<number>('GEMINI_RATE_LIMIT_TPM', 30000),
-    });
+    try {
+      const providers = await this.prisma.aIProviderConfig.findMany({
+        where: { enabled: true },
+      });
 
-    // Groq: https://console.groq.com/docs/rate-limits
-    this.limits.set(AIProviderType.GROQ, {
-      rpm: this.configService.get<number>('GROQ_RATE_LIMIT_RPM', 30),
-      tpm: this.configService.get<number>('GROQ_RATE_LIMIT_TPM', 15000),
-    });
+      for (const provider of providers) {
+        const providerType = this.mapProviderToType(provider.provider);
+        if (providerType) {
+          this.limits.set(providerType, {
+            rpm: provider.rpmLimit || 0, // 0 = ilimitado
+            tpm: provider.tpmLimit || 0,
+          });
+        }
+      }
 
-    this.logger.log('📊 Rate limits carregados:');
-    this.limits.forEach((limit, provider) => {
-      this.logger.log(`   ${provider}: ${limit.rpm} RPM, ${limit.tpm} TPM`);
-    });
+      if (this.limits.size > 0) {
+        this.logger.log('📊 Rate limits carregados do BANCO:');
+        this.limits.forEach((limit, provider) => {
+          const rpmStr = limit.rpm === 0 ? 'ilimitado' : `${limit.rpm} RPM`;
+          const tpmStr = limit.tpm === 0 ? 'ilimitado' : `${limit.tpm} TPM`;
+          this.logger.log(`   ${provider}: ${rpmStr}, ${tpmStr}`);
+        });
+      } else {
+        this.logger.warn('⚠️  Nenhum rate limit configurado no banco');
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao carregar rate limits do banco:', error);
+      this.initialized = true; // Marca como inicializado mesmo com erro
+    }
+  }
+
+  /**
+   * Mapeia string do provider para AIProviderType enum
+   */
+  private mapProviderToType(provider: string): AIProviderType | null {
+    const mapping: Record<string, AIProviderType> = {
+      openai: AIProviderType.OPENAI,
+      google_gemini: AIProviderType.GOOGLE_GEMINI,
+      groq: AIProviderType.GROQ,
+      deepseek: AIProviderType.DEEPSEEK,
+    };
+    return mapping[provider] || null;
+  }
+
+  /**
+   * Garante que configurações foram carregadas
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.loadLimits();
+    }
   }
 
   /**
    * Verifica se pode fazer request ao provider
    */
   async checkLimit(provider: AIProviderType, estimatedTokens: number = 500): Promise<boolean> {
+    await this.ensureInitialized();
+    
     const limit = this.limits.get(provider);
     if (!limit) {
       this.logger.warn(`Rate limit não configurado para provider: ${provider}`);
       return true; // Permite se não houver limite configurado
     }
 
+    // Se RPM/TPM = 0, significa ilimitado
+    if (limit.rpm === 0 && limit.tpm === 0) {
+      return true;
+    }
+
     const usage = await this.getUsage(provider);
 
-    // Verifica se excedeu RPM
-    if (usage.rpm >= limit.rpm) {
+    // Verifica RPM (se configurado)
+    if (limit.rpm > 0 && usage.rpm >= limit.rpm) {
       this.logger.warn(`⚠️  Rate limit RPM excedido para ${provider}: ${usage.rpm}/${limit.rpm}`);
       return false;
     }
 
-    // Verifica se vai exceder TPM com essa requisição
-    if (usage.tpm + estimatedTokens > limit.tpm) {
+    // Verifica TPM (se configurado)
+    if (limit.tpm > 0 && usage.tpm + estimatedTokens > limit.tpm) {
       this.logger.warn(
         `⚠️  Rate limit TPM excedido para ${provider}: ${usage.tpm + estimatedTokens}/${limit.tpm}`,
       );

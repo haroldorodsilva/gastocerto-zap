@@ -29,47 +29,89 @@ import {
 @Injectable()
 export class DeepSeekProvider implements IAIProvider {
   private readonly logger = new Logger(DeepSeekProvider.name);
-  private readonly client: OpenAI;
-  private readonly model: string;
+  private client: OpenAI;
+  private model: string;
   private readonly baseUrl: string;
+  private apiKey: string;
+  private initialized = false;
 
   constructor(private configService: ConfigService) {
-    const apiKey = this.configService.get<string>('ai.deepseek.apiKey');
     this.baseUrl = this.configService.get<string>(
       'ai.deepseek.baseUrl',
       'https://api.deepseek.com',
     );
     this.model = this.configService.get<string>('ai.deepseek.model', 'deepseek-chat');
 
-    if (!apiKey) {
-      this.logger.warn('⚠️  DeepSeek API Key não configurada - Provider desabilitado');
-      // Inicializar com dummy key para evitar erro
-      this.client = new OpenAI({
-        apiKey: 'sk-dummy-key-not-configured',
-        baseURL: this.baseUrl,
+    // Inicializar com dummy key temporariamente
+    this.client = new OpenAI({
+      apiKey: 'sk-dummy-key-not-configured',
+      baseURL: this.baseUrl,
+    });
+  }
+
+  /**
+   * Inicializa o provider buscando config do banco de dados
+   * Fallback para ENV se não encontrar no banco
+   */
+  private async initialize(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    try {
+      // Importação dinâmica para evitar dependência circular
+      const { PrismaService } = await import('../../../core/database/prisma.service');
+      const prisma = new PrismaService();
+
+      const providerConfig = await prisma.aIProviderConfig.findUnique({
+        where: { provider: 'deepseek' },
       });
-    } else {
-      this.client = new OpenAI({
-        apiKey,
-        baseURL: this.baseUrl,
-      });
-      this.logger.log(`✅ DeepSeek Provider inicializado - Modelo: ${this.model}`);
+
+      if (providerConfig?.apiKey && providerConfig.enabled) {
+        // Usar configuração do banco
+        this.apiKey = providerConfig.apiKey;
+        this.model = providerConfig.textModel || this.model;
+        this.logger.log(`✅ DeepSeek Provider inicializado via BANCO - Modelo: ${this.model}`);
+      } else {
+        // Fallback para ENV (desenvolvimento)
+        this.apiKey = this.configService.get<string>('ai.deepseek.apiKey');
+        if (this.apiKey) {
+          this.logger.warn(
+            '⚠️  DeepSeek usando ENV (configure no banco para produção) - Modelo: ' + this.model,
+          );
+        } else {
+          this.logger.warn('⚠️  DeepSeek API Key não configurada - Provider desabilitado');
+        }
+      }
+
+      // Reinicializar cliente com API key correta
+      if (this.apiKey) {
+        this.client = new OpenAI({
+          apiKey: this.apiKey,
+          baseURL: this.baseUrl,
+        });
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao inicializar DeepSeek Provider:', error);
+      this.initialized = true; // Marcar como inicializado mesmo com erro
     }
   }
 
   /**
    * Verifica se o provider está disponível
    */
-  private isAvailable(): boolean {
-    const apiKey = this.configService.get<string>('ai.deepseek.apiKey');
-    return !!apiKey;
+  private async isAvailable(): Promise<boolean> {
+    await this.initialize();
+    return !!this.apiKey;
   }
 
   /**
    * Extrai dados de transação de texto
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('DeepSeek Provider não está disponível (API Key não configurada)');
     }
 
@@ -124,7 +166,7 @@ export class DeepSeekProvider implements IAIProvider {
    * Sugere categoria baseada em descrição
    */
   async suggestCategory(description: string, userCategories: string[]): Promise<string> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('DeepSeek Provider não está disponível (API Key não configurada)');
     }
 
@@ -157,6 +199,16 @@ export class DeepSeekProvider implements IAIProvider {
       this.logger.error('Erro ao sugerir categoria:', error);
       throw error;
     }
+  }
+
+  /**
+   * Gera embedding vetorial
+   * DeepSeek não suporta embeddings nativamente
+   */
+  async generateEmbedding(text: string): Promise<number[]> {
+    throw new Error(
+      'DeepSeek não suporta embeddings. Use OpenAI ou Google Gemini para RAG com embeddings.',
+    );
   }
 
   /**

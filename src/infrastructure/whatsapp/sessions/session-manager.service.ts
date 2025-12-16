@@ -397,26 +397,27 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     if (isError515) {
       this.logger.warn(`⚠️  WhatsApp error 515 detected for ${sessionId} - Temporary ban detected`);
 
-      // Erro 515 corrompe as credenciais, então precisamos limpá-las
-      this.logger.warn(`🧹 Clearing corrupted credentials caused by error 515...`);
+      // IMPORTANTE: Erro 515 É TEMPORÁRIO - NÃO limpar credenciais!
+      // As credenciais são válidas, apenas aguardar 2-24h
+      this.logger.log(`🕒 Keeping credentials intact - error 515 is temporary`);
+
       await this.stopSession(sessionId);
-      await this.authStateManager.clearAuthState(sessionId);
       await this.prisma.whatsAppSession.update({
         where: { sessionId },
         data: {
           isActive: false,
-          status: SessionStatus.DISCONNECTED,
+          status: SessionStatus.ERROR,
         },
       });
 
-      this.logger.log(`✅ Credentials cleared for ${sessionId}. Please scan QR code again.`);
       this.logger.log(`⏰ WhatsApp temporary ban usually lasts 2-24 hours. Try again later.`);
+      this.logger.log(`✅ Credentials preserved - just scan QR code again after ban expires.`);
 
       // Emit event
       this.eventEmitter.emit('session.error.515', {
         sessionId,
         message:
-          'WhatsApp error 515: Temporary ban detected. Credentials cleared. Please wait 2-24 hours and scan QR code again.',
+          'WhatsApp error 515: Temporary ban detected. Credentials preserved. Please wait 2-24 hours and try to connect again.',
       });
       return;
     }
@@ -441,6 +442,30 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       sessionInfo.lastActivity = new Date();
     }
 
+    this.logger.debug(
+      `Connection update for ${sessionId}: ${JSON.stringify({
+        status: update.status,
+        reason: update.reason,
+        shouldReconnect: update.shouldReconnect,
+      })}`,
+    );
+
+    // Handle disconnection with reconnection logic
+    if (update.status === 'DISCONNECTED' && update.shouldReconnect) {
+      const reason = update.reason || 'unknown';
+
+      // NÃO reconectar em logout ou conexão substituída
+      if (reason === 'logged_out' || reason === 'connection_replaced') {
+        this.logger.log(`🚫 No reconnect for ${sessionId}: ${reason}`);
+        await this.handleDisconnected(sessionId, reason);
+        return;
+      }
+
+      // Reconectar automaticamente para outros erros
+      this.logger.log(`🔄 Scheduling auto-reconnect for ${sessionId} (reason: ${reason})`);
+      await this.scheduleReconnect(sessionId, false, reason);
+    }
+
     this.eventEmitter.emit('session.update', { sessionId, update });
   }
 
@@ -463,7 +488,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     this.eventEmitter.emit('session.qr.expired', { sessionId });
   }
 
-  private async scheduleReconnect(sessionId: string, isError515: boolean = false) {
+  private async scheduleReconnect(sessionId: string, isError515: boolean = false, reason?: string) {
     const sessionInfo = this.sessions.get(sessionId);
     if (!sessionInfo) return;
 
@@ -486,7 +511,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     const delayStr = delayMinutes > 0 ? `${delayMinutes}m ${delaySeconds}s` : `${delaySeconds}s`;
 
     this.logger.log(
-      `🔄 Scheduling reconnect for session ${sessionId} (attempt ${sessionInfo.restartAttempts}/${this.MAX_RECONNECT_ATTEMPTS}) in ${delayStr}${isError515 ? ' [Error 515 - Extended delay]' : ''}`,
+      `🔄 Scheduling reconnect for session ${sessionId} (attempt ${sessionInfo.restartAttempts}/${this.MAX_RECONNECT_ATTEMPTS}) in ${delayStr}${isError515 ? ' [Error 515 - Extended delay]' : ''}${reason ? ` - Reason: ${reason}` : ''}`,
     );
 
     sessionInfo.restartTimer = setTimeout(async () => {

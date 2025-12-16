@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+// @ts-ignore - groq-sdk não instalado ainda
+import Groq from 'groq-sdk';
 import {
   IAIProvider,
   TransactionData,
@@ -7,6 +9,10 @@ import {
   UserContext,
   AIProviderType,
 } from '../ai.interface';
+import {
+  getTransactionSystemPrompt,
+  TRANSACTION_USER_PROMPT_TEMPLATE,
+} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
 
 /**
  * Groq Provider - Especializado em ÁUDIO
@@ -29,26 +35,61 @@ import {
 @Injectable()
 export class GroqProvider implements IAIProvider {
   private readonly logger = new Logger(GroqProvider.name);
-  private readonly apiKey: string;
-  private readonly model: string;
+  private apiKey: string;
+  private model: string;
   private readonly baseUrl = 'https://api.groq.com/openai/v1';
+  private initialized = false;
 
   constructor(private configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('ai.groq.apiKey', '');
-    this.model = this.configService.get<string>('ai.groq.model', 'llama-3.1-70b-versatile');
+    // Inicialização assíncrona será feita no primeiro uso
+  }
 
-    if (!this.apiKey) {
-      this.logger.warn('⚠️  Groq API Key não configurada - Provider desabilitado');
-    } else {
-      this.logger.log(`✅ Groq Provider inicializado - Modelo: ${this.model}`);
-      this.logger.log(`🎤 Whisper GRÁTIS disponível!`);
+  /**
+   * Inicializa provider com configurações do banco ou ENV
+   */
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      // Tentar buscar do banco primeiro
+      const { PrismaService } = await import('../../../core/database/prisma.service');
+      const prisma = new PrismaService();
+      
+      const providerConfig = await prisma.aIProviderConfig.findUnique({
+        where: { provider: 'groq' },
+      });
+
+      if (providerConfig?.apiKey && providerConfig.enabled) {
+        // Usar configuração do banco
+        this.apiKey = providerConfig.apiKey;
+        this.model = providerConfig.textModel || 'llama-3.1-70b-versatile';
+        this.logger.log(`✅ Groq Provider inicializado via BANCO - Modelo: ${this.model}`);
+        this.logger.log(`🎤 Whisper GRÁTIS disponível!`);
+      } else {
+        // Fallback para ENV (apenas dev)
+        this.apiKey = this.configService.get<string>('ai.groq.apiKey', '');
+        this.model = this.configService.get<string>('ai.groq.model', 'llama-3.1-70b-versatile');
+        
+        if (this.apiKey) {
+          this.logger.warn('⚠️  Groq usando ENV (configure no banco para produção)');
+          this.logger.log(`🎤 Whisper GRÁTIS disponível!`);
+        } else {
+          this.logger.warn('⚠️  Groq API Key não configurada - Provider desabilitado');
+        }
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao inicializar Groq:', error.message);
+      this.initialized = true;
     }
   }
 
   /**
    * Verifica se o provider está disponível
    */
-  private isAvailable(): boolean {
+  private async isAvailable(): Promise<boolean> {
+    await this.initialize();
     return !!this.apiKey;
   }
 
@@ -56,7 +97,7 @@ export class GroqProvider implements IAIProvider {
    * Extrai transação de texto usando Llama 3 ou Mixtral
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('Groq Provider não está disponível (API Key não configurada)');
     }
 
@@ -64,7 +105,7 @@ export class GroqProvider implements IAIProvider {
       const startTime = Date.now();
       this.logger.debug(`[Groq] Extraindo transação de: "${text}"`);
 
-      const prompt = this.buildTransactionPrompt(text, userContext?.categories);
+      const prompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
 
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -77,8 +118,7 @@ export class GroqProvider implements IAIProvider {
           messages: [
             {
               role: 'system',
-              content:
-                'Você é um assistente que extrai dados de transações financeiras. Sempre responda em JSON válido.',
+              content: getTransactionSystemPrompt(), // Gera prompt com data atual
             },
             { role: 'user', content: prompt },
           ],
@@ -204,26 +244,12 @@ export class GroqProvider implements IAIProvider {
   }
 
   /**
-   * Constrói prompt de transação
+   * Gera embedding vetorial
+   * Groq não suporta embeddings nativamente, usa fallback para OpenAI
    */
-  private buildTransactionPrompt(text: string, userCategories?: string[]): string {
-    let prompt = `Extraia dados de transação da mensagem: "${text}"`;
-
-    if (userCategories && userCategories.length > 0) {
-      prompt += `\n\nCategorias: ${userCategories.join(', ')}`;
-    }
-
-    prompt += `\n\nJSON:
-{
-  "type": "EXPENSES" ou "INCOME",
-  "amount": número,
-  "category": "string",
-  "description": "string ou null",
-  "date": "ISO 8601 ou null",
-  "merchant": "string ou null",
-  "confidence": 0-1
-}`;
-
-    return prompt;
+  async generateEmbedding(text: string): Promise<number[]> {
+    throw new Error(
+      'Groq não suporta embeddings. Use OpenAI ou Google Gemini para RAG com embeddings.',
+    );
   }
 }

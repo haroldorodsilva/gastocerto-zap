@@ -8,6 +8,47 @@ import { RAGService } from '../../infrastructure/ai/rag/rag.service';
 import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
 import Redis from 'ioredis';
 
+/**
+ * Expande categorias com subcategorias para indexação no RAG
+ * Cada subcategoria vira uma entrada separada
+ */
+export function expandCategoriesForRAG(categories: any[]): any[] {
+  const userCategories: any[] = [];
+
+  categories.forEach((cat) => {
+    const categoryId = cat.id || cat.categoryId;
+    const categoryName = cat.name || cat.categoryName;
+    const subCategories = cat.subCategories || [];
+
+    if (subCategories.length > 0) {
+      // Criar uma entrada para cada subcategoria
+      subCategories.forEach((sub: any) => {
+        userCategories.push({
+          id: categoryId,
+          name: categoryName,
+          accountId: cat.accountId,
+          type: cat.type,
+          subCategory: {
+            id: sub.id || sub.subCategoryId,
+            name: sub.name || sub.subCategoryName,
+          },
+        });
+      });
+    } else {
+      // Categoria sem subcategoria
+      userCategories.push({
+        id: categoryId,
+        name: categoryName,
+        accountId: cat.accountId,
+        type: cat.type,
+        subCategory: undefined,
+      });
+    }
+  });
+
+  return userCategories;
+}
+
 @Injectable()
 export class UserCacheService {
   private readonly logger = new Logger(UserCacheService.name);
@@ -335,8 +376,13 @@ export class UserCacheService {
   /**
    * Busca categorias completas do usuário com accounts
    * Se não houver no cache, busca na API
+   * @param phoneNumber - Telefone do usuário
+   * @param accountId - (Opcional) ID da conta para filtrar categorias
    */
-  async getUserCategories(phoneNumber: string): Promise<{
+  async getUserCategories(
+    phoneNumber: string,
+    accountId?: string,
+  ): Promise<{
     categories: any[];
     accounts: any[];
     hasCategories: boolean;
@@ -346,9 +392,19 @@ export class UserCacheService {
       const cachedUser = await this.getUser(phoneNumber);
 
       if (cachedUser && cachedUser.categories && Array.isArray(cachedUser.categories)) {
-        const categories = cachedUser.categories as any[];
-        if (categories.length > 0) {
+        let categories = cachedUser.categories as any[];
+
+        // Filtrar por accountId se fornecido
+        if (accountId) {
+          categories = categories.filter((cat) => cat.accountId === accountId);
+          this.logger.log(
+            `📦 Categorias encontradas no cache (conta ${accountId}): ${categories.length} categoria(s)`,
+          );
+        } else {
           this.logger.log(`📦 Categorias encontradas no cache: ${categories.length} categoria(s)`);
+        }
+
+        if (categories.length > 0) {
           return {
             categories,
             accounts: [],
@@ -382,13 +438,22 @@ export class UserCacheService {
         };
       }
 
-      // 3. Extrair todas as categorias de todas as contas
+      // 3. Extrair todas as categorias de todas as contas (ou apenas da conta especificada)
       const allCategories: any[] = [];
       const accounts = categoriesResponse.accounts;
 
       this.logger.log(`📊 ${accounts.length} conta(s) encontrada(s)`);
 
-      accounts.forEach((account) => {
+      // Filtrar accounts se accountId foi fornecido
+      const accountsToProcess = accountId
+        ? accounts.filter((acc) => acc.id === accountId)
+        : accounts;
+
+      if (accountId && accountsToProcess.length === 0) {
+        this.logger.warn(`⚠️ Conta ${accountId} não encontrada nas contas do usuário`);
+      }
+
+      accountsToProcess.forEach((account) => {
         this.logger.log(
           `  📁 Conta: ${account.name} (${account.id}) - ${account.categories.length} categoria(s) - isDefault: ${account.isDefault}`,
         );
@@ -404,9 +469,8 @@ export class UserCacheService {
         });
       });
 
-      this.logger.log(
-        `✅ Total de ${allCategories.length} categoria(s) extraída(s) de ${accounts.length} conta(s)`,
-      );
+      const accountInfo = accountId ? ` da conta ${accountId}` : ` de ${accounts.length} conta(s)`;
+      this.logger.log(`✅ Total de ${allCategories.length} categoria(s) extraída(s)${accountInfo}`);
 
       // 4. Atualizar cache com as novas categorias
       if (allCategories.length > 0) {
@@ -667,18 +731,8 @@ export class UserCacheService {
         return;
       }
 
-      // Formatar categorias para o RAG
-      const userCategories = categoriesData.categories.map((cat) => ({
-        id: cat.id || cat.categoryId,
-        name: cat.name || cat.categoryName,
-        accountId: cat.accountId,
-        subCategory: cat.subCategory
-          ? {
-              id: cat.subCategory.id || cat.subCategory.subCategoryId,
-              name: cat.subCategory.name || cat.subCategory.subCategoryName,
-            }
-          : undefined,
-      }));
+      // Formatar categorias para o RAG (expandir subcategorias)
+      const userCategories = expandCategoriesForRAG(categoriesData.categories);
 
       // Buscar userId (gastoCertoId) do usuário
       const user = await this.findByPhoneNumber(phoneNumber);

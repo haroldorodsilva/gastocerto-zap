@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OnboardingStateService } from './onboarding-state.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from '@features/users/user-cache.service';
+import { RAGService } from '@infrastructure/ai/rag/rag.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { OnboardingResponse } from './dto/onboarding.dto';
 import { CreateUserDto } from '../users/dto/user.dto';
@@ -21,6 +22,7 @@ export class OnboardingService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly contextService: MessageContextService,
+    @Optional() private readonly ragService?: RAGService,
   ) {}
 
   /**
@@ -292,6 +294,25 @@ export class OnboardingService {
       );
       this.logger.log(`✅ Usuário criado com sucesso: ${apiUser.id}`);
 
+      // Indexar categorias no RAG após criar cache
+      if (this.ragService) {
+        try {
+          const categoriesData = await this.userCache.getUserCategories(phoneNumber);
+          if (categoriesData.categories.length > 0) {
+            // Importar função helper
+            const { expandCategoriesForRAG } = await import('../users/user-cache.service');
+            const userCategories = expandCategoriesForRAG(categoriesData.categories);
+
+            await this.ragService.indexUserCategories(apiUser.id, userCategories);
+            this.logger.log(
+              `🧠 RAG indexado no onboarding: ${userCategories.length} categorias | UserId: ${apiUser.id}`,
+            );
+          }
+        } catch (ragError) {
+          this.logger.warn(`⚠️ Erro ao indexar RAG no onboarding (não bloqueante):`, ragError);
+        }
+      }
+
       return {
         success: true,
         message:
@@ -387,7 +408,8 @@ export class OnboardingService {
           message:
             `🎉 *Perfeito, ${data.name}!*\n\n` +
             `Código validado com sucesso! Seu telefone já está vinculado à sua conta.\n\n` +
-            `Agora você pode registrar suas transações por aqui também. Vamos lá! 🚀`,
+            `Agora você pode registrar suas transações por aqui também. Vamos lá! 🚀\n\n` +
+            `Digite uma mensagem como "Gastei R$ 20 no mercado" para começar ou digite ajuda para ver o que posso fazer por você.`,
         };
       } else {
         return {
@@ -414,22 +436,12 @@ export class OnboardingService {
 
   /**
    * Registra conclusão do onboarding no audit log
+   * REMOVIDO: auditLog foi deletado do schema
    */
   private async logOnboardingComplete(phoneNumber: string): Promise<void> {
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          phoneNumber,
-          action: 'onboarding_completed',
-          metadata: {
-            completedAt: new Date().toISOString(),
-            source: 'whatsapp',
-          },
-        },
-      });
-    } catch (error) {
-      this.logger.error('Erro ao registrar audit log:', error);
-    }
+    // Método mantido para compatibilidade mas não faz nada
+    // auditLog foi removido do schema.prisma
+    this.logger.debug(`Onboarding completo para ${phoneNumber}`);
   }
 
   /**

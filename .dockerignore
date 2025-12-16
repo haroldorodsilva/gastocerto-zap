@@ -1,0 +1,70 @@
+# Node.js dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist
+build
+.next
+
+# Environment files (will be managed by Coolify)
+.env
+.env.local
+.env.production
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Test coverage
+coverage
+.nyc_output
+
+# Temp files
+tmp
+temp
+*.tmp
+
+# Documentation (não necessário na imagem)
+*.md
+docs
+
+# Development files
+.editorconfig
+.prettierrc
+.eslintrc.js
+tsconfig.build.tsbak
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Deploy scripts (não necessário na imagem)
+deploy.sh
+ecosystem.config.js
+
+# Prisma (schemas serão copiados, migrations não)
+prisma/migrations
+
+# WhatsApp session data (será montado via volume ou externo)
+baileys_auth_info
+.wwebjs_auth

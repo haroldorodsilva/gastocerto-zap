@@ -523,18 +523,30 @@ export class GastoCertoApiService {
         ),
       );
 
-      if (response.data.success && response.data.transaction) {
-        this.logger.log(`✅ Transação criada com sucesso: ID ${response.data.transaction.id}`);
+      if (response.data.success) {
+        this.logger.log(`✅ Transação criada com sucesso`);
+        return {
+          success: true,
+        };
       } else if (response.data.error) {
         this.logger.error(
           `❌ Erro ao criar transação: ${response.data.error.code} - ${response.data.error.message}`,
         );
-        this.logger.log(`❌ Data: ${JSON.stringify(data)}`);
+        return {
+          success: false,
+          error: response.data.error,
+        };
       }
 
-      return response.data;
+      return {
+        success: false,
+        error: {
+          code: 'INVALID_RESPONSE',
+          message: 'Resposta inválida da API',
+        },
+      };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao criar transação: ${error.message}`, error.response?.data);
+      this.logger.error(`❌ Erro ao criar transação: ${error.message}`);
 
       // Se for erro conhecido da API, retorna o erro estruturado
       if (error.response?.data?.error) {

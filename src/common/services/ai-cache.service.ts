@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import * as crypto from 'crypto';
 import { AIProviderType, TransactionData } from '../../infrastructure/ai/ai.interface';
+import { PrismaService } from '../../core/database/prisma.service';
 
 interface CacheEntry {
   provider: AIProviderType;
@@ -15,19 +16,24 @@ interface CacheEntry {
  * AI Cache Service
  * Cacheia respostas de IA para evitar reprocessamento de mensagens idênticas
  *
+ * ⚠️  Configurações (enabled, TTL) agora vêm do banco (AISettings)
  * Economia estimada: 30-50% de custo (muitos usuários mandam mensagens iguais)
  */
 @Injectable()
 export class AICacheService {
   private readonly logger = new Logger(AICacheService.name);
   private readonly redis: Redis;
-  private readonly enabled: boolean;
-  private readonly ttl: number; // Time to live em segundos
+  private enabled: boolean;
+  private ttl: number; // Time to live em segundos
+  private initialized = false;
 
-  constructor(private readonly configService: ConfigService) {
-    // Configurar cache
-    this.enabled = this.configService.get<boolean>('AI_CACHE_ENABLED', true);
-    this.ttl = this.configService.get<number>('AI_CACHE_TTL', 86400); // 24 horas padrão
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    // Valores temporários até carregar do banco
+    this.enabled = true;
+    this.ttl = 3600;
 
     // Inicializar Redis
     const redisUrl = this.configService.get<string>('REDIS_URL');
@@ -43,10 +49,40 @@ export class AICacheService {
       });
     }
 
-    if (this.enabled) {
-      this.logger.log(`✅ AICacheService habilitado (TTL: ${this.ttl}s)`);
-    } else {
-      this.logger.warn('⚠️  AICacheService desabilitado via configuração');
+    // Carregar configurações do banco
+    this.loadSettings();
+  }
+
+  /**
+   * Carrega configurações de cache do banco de dados
+   */
+  private async loadSettings(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      const settings = await this.prisma.aISettings.findFirst();
+
+      if (settings) {
+        this.enabled = settings.cacheEnabled;
+        this.ttl = settings.cacheTTL;
+        this.logger.log(`✅ AICacheService configurado via BANCO - Enabled: ${this.enabled}, TTL: ${this.ttl}s`);
+      } else {
+        this.logger.warn('⚠️  AISettings não encontrado no banco - usando valores padrão');
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao carregar configurações de cache do banco:', error);
+      this.initialized = true; // Marca como inicializado mesmo com erro
+    }
+  }
+
+  /**
+   * Garante que configurações foram carregadas
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.loadSettings();
     }
   }
 
@@ -77,6 +113,7 @@ export class AICacheService {
     provider: AIProviderType,
     operation: 'extract' | 'category' = 'extract',
   ): Promise<TransactionData | string | null> {
+    await this.ensureInitialized();
     if (!this.enabled) return null;
 
     try {
@@ -111,6 +148,7 @@ export class AICacheService {
     provider: AIProviderType,
     operation: 'image' | 'audio' = 'image',
   ): Promise<TransactionData | string | null> {
+    await this.ensureInitialized();
     if (!this.enabled) return null;
 
     try {
@@ -146,6 +184,7 @@ export class AICacheService {
     result: TransactionData | string,
     operation: 'extract' | 'category' = 'extract',
   ): Promise<void> {
+    await this.ensureInitialized();
     if (!this.enabled) return;
 
     try {
@@ -176,6 +215,7 @@ export class AICacheService {
     result: TransactionData | string,
     operation: 'image' | 'audio' = 'image',
   ): Promise<void> {
+    await this.ensureInitialized();
     if (!this.enabled) return;
 
     try {

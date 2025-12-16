@@ -23,8 +23,11 @@ export interface UserCategory {
   id: string;
   name: string;
   accountId: string;
+  type?: 'INCOME' | 'EXPENSES';
   subCategory?: {
     id: string;
     name: string;
   };
+  // Embedding vetorial (se ragAiEnabled = true)
+  embedding?: number[];
 }

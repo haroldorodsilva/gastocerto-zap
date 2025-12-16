@@ -260,7 +260,6 @@ export class AdminController {
             apiSentAt: true,
             apiError: true,
             apiRetryCount: true,
-            apiTransactionId: true,
             createdAt: true,
             expiresAt: true,
             confirmedAt: true,
@@ -750,7 +749,7 @@ export class AdminController {
 
   /**
    * GET /admin/ai-settings
-   * Busca configurações globais de IA
+   * Busca configurações globais de IA (incluindo RAG, Assistant, etc)
    */
   @Get('ai-settings')
   async getAISettings() {
@@ -762,6 +761,7 @@ export class AdminController {
       return {
         success: true,
         data: settings,
+        message: 'Configurações de IA obtidas com sucesso',
       };
     } catch (error: any) {
       this.logger.error('❌ Erro ao buscar configurações de IA:', error);
@@ -771,7 +771,44 @@ export class AdminController {
 
   /**
    * PUT /admin/ai-settings
-   * Atualiza configurações globais de IA
+   * Atualiza configurações globais de IA (incluindo RAG, Assistant, etc)
+   *
+   * Body completo:
+   * {
+   *   // Providers por operação
+   *   "textProvider": "openai",
+   *   "imageProvider": "google_gemini",
+   *   "audioProvider": "groq",
+   *   "categoryProvider": "groq",
+   *
+   *   // Fallback
+   *   "fallbackEnabled": true,
+   *   "fallbackTextChain": ["groq", "deepseek", "google_gemini", "openai"],
+   *   "fallbackImageChain": ["google_gemini", "openai"],
+   *   "fallbackAudioChain": ["openai", "groq"],
+   *   "fallbackCategoryChain": ["groq", "deepseek", "google_gemini", "openai"],
+   *
+   *   // Cache
+   *   "cacheEnabled": false,
+   *   "cacheTTL": 3600,
+   *
+   *   // Rate Limiting
+   *   "rateLimitEnabled": true,
+   *
+   *   // RAG (Retrieval-Augmented Generation)
+   *   "ragEnabled": true,
+   *   "ragAiEnabled": false,
+   *   "ragAiProvider": "groq",
+   *   "ragProvider": "bm25",
+   *   "ragThreshold": 0.75,
+   *   "ragAutoApply": 0.88,
+   *   "ragCacheEnabled": true,
+   *
+   *   // Assistente Conversacional
+   *   "assistantEnabled": true,
+   *   "assistantPersonality": "friendly",
+   *   "assistantMaxHistoryMsgs": 5
+   * }
    */
   @Put('ai-settings')
   async updateAISettings(@Body() body: any) {

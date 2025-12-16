@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
 import {
-  TRANSACTION_SYSTEM_PROMPT,
+  getTransactionSystemPrompt,
   TRANSACTION_USER_PROMPT_TEMPLATE,
 } from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
 import {
@@ -18,44 +18,78 @@ import {
 @Injectable()
 export class OpenAIProvider implements IAIProvider {
   private readonly logger = new Logger(OpenAIProvider.name);
-  private readonly client: OpenAI;
-  private readonly model: string;
-  private readonly visionModel: string;
-  private readonly whisperModel: string;
+  private client: OpenAI;
+  private model: string;
+  private visionModel: string;
+  private whisperModel: string;
+  private apiKey: string;
+  private initialized = false;
 
   constructor(private configService: ConfigService) {
-    const apiKey = this.configService.get<string>('ai.openai.apiKey');
+    // Inicialização assíncrona será feita no primeiro uso
+    this.client = new OpenAI({ apiKey: 'sk-dummy-key-not-configured' });
+  }
 
-    if (!apiKey) {
-      this.logger.warn('⚠️  OpenAI API Key não configurada - Provider desabilitado');
-      // Inicializar com dummy key para evitar erro
-      this.client = new OpenAI({ apiKey: 'sk-dummy-key-not-configured' });
-    } else {
-      this.client = new OpenAI({ apiKey });
-      this.logger.log(`✅ OpenAI Provider inicializado - Modelo: ${this.model}`);
+  /**
+   * Inicializa provider com configurações do banco ou ENV
+   */
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      // Tentar buscar do banco primeiro
+      const { PrismaService } = await import('../../../core/database/prisma.service');
+      const prisma = new PrismaService();
+      
+      const providerConfig = await prisma.aIProviderConfig.findUnique({
+        where: { provider: 'openai' },
+      });
+
+      if (providerConfig?.apiKey && providerConfig.enabled) {
+        // Usar configuração do banco
+        this.apiKey = providerConfig.apiKey;
+        this.model = providerConfig.textModel || 'gpt-4o-mini';
+        this.visionModel = providerConfig.visionModel || 'gpt-4o';
+        this.whisperModel = providerConfig.audioModel || 'whisper-1';
+        this.logger.log(`✅ OpenAI Provider inicializado via BANCO - Modelo: ${this.model}`);
+      } else {
+        // Fallback para ENV (apenas dev)
+        this.apiKey = this.configService.get<string>('ai.openai.apiKey', '');
+        this.model = this.configService.get<string>('ai.openai.model', 'gpt-4o-mini');
+        this.visionModel = this.configService.get<string>('ai.openai.visionModel', 'gpt-4o');
+        this.whisperModel = this.configService.get<string>('ai.openai.whisperModel', 'whisper-1');
+        
+        if (this.apiKey) {
+          this.logger.warn('⚠️  OpenAI usando ENV (configure no banco para produção)');
+        } else {
+          this.logger.warn('⚠️  OpenAI API Key não configurada - Provider desabilitado');
+        }
+      }
+
+      if (this.apiKey) {
+        this.client = new OpenAI({ apiKey: this.apiKey });
+      }
+
+      this.initialized = true;
+    } catch (error) {
+      this.logger.error('Erro ao inicializar OpenAI:', error.message);
+      this.initialized = true; // Marcar como iniciado mesmo com erro
     }
-
-    this.model = this.configService.get<string>('ai.openai.model', 'gpt-4-turbo-preview');
-    this.visionModel = this.configService.get<string>(
-      'ai.openai.visionModel',
-      'gpt-4-vision-preview',
-    );
-    this.whisperModel = this.configService.get<string>('ai.openai.whisperModel', 'whisper-1');
   }
 
   /**
    * Verifica se o provider está disponível
    */
-  private isAvailable(): boolean {
-    const apiKey = this.configService.get<string>('ai.openai.apiKey');
-    return !!apiKey;
+  private async isAvailable(): Promise<boolean> {
+    await this.initialize();
+    return !!this.apiKey;
   }
 
   /**
    * Extrai dados de transação de texto
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('OpenAI Provider não está disponível (API Key não configurada)');
     }
 
@@ -68,7 +102,7 @@ export class OpenAIProvider implements IAIProvider {
       const response = await this.client.chat.completions.create({
         model: this.model,
         messages: [
-          { role: 'system', content: TRANSACTION_SYSTEM_PROMPT },
+          { role: 'system', content: getTransactionSystemPrompt() },
           { role: 'user', content: userPrompt },
         ],
         response_format: { type: 'json_object' },
@@ -94,7 +128,7 @@ export class OpenAIProvider implements IAIProvider {
    * Analisa imagem (NFe, comprovante)
    */
   async analyzeImage(imageBuffer: Buffer, mimeType: string): Promise<TransactionData> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('OpenAI Provider não está disponível (API Key não configurada)');
     }
 
@@ -146,7 +180,7 @@ export class OpenAIProvider implements IAIProvider {
    * Transcreve áudio para texto
    */
   async transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error('OpenAI Provider não está disponível (API Key não configurada)');
     }
 
@@ -201,6 +235,39 @@ export class OpenAIProvider implements IAIProvider {
     } catch (error) {
       this.logger.error('Erro ao sugerir categoria:', error);
       return 'Outros';
+    }
+  }
+
+  /**
+   * Gera embedding vetorial de um texto
+   * Usa modelo text-embedding-3-small (mais barato e eficiente)
+   */
+  async generateEmbedding(text: string): Promise<number[]> {
+    if (!(await this.isAvailable())) {
+      throw new Error('OpenAI Provider não está disponível (API Key não configurada)');
+    }
+
+    try {
+      const startTime = Date.now();
+      this.logger.debug(`Gerando embedding para: "${text}"`);
+
+      const response = await this.client.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: text,
+        encoding_format: 'float',
+      });
+
+      const embedding = response.data[0].embedding;
+      const processingTime = Date.now() - startTime;
+
+      this.logger.debug(
+        `✅ Embedding gerado em ${processingTime}ms - Dimensões: ${embedding.length}`,
+      );
+
+      return embedding;
+    } catch (error) {
+      this.logger.error('Erro ao gerar embedding:', error);
+      throw error;
     }
   }
 }

@@ -10,7 +10,15 @@ export class CreateTransactionConfirmationDto {
 
   @IsString()
   @IsOptional()
+  platform?: string; // Plataforma: whatsapp | telegram
+
+  @IsString()
+  @IsOptional()
   userId?: string; // ID do UserCache - relação com usuário
+
+  @IsString()
+  @IsOptional()
+  accountId?: string; // ID da conta ativa no momento da transação
 
   @IsString()
   messageId: string;
@@ -23,6 +31,18 @@ export class CreateTransactionConfirmationDto {
 
   @IsString()
   category: string;
+
+  @IsString()
+  @IsOptional()
+  categoryId?: string; // ID da categoria resolvida
+
+  @IsString()
+  @IsOptional()
+  subCategoryId?: string; // ID da subcategoria resolvida
+
+  @IsString()
+  @IsOptional()
+  subCategoryName?: string; // Nome da subcategoria (para exibir)
 
   @IsString()
   @IsOptional()
@@ -92,8 +112,7 @@ export class CreateGastoCertoTransactionDto {
   userId: string;
 
   @IsUUID()
-  @IsOptional()
-  accountId?: string; // ID da conta (usa default se não informado)
+  accountId: string; // ID da conta (agora obrigatório)
 
   @IsEnum(TransactionType)
   type: TransactionType;
@@ -126,6 +145,10 @@ export class CreateGastoCertoTransactionDto {
   @IsBoolean()
   @IsOptional()
   isCreditCard?: boolean; // false = banco, true = cartão de crédito
+
+  @IsString()
+  @IsOptional()
+  observation?: string; // Observações adicionais
 }
 
 /**
@@ -136,25 +159,13 @@ export class GastoCertoTransactionResponseDto {
   success: boolean;
 
   @IsString()
-  message: string;
+  @IsOptional()
+  message?: string;
 
   @IsOptional()
   transaction?: {
     id: string;
-    userId: string;
-    type: TransactionType;
-    amount: number;
-    description?: string;
-    date: string;
-    categoryId: string;
-    categoryName: string;
-    subCategoryId?: string;
-    subCategoryName?: string;
-    accountId: string;
-    bankId?: string;
-    creditCardId?: string;
-    source: string;
-    createdAt: string;
+    [key: string]: any;
   };
 
   @IsOptional()

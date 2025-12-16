@@ -9,7 +9,7 @@ import { AiModule } from '../../infrastructure/ai/ai.module';
 
 @Module({
   imports: [HttpModule, CommonModule, RAGModule, AiModule],
-  providers: [GastoCertoApiService, UserCacheService, PrismaService],
+  providers: [GastoCertoApiService, UserCacheService],
   exports: [GastoCertoApiService, UserCacheService],
 })
 export class UsersModule {}

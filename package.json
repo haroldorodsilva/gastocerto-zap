@@ -46,7 +46,7 @@
     "@nlpjs/lang-pt": "5.0.0-alpha.5",
     "@prisma/client": "^6.18.0",
     "@types/node-telegram-bot-api": "^0.64.13",
-    "@whiskeysockets/baileys": "7.0.0-rc.6",
+    "@whiskeysockets/baileys": "^7.0.0-rc.6",
     "axios": "^1.7.9",
     "bull": "^4.16.5",
     "cache-manager": "^7.2.7",

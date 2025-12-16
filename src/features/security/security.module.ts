@@ -6,7 +6,7 @@ import { PrismaService } from '@core/database/prisma.service';
 @Module({
   imports: [],
   controllers: [SecurityController],
-  providers: [SecurityService, PrismaService],
+  providers: [SecurityService],
   exports: [SecurityService],
 })
 export class SecurityModule {}

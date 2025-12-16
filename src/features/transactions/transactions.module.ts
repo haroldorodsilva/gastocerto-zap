@@ -13,6 +13,7 @@ import { TransactionRegistrationService } from './contexts/registration/registra
 import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
+import { TransactionsController } from './transactions.controller';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
 import { AiModule } from '../../infrastructure/ai/ai.module';
 import { RAGModule } from '../../infrastructure/ai/rag/rag.module';
@@ -20,6 +21,7 @@ import { UsersModule } from '@features/users/users.module';
 import { IntentModule } from '@features/intent/intent.module';
 import { AccountsModule } from '@features/accounts/accounts.module';
 import { MessagesModule } from '../../infrastructure/whatsapp/messages/messages.module';
+import { SecurityModule } from '@features/security/security.module';
 import { PrismaService } from '@core/database/prisma.service';
 
 @Module({
@@ -30,6 +32,7 @@ import { PrismaService } from '@core/database/prisma.service';
     UsersModule,
     IntentModule,
     AccountsModule,
+    SecurityModule,
     forwardRef(() => MessagesModule),
     BullModule.registerQueue(
       {
@@ -70,6 +73,7 @@ import { PrismaService } from '@core/database/prisma.service';
       },
     ),
   ],
+  controllers: [TransactionsController],
   providers: [
     TransactionsService,
     TransactionConfirmationService,

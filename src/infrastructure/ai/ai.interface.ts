@@ -23,6 +23,13 @@ export interface IAIProvider {
    * Sugere categoria baseada na descrição
    */
   suggestCategory(description: string, userCategories: string[]): Promise<string>;
+
+  /**
+   * Gera embedding vetorial de um texto
+   * Usado para busca semântica (RAG com embeddings)
+   * @returns Array de números representando o vetor do texto
+   */
+  generateEmbedding(text: string): Promise<number[]>;
 }
 
 /**
@@ -64,12 +71,24 @@ export enum TransactionType {
 }
 
 /**
+ * Categoria com subcategorias (para contexto de IA)
+ */
+export interface CategoryWithSubs {
+  id: string;
+  name: string;
+  subCategories?: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
+/**
  * Contexto do usuário para melhorar extração
  */
 export interface UserContext {
   name: string;
   email: string;
-  categories: string[];
+  categories: CategoryWithSubs[]; // Mudado de string[] para estrutura completa
   timezone?: string;
   recentTransactions?: RecentTransaction[];
 }

@@ -90,7 +90,6 @@ export class ApiRetryJob {
           data: {
             apiSent: true,
             apiSentAt: new Date(),
-            apiTransactionId: result.transactionId,
             apiError: null,
             apiRetryCount: retryCount,
           },

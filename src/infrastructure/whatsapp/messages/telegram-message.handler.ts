@@ -189,7 +189,12 @@ export class TelegramMessageHandler {
     switch (message.type) {
       case MessageType.TEXT:
         if (message.text) {
-          await this.transactionsService.processTextMessage(userId, message.text, message.id);
+          await this.transactionsService.processTextMessage(
+            userId,
+            message.text,
+            message.id,
+            'telegram',
+          );
         }
         break;
 
@@ -200,6 +205,7 @@ export class TelegramMessageHandler {
             message.mediaBuffer,
             message.mimeType || 'image/jpeg',
             message.id,
+            'telegram',
           );
         }
         break;
@@ -211,6 +217,7 @@ export class TelegramMessageHandler {
             message.mediaBuffer,
             message.mimeType || 'audio/ogg',
             message.id,
+            'telegram',
           );
         }
         break;

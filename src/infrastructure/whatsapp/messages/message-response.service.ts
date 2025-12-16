@@ -208,7 +208,7 @@ export class MessageResponseService {
   private async sendMessage(sessionId: string, platformId: string, message: string): Promise<void> {
     try {
       // Para WhatsApp, usar chatId com formato correto
-      const chatId = platformId.includes('@') ? platformId : `${platformId}@s.whatsapp.net`;
+      const chatId = platformId.includes('@') ? platformId : `${platformId}`;
 
       await this.multiPlatformService.sendTextMessage(sessionId, chatId, message);
     } catch (error) {

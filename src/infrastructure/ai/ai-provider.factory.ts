@@ -80,8 +80,9 @@ export class AIProviderFactory {
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
     // Buscar provider configurado dinamicamente
+    // Usar categoryProvider pois é uma operação de categorização
     const providerType = this.toProviderType(
-      await this.aiConfigService.getProviderForOperation('text'),
+      await this.aiConfigService.getProviderForOperation('category'),
     );
 
     // 1. Verificar cache primeiro
@@ -343,16 +344,28 @@ export class AIProviderFactory {
 
   /**
    * Obtém provider específico
+   * Suporta string (ex: "openai") ou AIProviderType enum
    */
-  getProvider(type: AIProviderType): IAIProvider {
-    const provider = this.providers.get(type);
+  getProvider(type: AIProviderType | string): IAIProvider {
+    // Converter string para AIProviderType se necessário
+    let providerType: AIProviderType;
+    if (typeof type === 'string') {
+      providerType = AIProviderType[type.toUpperCase().replace('-', '_') as keyof typeof AIProviderType];
+      if (!providerType) {
+        this.logger.warn(`Provider tipo "${type}" não reconhecido, usando OPENAI como fallback`);
+        providerType = AIProviderType.OPENAI;
+      }
+    } else {
+      providerType = type;
+    }
+
+    const provider = this.providers.get(providerType);
     if (!provider) {
-      throw new Error(`Provider ${type} não encontrado`);
+      throw new Error(`Provider ${providerType} não encontrado`);
     }
     return provider;
   }
 
-  /**
   /**
    * Fallback para extração de texto usando cadeia configurada
    */

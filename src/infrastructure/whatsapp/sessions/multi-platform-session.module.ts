@@ -15,7 +15,7 @@ import { PrismaService } from '@core/database/prisma.service';
 @Global()
 @Module({
   imports: [ConfigModule, EventEmitterModule],
-  providers: [PrismaService, MultiPlatformSessionService],
+  providers: [MultiPlatformSessionService],
   exports: [MultiPlatformSessionService],
 })
 export class MultiPlatformSessionModule {}

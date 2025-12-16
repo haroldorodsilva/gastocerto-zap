@@ -9,7 +9,7 @@ import { PrismaService } from '@core/database/prisma.service';
  * para matching semântico de categorias
  */
 @Module({
-  providers: [RAGService, PrismaService],
+  providers: [RAGService],
   exports: [RAGService],
 })
 export class RAGModule {}

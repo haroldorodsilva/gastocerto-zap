@@ -1,11 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import makeWASocket, {
-  DisconnectReason,
-  WASocket,
-  Browsers,
-  fetchLatestBaileysVersion,
-} from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import {
   IWhatsAppProvider,
@@ -37,21 +32,15 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
       this.callbacks = callbacks;
       this.connectionStatus = ConnectionStatus.CONNECTING;
 
-      const { version } = await fetchLatestBaileysVersion();
-      const browserName = `GastoCerto-${config.sessionId}`;
-
       this.socket = makeWASocket({
         auth: (config as any).authState,
         printQRInTerminal: config.printQRInTerminal || false,
-        browser: Browsers.ubuntu(browserName),
-        version,
+        browser: ['GastoCerto', 'Chrome', '10.0'],
         logger: this.createLogger(),
-        syncFullHistory: false,
-        markOnlineOnConnect: false,
-        defaultQueryTimeoutMs: 60000,
-        getMessage: async () => {
+        getMessage: async (key) => {
           return undefined;
         },
+        defaultQueryTimeoutMs: 60000,
       });
 
       // Handle connection updates
@@ -74,6 +63,25 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
           this.connectionStatus = ConnectionStatus.DISCONNECTED;
 
           const reason = this.extractDisconnectReason(lastDisconnect);
+
+          // Log detailed error information (especially for error 515)
+          if (lastDisconnect?.error) {
+            const error = lastDisconnect.error;
+            if (error instanceof Boom) {
+              const statusCode = error.output?.statusCode;
+
+              // Log error 515 (stream:error) in detail like gasto-zap-api
+              if (statusCode === 515 || error.data?.node?.attrs?.code === '515') {
+                this.logger.error(
+                  `Stream error 515 detected: ${JSON.stringify(error.data?.node || error.output)}`,
+                );
+              } else if (statusCode) {
+                this.logger.debug(`Disconnect reason: ${statusCode} - ${reason}`);
+              }
+            } else {
+              this.logger.error(`Disconnect error: ${JSON.stringify(lastDisconnect.error)}`);
+            }
+          }
 
           if (this.callbacks.onDisconnected) {
             this.callbacks.onDisconnected(reason);
@@ -393,6 +401,11 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
     if (error instanceof Boom) {
       const statusCode = error.output?.statusCode;
 
+      // Check for stream:error with code 515 in data.node.attrs
+      if (error.data?.node?.tag === 'stream:error' && error.data?.node?.attrs?.code === '515') {
+        return 'stream:error:515';
+      }
+
       switch (statusCode) {
         case DisconnectReason.badSession:
           return 'bad_session';
@@ -408,6 +421,8 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
           return 'restart_required';
         case DisconnectReason.timedOut:
           return 'timed_out';
+        case 515:
+          return 'stream:error:515';
         default:
           return `status_${statusCode}`;
       }

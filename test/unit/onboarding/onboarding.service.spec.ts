@@ -35,11 +35,8 @@ describe('OnboardingService', () => {
   };
 
   const mockPrisma = {
-    auditLog: {
-      create: jest.fn(),
-    },
     onboardingSession: {
-      updateMany: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   };
 
@@ -100,8 +97,8 @@ describe('OnboardingService', () => {
           phoneNumber: realPhoneNumber,
         },
       } as any);
-      userCache.createUserCacheWithPlatform.mockResolvedValue();
-      onboardingState.completeOnboarding.mockResolvedValue();
+      userCache.createUserCacheWithPlatform.mockResolvedValue(undefined);
+      onboardingState.completeOnboarding.mockResolvedValue(undefined);
 
       const result = await service.processOnboardingMessage(platformId, validCode);
 
@@ -137,8 +134,8 @@ describe('OnboardingService', () => {
         success: true,
         user: mockUser,
       } as any);
-      userCache.createUserCacheWithPlatform.mockResolvedValue();
-      onboardingState.completeOnboarding.mockResolvedValue();
+      userCache.createUserCacheWithPlatform.mockResolvedValue(undefined);
+      onboardingState.completeOnboarding.mockResolvedValue(undefined);
 
       await service.processOnboardingMessage(platformId, validCode);
 
@@ -168,8 +165,8 @@ describe('OnboardingService', () => {
         success: true,
         user: { id: 'user-123' },
       } as any);
-      userCache.createUserCacheWithPlatform.mockResolvedValue();
-      onboardingState.completeOnboarding.mockResolvedValue();
+      userCache.createUserCacheWithPlatform.mockResolvedValue(undefined);
+      onboardingState.completeOnboarding.mockResolvedValue(undefined);
 
       await service.processOnboardingMessage(platformId, validCode);
 
@@ -226,7 +223,7 @@ describe('OnboardingService', () => {
         success: false,
         message: 'Código inválido',
       } as any);
-      onboardingState.updateSession.mockResolvedValue();
+      onboardingState.updateSession.mockResolvedValue(undefined);
 
       const result = await service.processOnboardingMessage(platformId, '999999');
 
@@ -299,7 +296,7 @@ describe('OnboardingService', () => {
       expect(isOnboarding).toBe(true);
 
       // 2. Simular conclusão do onboarding
-      onboardingState.completeOnboarding.mockResolvedValue();
+      onboardingState.completeOnboarding.mockResolvedValue(undefined);
       await onboardingState.completeOnboarding(platformId);
 
       // 3. Após conclusão - não deve retornar sessão ativa
@@ -339,9 +336,8 @@ describe('OnboardingService', () => {
 
       onboardingState.processMessage.mockResolvedValue(mockResponse as any);
       gastoCertoApi.createUser.mockResolvedValue(mockUser as any);
-      userCache.createUserCacheWithPlatform.mockResolvedValue();
-      onboardingState.completeOnboarding.mockResolvedValue();
-      prisma.auditLog.create.mockResolvedValue({} as any);
+      userCache.createUserCacheWithPlatform.mockResolvedValue(undefined);
+      onboardingState.completeOnboarding.mockResolvedValue(undefined);
 
       await service.processOnboardingMessage(platformId, 'sim');
 
@@ -365,8 +361,6 @@ describe('OnboardingService', () => {
     it('deve usar platformId para cancelar, não phoneNumber', async () => {
       const platformId = '707624962';
 
-      prisma.onboardingSession.updateMany.mockResolvedValue({ count: 1 });
-
       await service.cancelOnboarding(platformId);
 
       expect(prisma.onboardingSession.updateMany).toHaveBeenCalledWith({
@@ -378,11 +372,6 @@ describe('OnboardingService', () => {
           completed: true,
         },
       });
-
-      // Verificar que usou platformId, não phoneNumber
-      const updateCall = prisma.onboardingSession.updateMany.mock.calls[0][0];
-      expect(updateCall.where).toHaveProperty('platformId');
-      expect(updateCall.where).not.toHaveProperty('phoneNumber');
     });
   });
 });

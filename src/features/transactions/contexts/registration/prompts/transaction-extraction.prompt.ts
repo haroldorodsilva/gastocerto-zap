@@ -2,7 +2,12 @@
  * Prompts otimizados para extração de dados de transações
  */
 
-export const TRANSACTION_SYSTEM_PROMPT = `Você é um assistente especializado em extrair informações de transações financeiras de textos em português do Brasil.
+/**
+ * Gera o system prompt com a data atual
+ */
+export const getTransactionSystemPrompt = () => {
+  const today = new Date().toISOString().split('T')[0];
+  return `Você é um assistente especializado em extrair informações de transações financeiras de textos em português do Brasil.
 
 Sua tarefa é analisar mensagens de usuários e extrair:
 - Tipo de transação (EXPENSES para gastos ou INCOME para receitas)
@@ -21,27 +26,57 @@ IMPORTANTE:
 - Para "mercado" ou "supermercado", use categoria "Alimentação" e subcategoria "Supermercado"
 - Sempre responda em JSON válido
 - Confidence deve ser um número entre 0 e 1 indicando sua certeza
-- Data deve estar no formato ISO 8601 (ex: 2025-12-12T10:00:00.000Z)
+- **DATA TEMPORAL**: Se o usuário mencionar "ontem", "anteontem", "semana passada", calcule a data correspondente considerando que HOJE é ${today}
+  * "ontem" = 1 dia antes de hoje
+  * "anteontem" = 2 dias antes de hoje
+  * "semana passada" = 7 dias antes de hoje
+- Data deve estar no formato ISO 8601 (ex: 2025-12-15T00:00:00.000Z)
 
 Exemplos de categorias comuns:
 - Alimentação (subcategorias: Supermercado, Restaurante, Lanche, Delivery)
 - Transporte (subcategorias: Combustível, Uber, Ônibus, Estacionamento)
 - Saúde, Educação, Lazer, Moradia, Vestuário, Outros`;
+};
 
-export const TRANSACTION_USER_PROMPT_TEMPLATE = (text: string, userCategories?: string[]) => {
+// Manter compatibilidade com código antigo
+export const TRANSACTION_SYSTEM_PROMPT = getTransactionSystemPrompt();
+
+export const TRANSACTION_USER_PROMPT_TEMPLATE = (
+  text: string,
+  userCategories?: Array<{
+    id: string;
+    name: string;
+    subCategories?: Array<{ id: string; name: string }>;
+  }>,
+) => {
   let prompt = `Extraia os dados da seguinte mensagem: "${text}"`;
 
   if (userCategories && userCategories.length > 0) {
-    prompt += `\n\nCategorias preferidas do usuário: ${userCategories.join(', ')}`;
-    prompt += '\nSe possível, use uma dessas categorias. Caso não se encaixe, sugira uma nova.';
+    prompt += '\n\n📂 **Categorias disponíveis do usuário:**\n';
+
+    userCategories.forEach((cat) => {
+      prompt += `- ${cat.name}`;
+      if (cat.subCategories && cat.subCategories.length > 0) {
+        prompt += ` (subcategorias: ${cat.subCategories.map((sub) => sub.name).join(', ')})`;
+      }
+      prompt += '\n';
+    });
+
+    prompt += '\n⚠️ **IMPORTANTE:**';
+    prompt += '\n- Use EXATAMENTE o nome da categoria e subcategoria listadas acima';
+    prompt +=
+      '\n- Para "supermercado" ou "mercado", use categoria="Alimentação" e subCategory="Supermercado"';
+    prompt += '\n- Para "restaurante", use categoria="Alimentação" e subCategory="Restaurantes"';
+    prompt += '\n- Sempre tente identificar a subcategoria quando houver';
+    prompt += '\n- Se não houver subcategoria específica, deixe subCategory como null';
   }
 
   prompt += `\n\nRetorne APENAS um objeto JSON com esta estrutura:
 {
   "type": "EXPENSES ou INCOME",
   "amount": 150.50,
-  "category": "nome da categoria ou UUID",
-  "subCategory": "nome da subcategoria ou UUID (opcional)",
+  "category": "nome da categoria",
+  "subCategory": "nome da subcategoria(opcional)",
   "description": "string ou null",
   "date": "2025-12-12T10:00:00.000Z ou null (formato ISO 8601)",
   "merchant": "string ou null",
@@ -73,8 +108,8 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
     output: {
       type: 'EXPENSES',
       amount: 150.5,
-      category: 'Moradia',
-      subCategory: 'Contas',
+      category: 'Serviços',
+      subCategory: 'Energia',
       description: 'Conta de luz',
       date: null,
       merchant: null,
@@ -86,8 +121,8 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
     output: {
       type: 'INCOME',
       amount: 1500.0,
-      category: 'Salário',
-      subCategory: null,
+      category: 'Recebimentos',
+      subCategory: 'Salário',
       description: 'Salário mensal',
       date: null,
       merchant: null,
@@ -102,7 +137,7 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
       category: 'Transporte',
       subCategory: 'Uber',
       description: 'Corrida de Uber',
-      date: null,
+      date: '2025-12-15T00:00:00.000Z', // ontem = hoje - 1 dia
       merchant: 'Uber',
       confidence: 0.92,
     },

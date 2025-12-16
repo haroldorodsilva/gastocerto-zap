@@ -89,12 +89,17 @@ export class TransactionConfirmationService {
 
       const dataToSave = {
         phoneNumber: dto.phoneNumber,
+        platform: dto.platform || 'whatsapp', // Plataforma de origem
         userId: dto.userId || undefined, // Adicionar userId se fornecido
+        accountId: dto.accountId || undefined, // Adicionar accountId para multi-contas
         messageId: dto.messageId,
         type: dto.type,
         amount: dto.amount,
         category: dto.category,
-        description: dto.description,
+        categoryId: dto.categoryId || undefined, // ID da categoria resolvida
+        subCategoryId: dto.subCategoryId || undefined, // ID da subcategoria resolvida
+        subCategoryName: dto.subCategoryName || undefined, // Nome da subcategoria
+        description: dto.description || undefined, // Apenas se IA extraiu, não a mensagem original
         date: transactionDate,
         extractedData: dto.extractedData || {},
         status: ConfirmationStatus.PENDING,
