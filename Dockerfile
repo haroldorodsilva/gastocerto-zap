@@ -71,5 +71,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Use tini as init system
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# Start application (migrations run before start)
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+# Start application (resolve failed migrations, then deploy, then start)
+CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20251216163324_add_ai_thresholds || true && npx prisma migrate deploy && node dist/main.js"]
