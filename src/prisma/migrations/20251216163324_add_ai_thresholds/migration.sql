@@ -6,36 +6,36 @@ ALTER TABLE "ai_settings" ADD COLUMN "min_confidence_threshold" DOUBLE PRECISION
 -- Update existing AIProviderConfig with rate limits if needed
 UPDATE "ai_provider_configs"
 SET 
-  "rpm_limit" = CASE 
+  "rpmLimit" = CASE 
     WHEN "provider" = 'openai' THEN 500
     WHEN "provider" = 'google_gemini' THEN 1000
     WHEN "provider" = 'groq' THEN 30
     WHEN "provider" = 'deepseek' THEN 60
     ELSE 0
   END,
-  "tpm_limit" = CASE 
+  "tpmLimit" = CASE 
     WHEN "provider" = 'openai' THEN 150000
     WHEN "provider" = 'google_gemini' THEN 1000000
     WHEN "provider" = 'groq' THEN 6000
     WHEN "provider" = 'deepseek' THEN 1000000
     ELSE 0
   END
-WHERE "rpm_limit" IS NULL OR "rpm_limit" = 0;
+WHERE "rpmLimit" IS NULL OR "rpmLimit" = 0;
 
 -- Seed AISettings if not exists
 INSERT INTO "ai_settings" (
   "id",
-  "text_provider",
-  "image_provider",
-  "audio_provider",
-  "category_provider",
-  "fallback_enabled",
-  "cache_enabled",
-  "cache_ttl",
-  "rag_enabled",
-  "rag_ai_enabled",
-  "rag_ai_provider",
-  "rag_threshold",
+  "textProvider",
+  "imageProvider",
+  "audioProvider",
+  "categoryProvider",
+  "fallbackEnabled",
+  "cacheEnabled",
+  "cacheTTL",
+  "ragEnabled",
+  "ragAiEnabled",
+  "ragAiProvider",
+  "ragThreshold",
   "auto_register_threshold",
   "min_confidence_threshold",
   "created_at",
