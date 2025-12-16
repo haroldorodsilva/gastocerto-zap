@@ -8,10 +8,10 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ openssl
 
 # Copy package files
-COPY package*.json yarn.lock* ./
+COPY package.json yarn.lock ./
 
-# Install all dependencies (including dev dependencies for build)
-RUN npm install --frozen-lockfile
+# Install all dependencies using yarn
+RUN yarn install --frozen-lockfile
 
 # ===================================
 # STAGE 2: Builder
@@ -27,7 +27,7 @@ COPY . .
 RUN npx prisma generate
 
 # Build the application
-RUN npm run build
+RUN yarn build
 
 # ===================================
 # STAGE 3: Production
@@ -43,7 +43,8 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 
 # Copy necessary files
-COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/yarn.lock ./
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/src/prisma ./src/prisma
