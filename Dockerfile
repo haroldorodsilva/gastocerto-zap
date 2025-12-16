@@ -5,7 +5,7 @@ FROM node:20-alpine AS dependencies
 WORKDIR /app
 
 # Install dependencies needed for native modules and git for yarn
-RUN apk add --no-cache python3 make g++ openssl git
+RUN apk add --no-cache python3 make g++ openssl git openssh-client
 
 # Copy package files
 COPY package.json yarn.lock ./
