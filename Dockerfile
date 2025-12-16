@@ -10,6 +10,11 @@ RUN apk add --no-cache python3 make g++ openssl git openssh-client
 # Copy package files
 COPY package.json yarn.lock ./
 
+# Configure git to accept GitHub host key and use HTTPS instead of SSH when possible
+RUN mkdir -p -m 0600 ~/.ssh && \
+    ssh-keyscan github.com >> ~/.ssh/known_hosts && \
+    git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+
 # Install all dependencies using yarn
 RUN yarn install --frozen-lockfile
 
