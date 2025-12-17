@@ -45,6 +45,12 @@ export class IntentMatcher {
     console.log('[IntentMatcher] Inicializando NLP Manager...');
     const dock = await dockStart({
       use: ['Basic', 'LangPt'],
+      settings: {
+        nlp: {
+          autoSave: false, // Não salvar modelo em arquivo
+          autoLoad: false, // Não carregar modelo de arquivo
+        },
+      },
     });
 
     this.nlpManager = dock.get('nlp');
