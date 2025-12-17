@@ -130,14 +130,28 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 3. Verificar assinatura ativa
+      // 3. Verificar se usuário está bloqueado
+      if (user.isBlocked) {
+        this.logger.warn(`[WhatsApp] User ${phoneNumber} is blocked`);
+        // TODO: Enviar mensagem informando que o usuário está bloqueado
+        return;
+      }
+
+      // 4. Verificar se usuário está ativo
+      if (!user.isActive) {
+        this.logger.warn(`[WhatsApp] User ${phoneNumber} is inactive`);
+        // TODO: Enviar mensagem informando que a conta está desativada
+        return;
+      }
+
+      // 5. Verificar assinatura ativa
       if (!user.hasActiveSubscription) {
         this.logger.warn(`[WhatsApp] User ${phoneNumber} has no active subscription`);
         // TODO: Enviar mensagem sobre renovação
         return;
       }
 
-      // 4. Usuário válido - verificar se é confirmação de transação pendente
+      // 6. Usuário válido - verificar se é confirmação de transação pendente
       const pendingConfirmation = await this.checkPendingConfirmation(phoneNumber, message.text);
 
       if (pendingConfirmation) {
@@ -154,7 +168,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 5. Não é confirmação - processar como nova transação
+      // 7. Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
       // Enfileirar na fila de confirmação de transações

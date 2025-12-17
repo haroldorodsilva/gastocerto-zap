@@ -96,6 +96,8 @@ model UserCache {
   email                 String
   name                  String
   hasActiveSubscription Boolean @default(false)
+  isBlocked             Boolean @default(false) // 🆕 Usuário bloqueado (não pode usar o sistema)
+  isActive              Boolean @default(true)  // 🆕 Usuário ativo (conta não desativada)
 
   // 🆕 Gerenciamento de múltiplas contas
   activeAccountId String? // ID da conta ativa no momento (usado para todas operações)

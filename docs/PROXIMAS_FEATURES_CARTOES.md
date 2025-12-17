@@ -33,30 +33,10 @@
 
 ### 1. Gestão de Cartões de Crédito 💳
 
-#### 1.1. Criar Cartão
-```
-👤 "Criar cartão de crédito"
-🤖 Qual o nome do cartão? (Ex: Nubank, C6, etc)
+> **⚠️ Importante:** Cartões serão gerenciados apenas pela API web.
+> O WhatsApp permite apenas **listar**, **ver faturas** e **pagar faturas**.
 
-👤 "Nubank"
-🤖 Qual o limite? (Ex: 5000)
-
-👤 "5000"
-🤖 Dia do fechamento? (1-31)
-
-👤 "10"
-🤖 Dia do vencimento? (1-31)
-
-👤 "20"
-🤖 ✅ Cartão Nubank criado!
-   💳 Limite: R$ 5.000,00
-   📅 Fecha dia 10 | Vence dia 20
-```
-
-**Intent:** `CREATE_CREDIT_CARD`
-**Serviço:** `CreditCardManagementService`
-
-#### 1.2. Listar Cartões
+#### 1.1. Listar Cartões
 ```
 👤 "Meus cartões"
 🤖 💳 Seus Cartões de Crédito
@@ -75,8 +55,9 @@
 ```
 
 **Intent:** `LIST_CREDIT_CARDS`
+**Serviço:** `CreditCardQueryService`
 
-#### 1.3. Ver Fatura do Cartão
+#### 1.2. Ver Fatura do Cartão (Aberta ou Fechada)
 ```
 👤 "Fatura do Nubank"
 🤖 💳 Fatura - Nubank
@@ -104,8 +85,29 @@
 ```
 
 **Intent:** `VIEW_CREDIT_CARD_INVOICE`
+**Serviço:** `CreditCardQueryService`
 
-#### 1.4. Pagar Fatura do Cartão
+**Detalhamento:**
+- Pode ver faturas abertas (período atual) ou fechadas (meses anteriores)
+- Mostra todas as transações da fatura com detalhes
+- Indica status (aberta, fechada, paga, vencida)
+
+```
+👤 "Fatura fechada do Nubank"
+🤖 💳 Faturas Fechadas - Nubank
+
+   1. 📅 Novembro/2025
+      💵 R$ 850,00 | ✅ Paga
+      📅 Vencimento: 20/11/2025
+
+   2. 📅 Outubro/2025
+      💵 R$ 920,00 | ✅ Paga
+      📅 Vencimento: 20/10/2025
+
+   💡 Para ver detalhes: "fatura Nubank novembro"
+```
+
+#### 1.3. Pagar Fatura do Cartão
 ```
 👤 "Pagar fatura Nubank"
 🤖 ✅ Fatura do Nubank marcada como paga!
@@ -114,32 +116,12 @@
 ```
 
 **Intent:** `PAY_CREDIT_CARD_INVOICE`
+**Serviço:** `CreditCardPaymentService`
 
-#### 1.5. Transação Parcelada
-```
-👤 "Gastei 1200 parcelado em 12x no notebook"
-🤖 📋 Confirme a transação parcelada:
-
-   💸 Valor Total: R$ 1.200,00
-   📂 Categoria: Eletrônicos
-   🔢 Parcelas: 12x de R$ 100,00
-   💳 Cartão: [Selecionar]
-   📅 Data: 17/12/2025
-
-   ⚠️ Transação parcelada sempre requer confirmação!
-
-   ✅ Está correto? Digite:
-   • "sim" para confirmar
-   • "não" para cancelar
-
-👤 "sim"
-🤖 ✅ Transação parcelada criada!
-   💸 12x de R$ 100,00
-   📅 Primeira parcela: Dezembro/2025
-```
-
-**Intent:** `REGISTER_INSTALLMENT_TRANSACTION`
-**Regra:** Sempre requer confirmação (não auto-registra)
+**Detalhamento:**
+- Marca fatura como paga na API
+- Pode usar referências numéricas se houver lista de faturas
+- Integra com sistema de lista de contexto
 
 ---
 
@@ -149,125 +131,185 @@
 export enum MessageIntent {
   // ... intents atuais ...
 
-  // Cartões de Crédito
-  CREATE_CREDIT_CARD = 'CREATE_CREDIT_CARD',
+  // Cartões de Crédito (apenas consulta e pagamento)
   LIST_CREDIT_CARDS = 'LIST_CREDIT_CARDS',
   VIEW_CREDIT_CARD_INVOICE = 'VIEW_CREDIT_CARD_INVOICE',
   PAY_CREDIT_CARD_INVOICE = 'PAY_CREDIT_CARD_INVOICE',
-  EDIT_CREDIT_CARD = 'EDIT_CREDIT_CARD',
-  DELETE_CREDIT_CARD = 'DELETE_CREDIT_CARD',
-
-  // Transações Parceladas
-  REGISTER_INSTALLMENT_TRANSACTION = 'REGISTER_INSTALLMENT_TRANSACTION',
-  LIST_INSTALLMENTS = 'LIST_INSTALLMENTS',
-
-  // Análises Avançadas
-  MONTHLY_REPORT = 'MONTHLY_REPORT', // Relatório mensal detalhado
-  CATEGORY_ANALYSIS = 'CATEGORY_ANALYSIS', // Análise por categoria
-  SPENDING_TRENDS = 'SPENDING_TRENDS', // Tendências de gastos
 }
 ```
+
+**Observação:** Criação, edição e exclusão de cartões serão feitas apenas pela API web.
 
 ---
 
 ### 3. Novos Serviços a Criar
 
-#### 3.1. CreditCardManagementService
-**Localização:** `src/features/credit-cards/credit-card-management.service.ts`
+#### 3.1. CreditCardQueryService
+**Localização:** `src/features/credit-cards/credit-card-query.service.ts`
 
 **Responsabilidades:**
-- Criar/editar/deletar cartões
-- Listar cartões do usuário
+- Listar cartões do usuário (via API)
+- Buscar faturas abertas e fechadas
+- Buscar detalhes de fatura específica
 - Calcular disponível (limite - usado)
-- Buscar faturas
-- Marcar fatura como paga
+- Formatar mensagens de exibição
 
-#### 3.2. InstallmentService
-**Localização:** `src/features/transactions/contexts/installment/installment.service.ts`
+**Métodos principais:**
+```typescript
+async listCreditCards(user: User): Promise<CreditCardListResult>
+async getInvoice(user: User, cardName: string, month?: string): Promise<InvoiceResult>
+async listClosedInvoices(user: User, cardName: string): Promise<InvoiceListResult>
+```
 
-**Responsabilidades:**
-- Criar transação parcelada
-- Listar parcelas
-- Calcular próximas parcelas
-- Sempre requer confirmação
-
-#### 3.3. AnalyticsService
-**Localização:** `src/features/analytics/analytics.service.ts`
+#### 3.2. CreditCardPaymentService
+**Localização:** `src/features/credit-cards/credit-card-payment.service.ts`
 
 **Responsabilidades:**
-- Gerar relatórios mensais
-- Análise por categoria
-- Tendências de gastos
-- Comparativos (mês a mês)
-- Projeções
+- Marcar fatura como paga (via API)
+- Validar se fatura existe e está pendente
+- Registrar pagamento de fatura
+- Integração com lista de contexto para referências numéricas
+
+**Métodos principais:**
+```typescript
+async payInvoice(user: User, cardName: string, month?: string): Promise<PaymentResult>
+async payInvoiceByNumber(user: User, itemNumber: number): Promise<PaymentResult>
+```
 
 ---
 
 ### 4. Palavras-chave para Detecção
 
-#### Cartões:
-- "criar cartão"
-- "adicionar cartão"
-- "novo cartão"
+#### Listar Cartões:
 - "meus cartões"
-- "fatura do [nome]"
-- "pagar fatura [nome]"
+- "cartões"
+- "listar cartões"
+- "ver cartões"
 
-#### Parcelado:
-- "parcelado"
-- "parcelada"
-- "12x"
-- "3x de"
-- "em 6 parcelas"
+#### Ver Fatura:
+- "fatura do [nome]"
+- "fatura [nome]"
+- "fatura aberta [nome]"
+- "fatura fechada [nome]"
+- "faturas [nome]"
+
+#### Pagar Fatura:
+- "pagar fatura [nome]"
+- "pagar cartão [nome]"
+- "quitar fatura [nome]"
 
 ---
 
 ### 5. Priorização de Implementação
 
-1. **Alta Prioridade:**
-   - [ ] CreditCardManagementService (criar, listar)
-   - [ ] VIEW_CREDIT_CARD_INVOICE (ver fatura)
-   - [ ] PAY_CREDIT_CARD_INVOICE (pagar fatura)
+1. **Fase 1 - Consulta:**
+   - [ ] Adicionar intents `LIST_CREDIT_CARDS`, `VIEW_CREDIT_CARD_INVOICE`
+   - [ ] Criar `CreditCardQueryService`
+   - [ ] Implementar detecção de palavras-chave
+   - [ ] Integrar com intent analyzer
 
-2. **Média Prioridade:**
-   - [ ] REGISTER_INSTALLMENT_TRANSACTION (parcelado)
-   - [ ] InstallmentService
+2. **Fase 2 - Pagamento:**
+   - [ ] Adicionar intent `PAY_CREDIT_CARD_INVOICE`
+   - [ ] Criar `CreditCardPaymentService`
+   - [ ] Integrar com lista de contexto para referências numéricas
+   - [ ] Adicionar roteamento em `transactions.service.ts`
 
-3. **Baixa Prioridade:**
-   - [ ] Analytics avançados
-   - [ ] Relatórios automáticos
-   - [ ] Notificações de vencimento
-
----
-
-### 6. Impacto na API
-
-Verificar se a GastoCerto API já suporta:
-- ✅ Cartões de crédito
-- ✅ Faturas de cartão
-- ✅ Transações parceladas
-- ❓ Análises avançadas
+3. **Fase 3 - Endpoints API:**
+   - [ ] Verificar/implementar endpoints de cartões na API
+   - [ ] Verificar/implementar endpoints de faturas na API
+   - [ ] Verificar/implementar endpoint de pagamento de fatura na API
 
 ---
 
-## 📝 Notas
+### 6. Endpoints da API Necessários
 
-- Transações parceladas **SEMPRE** requerem confirmação
-- Cartões devem estar vinculados a uma conta
-- Faturas têm datas de fechamento e vencimento
-- Parcelas são criadas automaticamente
-- Cada parcela é uma transação separada
-- Usuário pode escolher cartão ao registrar gasto
+A integração com WhatsApp requer os seguintes endpoints na GastoCerto API:
+
+#### 6.1. Listar Cartões
+```
+GET /api/credit-cards?accountId={accountId}
+Response: [
+  {
+    id: string,
+    name: string,
+    limit: number,
+    usedAmount: number,
+    availableAmount: number,
+    closingDay: number,
+    dueDay: number
+  }
+]
+```
+
+#### 6.2. Buscar Fatura
+```
+GET /api/credit-cards/{cardId}/invoices/current
+GET /api/credit-cards/{cardId}/invoices?month=2025-12
+Response: {
+  id: string,
+  cardId: string,
+  cardName: string,
+  month: string,
+  totalAmount: number,
+  status: 'open' | 'closed' | 'paid' | 'overdue',
+  dueDate: string,
+  transactions: [
+    {
+      id: string,
+      description: string,
+      amount: number,
+      category: string,
+      date: string
+    }
+  ]
+}
+```
+
+#### 6.3. Listar Faturas Fechadas
+```
+GET /api/credit-cards/{cardId}/invoices/history
+Response: [
+  {
+    id: string,
+    month: string,
+    totalAmount: number,
+    status: string,
+    dueDate: string,
+    paidDate?: string
+  }
+]
+```
+
+#### 6.4. Pagar Fatura
+```
+POST /api/credit-cards/{cardId}/invoices/{invoiceId}/pay
+Body: {
+  paymentDate: string,
+  amount: number
+}
+Response: {
+  success: boolean,
+  message: string
+}
+```
+
+---
+
+## 📝 Notas Importantes
+
+- **Cartões são gerenciados apenas pela API web** (criar, editar, deletar)
+- WhatsApp permite apenas **consultar** e **pagar** faturas
+- Faturas têm status: aberta, fechada, paga, vencida
+- Integração com sistema de lista de contexto para referências numéricas
+- Suporte a faturas abertas (mês atual) e fechadas (histórico)
 
 ---
 
 ## 🎯 Objetivo
 
-**Permitir gestão completa de finanças via mensagens no WhatsApp**, incluindo:
-- Cartões de crédito
-- Faturas
-- Parcelamentos
-- Relatórios
-- Análises
-
-**UX Conversacional**: Tudo por linguagem natural, sem interfaces complexas.
+**Permitir consulta e pagamento de faturas de cartões via WhatsApp:**
+- ✅ Listar todos os cartões cadastrados
+- ✅ Ver fatura aberta (mês atual)
+- ✅ Ver faturas fechadas (histórico)
+- ✅ Pagar fatura por nome ou número de referência
+- ✅ UX conversacional com linguagem natural
