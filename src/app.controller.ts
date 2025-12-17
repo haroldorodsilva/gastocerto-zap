@@ -47,4 +47,13 @@ export class AppController {
 
     return checks;
   }
+
+  @Get('ping')
+  ping() {
+    return {
+      message: 'pong',
+      timestamp: new Date().toISOString(),
+      env: process.env.NODE_ENV,
+    };
+  }
 }
