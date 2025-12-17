@@ -227,10 +227,7 @@ export class TransactionPaymentService {
     try {
       this.logger.log(`💰 Marcando transação ${transactionId} como paga`);
 
-      const result = await this.gastoCertoApi.payTransaction(
-        user.gastoCertoId,
-        transactionId,
-      );
+      const result = await this.gastoCertoApi.payTransaction(user.gastoCertoId, transactionId);
 
       if (result.success) {
         return {

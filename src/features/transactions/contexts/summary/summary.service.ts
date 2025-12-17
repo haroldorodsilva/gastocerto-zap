@@ -99,17 +99,13 @@ export class TransactionSummaryService {
   ): Promise<{ success: boolean; message: string }> {
     try {
       const targetMonth = monthReference || this.getCurrentMonthReference();
-      
+
       // Extrair mês e ano do formato YYYY-MM
       const [year, month] = targetMonth.split('-').map(Number);
 
       this.logger.log(`📊 Gerando resumo mensal: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.getMonthlySummary(
-        user.activeAccountId,
-        month,
-        year,
-      );
+      const result = await this.gastoCertoApi.getMonthlySummary(user.activeAccountId, month, year);
 
       if (!result.success || !result.data) {
         return {
@@ -214,7 +210,10 @@ export class TransactionSummaryService {
 
       this.logger.log(`📊 Gerando análise por categoria: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.getCategoryBreakdown(user.activeAccountId, targetMonth);
+      const result = await this.gastoCertoApi.getCategoryBreakdown(
+        user.activeAccountId,
+        targetMonth,
+      );
 
       if (!result.success || !result.data) {
         return {

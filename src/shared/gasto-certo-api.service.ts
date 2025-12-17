@@ -616,9 +616,7 @@ export class GastoCertoApiService {
     accountId: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      this.logger.log(
-        `📋 Buscando pagamentos pendentes - accountId: ${accountId}`,
-      );
+      this.logger.log(`📋 Buscando pagamentos pendentes - accountId: ${accountId}`);
 
       // Usar listTransactions com filtro de status PENDING
       const result = await this.listTransactions(accountId, {
@@ -763,24 +761,17 @@ export class GastoCertoApiService {
       };
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar análise de categorias:`);
-      this.logger.error(
-        `   URL: ${this.baseUrl}/external/balance/category-breakdown`,
-      );
+      this.logger.error(`   URL: ${this.baseUrl}/external/balance/category-breakdown`);
       this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
       this.logger.error(`   Mensagem: ${error.message}`);
       if (error.response?.data) {
-        this.logger.error(
-          `   Resposta da API:`,
-          JSON.stringify(error.response.data),
-        );
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
       }
       if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
         this.logger.error(`   ⚠️ API está OFFLINE ou inacessível`);
       }
       if (error.code === 'ETIMEDOUT') {
-        this.logger.error(
-          `   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`,
-        );
+        this.logger.error(`   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`);
       }
 
       return {
@@ -830,18 +821,13 @@ export class GastoCertoApiService {
       this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
       this.logger.error(`   Mensagem: ${error.message}`);
       if (error.response?.data) {
-        this.logger.error(
-          `   Resposta da API:`,
-          JSON.stringify(error.response.data),
-        );
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
       }
       if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
         this.logger.error(`   ⚠️ API está OFFLINE ou inacessível`);
       }
       if (error.code === 'ETIMEDOUT') {
-        this.logger.error(
-          `   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`,
-        );
+        this.logger.error(`   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`);
       }
 
       return {
