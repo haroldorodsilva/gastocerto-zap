@@ -376,7 +376,7 @@ export class OnboardingService {
         this.logger.error(`❌ ERRO: Nenhum telefone disponível para validação!`);
         this.logger.error(`data.phoneNumber (API): ${data.phoneNumber}`);
         this.logger.error(`data.realPhoneNumber (coletado): ${data.realPhoneNumber}`);
-        
+
         return {
           success: false,
           message:
@@ -486,7 +486,7 @@ export class OnboardingService {
         // Enviar código de verificação - usar telefone disponível ou platformId
         const phoneForAuth = data.phoneNumber || phoneNumber;
         this.logger.log(`📞 Telefone para autenticação: ${phoneForAuth}`);
-        
+
         await this.gastoCertoApi.requestAuthCode({
           email: data.email,
           phoneNumber: phoneForAuth,

@@ -392,13 +392,13 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     // Check for WhatsApp error code 515 (temporary ban)
     // O erro 515 pode aparecer como 'restart_required' ou 'stream:error' com code 515
     const isError515 =
-      reason?.includes('515') || reason?.includes('stream:error') || reason === 'restart_required'; // ← Adiciona detecção do restart_required
+      reason?.includes('515') || reason?.includes('stream:error') || reason === 'restart_required';
 
     if (isError515) {
       this.logger.warn(`⚠️  WhatsApp error 515 detected for ${sessionId} - Temporary ban detected`);
 
       // IMPORTANTE: Erro 515 É TEMPORÁRIO - NÃO limpar credenciais!
-      // As credenciais são válidas, apenas aguardar 2-24h
+      // As credenciais são válidas, apenas aguardar e tentar reconectar
       this.logger.log(`🕒 Keeping credentials intact - error 515 is temporary`);
 
       await this.stopSession(sessionId);
@@ -406,19 +406,24 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         where: { sessionId },
         data: {
           isActive: false,
-          status: SessionStatus.ERROR,
+          status: SessionStatus.DISCONNECTED, // ← DISCONNECTED ao invés de ERROR
         },
       });
 
-      this.logger.log(`⏰ WhatsApp temporary ban usually lasts 2-24 hours. Try again later.`);
-      this.logger.log(`✅ Credentials preserved - just scan QR code again after ban expires.`);
+      this.logger.log(`⏰ WhatsApp temporary ban detected - Will retry after extended delay`);
+      this.logger.log(`✅ Credentials preserved - No need to scan QR again`);
 
       // Emit event
       this.eventEmitter.emit('session.error.515', {
         sessionId,
         message:
-          'WhatsApp error 515: Temporary ban detected. Credentials preserved. Please wait 2-24 hours and try to connect again.',
+          'WhatsApp error 515: Temporary ban detected. Credentials preserved. Retrying with extended delay...',
       });
+
+      // ✅ PERMITIR RETRY com delay de 5 minutos
+      if (sessionInfo) {
+        await this.scheduleReconnect(sessionId, true, 'error_515');
+      }
       return;
     }
 

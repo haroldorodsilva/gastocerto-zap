@@ -47,18 +47,18 @@ export class AccountManagementService {
    */
   async listUserAccounts(phoneNumber: string): Promise<AccountOperationResult> {
     try {
-      this.logger.log(`📋 Listando contas para ${phoneNumber}`);
+      this.logger.log(`📋 Listando perfis para ${phoneNumber}`);
 
       const accounts = await this.userCache.listAccounts(phoneNumber);
 
       if (accounts.length === 0) {
         return {
           success: false,
-          message: '❌ Você não possui contas cadastradas.',
+          message: '❌ Você não possui perfis cadastrados.',
         };
       }
 
-      let message = '🏦 *Suas Contas:*\n\n';
+      let message = '🏦 *Seus Perfis:*\n\n';
       accounts.forEach((acc, index) => {
         const indicator = acc.isActive ? '✅' : '⚪';
         const primaryBadge = acc.isPrimary ? ' 🌟' : '';
@@ -66,9 +66,9 @@ export class AccountManagementService {
         message += `${indicator} ${index + 1}. *${acc.name}* (${roleLabel})${primaryBadge}\n`;
       });
 
-      message += '\n💡 Para trocar de conta, digite: *"mudar conta"* ou *"usar [nome]"*';
+      message += '\n💡 Para trocar de perfil, digite: *"mudar perfil"* ou *"usar [nome]"*';
 
-      this.logger.log(`✅ ${accounts.length} conta(s) encontrada(s)`);
+      this.logger.log(`✅ ${accounts.length} perfil(s) encontrado(s)`);
 
       return {
         success: true,
@@ -76,10 +76,10 @@ export class AccountManagementService {
         metadata: { accountCount: accounts.length },
       };
     } catch (error) {
-      this.logger.error(`❌ Erro ao listar contas: ${error.message}`, error.stack);
+      this.logger.error(`❌ Erro ao listar perfis: ${error.message}`, error.stack);
       return {
         success: false,
-        message: '❌ Erro ao listar contas. Tente novamente.',
+        message: '❌ Erro ao listar perfis. Tente novamente.',
       };
     }
   }
@@ -89,7 +89,7 @@ export class AccountManagementService {
    */
   async showActiveAccount(phoneNumber: string): Promise<AccountOperationResult> {
     try {
-      this.logger.log(`🔍 Buscando conta ativa para ${phoneNumber}`);
+      this.logger.log(`🔍 Buscando perfil ativo para ${phoneNumber}`);
 
       const activeAccount = await this.userCache.getActiveAccount(phoneNumber);
 
@@ -97,8 +97,8 @@ export class AccountManagementService {
         return {
           success: false,
           message:
-            '❌ Você não possui uma conta ativa.\n\n' +
-            '💡 Digite *"minhas contas"* para ver suas contas disponíveis.',
+            '❌ Você não possui um perfil ativo.\n\n' +
+            '💡 Digite *"meus perfis"* para ver seus perfis disponíveis.',
         };
       }
 
@@ -108,9 +108,9 @@ export class AccountManagementService {
         `🏦 *Conta Ativa:*\n\n` +
         `✅ *${activeAccount.name}*\n` +
         `📋 Tipo: ${roleLabel}${primaryBadge}\n\n` +
-        `💡 Para trocar de conta, digite: *"mudar conta"*`;
+        `💡 Para trocar de perfil, digite: *"mudar perfil"*`;
 
-      this.logger.log(`✅ Conta ativa: ${activeAccount.name}`);
+      this.logger.log(`✅ Perfil ativo: ${activeAccount.name}`);
 
       return {
         success: true,
@@ -118,10 +118,10 @@ export class AccountManagementService {
         metadata: { activeAccount },
       };
     } catch (error) {
-      this.logger.error(`❌ Erro ao buscar conta ativa: ${error.message}`, error.stack);
+      this.logger.error(`❌ Erro ao buscar perfil ativo: ${error.message}`, error.stack);
       return {
         success: false,
-        message: '❌ Erro ao buscar conta ativa. Tente novamente.',
+        message: '❌ Erro ao buscar perfil ativo. Tente novamente.',
       };
     }
   }
@@ -134,14 +134,14 @@ export class AccountManagementService {
    */
   async switchAccount(phoneNumber: string, messageText: string): Promise<AccountOperationResult> {
     try {
-      this.logger.log(`🔄 Processando troca de conta para ${phoneNumber}`);
+      this.logger.log(`🔄 Processando troca de perfil para ${phoneNumber}`);
 
       const accounts = await this.userCache.listAccounts(phoneNumber);
 
       if (accounts.length === 0) {
         return {
           success: false,
-          message: '❌ Você não possui contas cadastradas.',
+          message: '❌ Você não possui perfis cadastrados.',
         };
       }
 
@@ -150,7 +150,7 @@ export class AccountManagementService {
         const roleLabel = this.getRoleLabel(onlyAccount.type);
         return {
           success: true,
-          message: `ℹ️ Você possui apenas uma conta: *${onlyAccount.name}* (${roleLabel})`,
+          message: `ℹ️ Você possui apenas um perfil: *${onlyAccount.name}* (${roleLabel})`,
           metadata: { singleAccount: true },
         };
       }
@@ -162,7 +162,7 @@ export class AccountManagementService {
         if (targetAccount.isActive) {
           return {
             success: true,
-            message: `ℹ️ A conta *${targetAccount.name}* já está ativa.`,
+            message: `ℹ️ O perfil *${targetAccount.name}* já está ativo.`,
             metadata: { alreadyActive: true },
           };
         }
@@ -186,8 +186,8 @@ export class AccountManagementService {
 
                 await this.ragService.indexUserCategories(user.gastoCertoId, userCategories);
                 this.logger.log(
-                  `🧠 RAG re-indexado após trocar conta: ${userCategories.length} categorias | ` +
-                    `Conta: ${targetAccount.name}`,
+                  `🧠 RAG re-indexado após trocar perfil: ${userCategories.length} categorias | ` +
+                    `Perfil: ${targetAccount.name}`,
                 );
               }
             }
@@ -197,11 +197,11 @@ export class AccountManagementService {
         }
 
         const roleLabel = this.getRoleLabel(targetAccount.type);
-        this.logger.log(`✅ Conta trocada: ${targetAccount.name} (${targetAccount.type})`);
+        this.logger.log(`✅ Perfil trocado: ${targetAccount.name} (${targetAccount.type})`);
 
         return {
           success: true,
-          message: `✅ Conta alterada com sucesso!\n\n🏦 Agora usando: *${targetAccount.name}* (${roleLabel})`,
+          message: `✅ Perfil alterado com sucesso!\n\n🏦 Agora usando: *${targetAccount.name}* (${roleLabel})`,
           metadata: { switchedTo: targetAccount },
         };
       }
@@ -230,7 +230,7 @@ export class AccountManagementService {
       if (accounts.length === 0) {
         return {
           success: false,
-          message: '❌ Você não possui contas cadastradas.',
+          message: '❌ Você não possui perfis cadastrados.',
         };
       }
 
@@ -246,7 +246,7 @@ export class AccountManagementService {
           const roleLabel = this.getRoleLabel(targetAccount.type);
           return {
             success: true,
-            message: `✅ Conta alterada para: *${targetAccount.name}* (${roleLabel})`,
+            message: `✅ Perfil alterado para: *${targetAccount.name}* (${roleLabel})`,
           };
         }
 
@@ -254,8 +254,8 @@ export class AccountManagementService {
           success: false,
           message:
             '❌ Seleção inválida.\n\n' +
-            '💡 Digite o número da conta ou o nome/tipo.\n' +
-            'Exemplo: *"1"*, *"PJ"*, *"Pessoal"*',
+            '💡 Digite o nome/tipo.\n' +
+            'Exemplo: *"PJ"*, *"Pessoal"*',
         };
       }
 
@@ -264,25 +264,25 @@ export class AccountManagementService {
       if (selectedAccount.isActive) {
         return {
           success: true,
-          message: `ℹ️ A conta *${selectedAccount.name}* já está ativa.`,
+          message: `ℹ️ O perfil *${selectedAccount.name}* já está ativo.`,
         };
       }
 
       await this.userCache.switchAccount(phoneNumber, selectedAccount.id);
 
       const roleLabel = this.getRoleLabel(selectedAccount.type);
-      this.logger.log(`✅ Conta selecionada: ${selectedAccount.name}`);
+      this.logger.log(`✅ Perfil selecionado: ${selectedAccount.name}`);
 
       return {
         success: true,
-        message: `✅ Conta alterada com sucesso!\n\n🏦 Agora usando: *${selectedAccount.name}* (${roleLabel})`,
+        message: `✅ Perfil alterado com sucesso!\n\n🏦 Agora usando: *${selectedAccount.name}* (${roleLabel})`,
         metadata: { switchedTo: selectedAccount },
       };
     } catch (error) {
-      this.logger.error(`❌ Erro ao selecionar conta: ${error.message}`, error.stack);
+      this.logger.error(`❌ Erro ao selecionar perfil: ${error.message}`, error.stack);
       return {
         success: false,
-        message: '❌ Erro ao selecionar conta. Tente novamente.',
+        message: '❌ Erro ao selecionar perfil. Tente novamente.',
       };
     }
   }
@@ -302,8 +302,8 @@ export class AccountManagementService {
         return {
           valid: false,
           message:
-            '❌ Você não possui uma conta ativa.\n\n' +
-            '💡 Digite *"minhas contas"* para configurar.',
+            '❌ Você não possui um perfil ativo.\n\n' +
+            '💡 Digite *"meus perfis"* para configurar.',
         };
       }
 
@@ -312,10 +312,10 @@ export class AccountManagementService {
         account: activeAccount,
       };
     } catch (error) {
-      this.logger.error(`Erro ao validar conta ativa: ${error.message}`);
+      this.logger.error(`Erro ao validar perfil ativo: ${error.message}`);
       return {
         valid: false,
-        message: '❌ Erro ao validar conta. Tente novamente.',
+        message: '❌ Erro ao validar perfil. Tente novamente.',
       };
     }
   }
@@ -370,7 +370,7 @@ export class AccountManagementService {
       isActive: boolean;
     }>,
   ): AccountOperationResult {
-    let message = '🏦 *Escolha uma conta:*\n\n';
+    let message = '🏦 *Escolha um perfil:*\n\n';
 
     accounts.forEach((acc, index) => {
       const indicator = acc.isActive ? '✅' : `${index + 1}.`;
@@ -380,7 +380,7 @@ export class AccountManagementService {
     });
 
     message +=
-      '\n💡 Digite o número da conta ou o nome/tipo:\n' +
+      '\n💡 Digite o número do perfil ou o nome/tipo:\n' +
       '📝 Exemplos: *"Pessoal"*, *"Empresa"*, *"Casa"*';
 
     return {
