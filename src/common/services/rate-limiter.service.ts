@@ -17,20 +17,20 @@ interface UsageStats {
 /**
  * Rate Limiter Service
  * Controla limites de requisições por provider AI
- * 
+ *
  * ⚠️  Rate limits agora vêm do banco (AIProviderConfig)
  */
 @Injectable()
 export class RateLimiterService {
   private readonly logger = new Logger(RateLimiterService.name);
-  private readonly redis: Redis;
   private readonly limits = new Map<AIProviderType, RateLimit>();
   private initialized = false;
 
   constructor(
     private readonly redisService: RedisService,
     private readonly prisma: PrismaService,
-  ) {    // Carregar limites do banco
+  ) {
+    // Carregar limites do banco
     this.loadLimits();
   }
 
@@ -100,7 +100,7 @@ export class RateLimiterService {
    */
   async checkLimit(provider: AIProviderType, estimatedTokens: number = 500): Promise<boolean> {
     await this.ensureInitialized();
-    
+
     const limit = this.limits.get(provider);
     if (!limit) {
       this.logger.warn(`Rate limit não configurado para provider: ${provider}`);
@@ -159,7 +159,10 @@ export class RateLimiterService {
     const rpmKey = `ratelimit:${provider}:rpm:${minuteKey}`;
     const tpmKey = `ratelimit:${provider}:tpm:${minuteKey}`;
 
-    const [rpm, tpm] = await Promise.all([this.redisService.getClient().get(rpmKey), this.redisService.getClient().get(tpmKey)]);
+    const [rpm, tpm] = await Promise.all([
+      this.redisService.getClient().get(rpmKey),
+      this.redisService.getClient().get(tpmKey),
+    ]);
 
     const nextMinute = (minuteKey + 1) * 60000;
     const resetAt = new Date(nextMinute);
