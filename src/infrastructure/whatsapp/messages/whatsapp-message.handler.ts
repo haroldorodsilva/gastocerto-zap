@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { MessageFilterService } from './message-filter.service';
@@ -31,6 +31,7 @@ export class WhatsAppMessageHandler {
     private readonly onboardingService: OnboardingService,
     private readonly userCacheService: UserCacheService,
     private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
     @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
     @InjectQueue('transaction-confirmation') private readonly transactionQueue: Queue,
   ) {}
@@ -133,21 +134,40 @@ export class WhatsAppMessageHandler {
       // 3. Verificar se usuário está bloqueado
       if (user.isBlocked) {
         this.logger.warn(`[WhatsApp] User ${phoneNumber} is blocked`);
-        // TODO: Enviar mensagem informando que o usuário está bloqueado
+        this.sendMessage(
+          phoneNumber,
+          '🚫 *Acesso Bloqueado*\n\n' +
+            'Sua conta foi bloqueada temporariamente.\n\n' +
+            '📞 Entre em contato com o suporte para mais informações:\n' +
+            'suporte@gastocerto.com',
+        );
         return;
       }
 
       // 4. Verificar se usuário está ativo
       if (!user.isActive) {
         this.logger.warn(`[WhatsApp] User ${phoneNumber} is inactive`);
-        // TODO: Enviar mensagem informando que a conta está desativada
+        this.sendMessage(
+          phoneNumber,
+          '⚠️ *Conta Desativada*\n\n' +
+            'Sua conta está temporariamente desativada.\n\n' +
+            '✅ Para reativar, entre em contato com o suporte:\n' +
+            'suporte@gastocerto.com',
+        );
         return;
       }
 
       // 5. Verificar assinatura ativa
       if (!user.hasActiveSubscription) {
         this.logger.warn(`[WhatsApp] User ${phoneNumber} has no active subscription`);
-        // TODO: Enviar mensagem sobre renovação
+        this.sendMessage(
+          phoneNumber,
+          '💳 *Assinatura Inativa*\n\n' +
+            'Sua assinatura expirou ou está inativa.\n\n' +
+            '🔄 Para continuar usando o GastoCerto, renove sua assinatura:\n' +
+            '👉 https://gastocerto.com/assinatura\n\n' +
+            '❓ Dúvidas? Fale conosco: suporte@gastocerto.com',
+        );
         return;
       }
 
@@ -209,6 +229,20 @@ export class WhatsAppMessageHandler {
         error,
       );
     }
+  }
+
+  /**
+   * Envia mensagem ao usuário via WhatsApp
+   */
+  private sendMessage(phoneNumber: string, message: string): void {
+    this.logger.debug(`📤 Enviando mensagem para ${phoneNumber}`);
+
+    this.eventEmitter.emit('whatsapp.reply', {
+      platformId: phoneNumber,
+      message,
+      context: 'ERROR',
+      platform: MessagingPlatform.WHATSAPP,
+    });
   }
 
   /**

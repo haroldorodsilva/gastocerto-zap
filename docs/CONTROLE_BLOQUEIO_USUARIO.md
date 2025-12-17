@@ -139,12 +139,13 @@ if (!user.hasActiveSubscription) {
 5. ✅ Atualização em `UserCacheService.createUserCacheWithPlatform()`
 6. ✅ Atualização em `UserCacheService.syncUser()`
 7. ✅ Logs de warning quando bloqueio é detectado
+8. ✅ Mensagens de feedback para usuário bloqueado
+9. ✅ Mensagens de feedback para conta desativada
+10. ✅ Mensagens de feedback para assinatura inativa
+11. ✅ Método `sendMessage()` no WhatsAppMessageHandler
 
 ### ⏳ Pendente (TODOs):
-1. ⏳ Enviar mensagem informando que usuário está bloqueado
-2. ⏳ Enviar mensagem informando que conta está desativada
-3. ⏳ Enviar mensagem sobre renovação de assinatura
-4. ⏳ Criar endpoint de admin para bloquear/desbloquear usuários
+1. ⏳ Criar endpoint de admin para bloquear/desbloquear usuários
 5. ⏳ Criar endpoint para usuário desativar sua própria conta
 6. ⏳ Criar dashboard de admin para visualizar usuários bloqueados
 7. ⏳ Integrar com sistema de assinaturas futuro
