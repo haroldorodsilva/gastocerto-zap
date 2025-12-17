@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
 import * as crypto from 'crypto';
 import { AIProviderType, TransactionData } from '../../infrastructure/ai/ai.interface';
 import { PrismaService } from '../../core/database/prisma.service';
+import { RedisService } from './redis.service';
 
 interface CacheEntry {
   provider: AIProviderType;
@@ -22,32 +21,17 @@ interface CacheEntry {
 @Injectable()
 export class AICacheService {
   private readonly logger = new Logger(AICacheService.name);
-  private readonly redis: Redis;
   private enabled: boolean;
   private ttl: number; // Time to live em segundos
   private initialized = false;
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
     private readonly prisma: PrismaService,
   ) {
     // Valores temporários até carregar do banco
     this.enabled = true;
     this.ttl = 3600;
-
-    // Inicializar Redis
-    const redisUrl = this.configService.get<string>('REDIS_URL');
-    const redisHost = this.configService.get<string>('REDIS_HOST', 'localhost');
-    const redisPort = this.configService.get<number>('REDIS_PORT', 6379);
-
-    if (redisUrl) {
-      this.redis = new Redis(redisUrl);
-    } else {
-      this.redis = new Redis({
-        host: redisHost,
-        port: redisPort,
-      });
-    }
 
     // Carregar configurações do banco
     this.loadSettings();
@@ -65,7 +49,9 @@ export class AICacheService {
       if (settings) {
         this.enabled = settings.cacheEnabled;
         this.ttl = settings.cacheTTL;
-        this.logger.log(`✅ AICacheService configurado via BANCO - Enabled: ${this.enabled}, TTL: ${this.ttl}s`);
+        this.logger.log(
+          `✅ AICacheService configurado via BANCO - Enabled: ${this.enabled}, TTL: ${this.ttl}s`,
+        );
       } else {
         this.logger.warn('⚠️  AISettings não encontrado no banco - usando valores padrão');
       }
@@ -120,14 +106,14 @@ export class AICacheService {
       const hash = this.generateHash(text, provider, operation);
       const cacheKey = `ai-cache:text:${hash}`;
 
-      const cached = await this.redis.get(cacheKey);
+      const cached = await this.redisService.getClient().get(cacheKey);
       if (!cached) return null;
 
       const entry: CacheEntry = JSON.parse(cached);
 
       // Incrementa contador de hits
       entry.hits++;
-      await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
+      await this.redisService.getClient().set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
 
       this.logger.debug(
         `💾 Cache HIT: ${provider} ${operation} (hits: ${entry.hits}, age: ${Math.floor((Date.now() - entry.timestamp) / 1000)}s)`,
@@ -155,14 +141,14 @@ export class AICacheService {
       const hash = this.generateBufferHash(buffer, provider, operation);
       const cacheKey = `ai-cache:buffer:${hash}`;
 
-      const cached = await this.redis.get(cacheKey);
+      const cached = await this.redisService.getClient().get(cacheKey);
       if (!cached) return null;
 
       const entry: CacheEntry = JSON.parse(cached);
 
       // Incrementa contador de hits
       entry.hits++;
-      await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
+      await this.redisService.getClient().set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
 
       this.logger.debug(
         `💾 Cache HIT: ${provider} ${operation} (hits: ${entry.hits}, age: ${Math.floor((Date.now() - entry.timestamp) / 1000)}s)`,
@@ -198,7 +184,7 @@ export class AICacheService {
         hits: 0,
       };
 
-      await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
+      await this.redisService.getClient().set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
 
       this.logger.debug(`💾 Cached: ${provider} ${operation}`);
     } catch (error) {
@@ -229,7 +215,7 @@ export class AICacheService {
         hits: 0,
       };
 
-      await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
+      await this.redisService.getClient().set(cacheKey, JSON.stringify(entry), 'EX', this.ttl);
 
       this.logger.debug(
         `💾 Cached: ${provider} ${operation} (${(buffer.length / 1024).toFixed(2)} KB)`,
@@ -251,15 +237,15 @@ export class AICacheService {
   }> {
     try {
       const [textKeys, bufferKeys] = await Promise.all([
-        this.redis.keys('ai-cache:text:*'),
-        this.redis.keys('ai-cache:buffer:*'),
+        this.redisService.getClient().keys('ai-cache:text:*'),
+        this.redisService.getClient().keys('ai-cache:buffer:*'),
       ]);
 
       // Buscar top 10 mais acessados
       const allKeys = [...textKeys, ...bufferKeys];
       const entries = await Promise.all(
         allKeys.slice(0, 100).map(async (key) => {
-          const data = await this.redis.get(key);
+          const data = await this.redisService.getClient().get(key);
           if (!data) return null;
           const entry: CacheEntry = JSON.parse(data);
           return { key, hits: entry.hits };
@@ -275,7 +261,7 @@ export class AICacheService {
       let totalSize = 0;
       const sampleKeys = allKeys.slice(0, 10);
       for (const key of sampleKeys) {
-        const data = await this.redis.get(key);
+        const data = await this.redisService.getClient().get(key);
         if (data) totalSize += data.length;
       }
       const avgSize = totalSize / sampleKeys.length;
@@ -305,10 +291,10 @@ export class AICacheService {
    */
   async clearAll(): Promise<number> {
     try {
-      const keys = await this.redis.keys('ai-cache:*');
+      const keys = await this.redisService.getClient().keys('ai-cache:*');
       if (keys.length === 0) return 0;
 
-      await this.redis.del(...keys);
+      await this.redisService.getClient().del(...keys);
       this.logger.log(`🗑️  Cache limpo: ${keys.length} chaves removidas`);
       return keys.length;
     } catch (error) {
@@ -322,15 +308,15 @@ export class AICacheService {
    */
   async clearProvider(provider: AIProviderType): Promise<number> {
     try {
-      const keys = await this.redis.keys('ai-cache:*');
+      const keys = await this.redisService.getClient().keys('ai-cache:*');
       let removed = 0;
 
       for (const key of keys) {
-        const data = await this.redis.get(key);
+        const data = await this.redisService.getClient().get(key);
         if (data) {
           const entry: CacheEntry = JSON.parse(data);
           if (entry.provider === provider) {
-            await this.redis.del(key);
+            await this.redisService.getClient().del(key);
             removed++;
           }
         }

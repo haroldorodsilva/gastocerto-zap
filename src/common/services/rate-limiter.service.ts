@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
 import { AIProviderType } from '../../infrastructure/ai/ai.interface';
 import { PrismaService } from '../../core/database/prisma.service';
+import { RedisService } from './redis.service';
 
 interface RateLimit {
   rpm: number; // Requests per minute
@@ -29,24 +28,9 @@ export class RateLimiterService {
   private initialized = false;
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
     private readonly prisma: PrismaService,
-  ) {
-    // Inicializar Redis
-    const redisUrl = this.configService.get<string>('REDIS_URL');
-    const redisHost = this.configService.get<string>('REDIS_HOST', 'localhost');
-    const redisPort = this.configService.get<number>('REDIS_PORT', 6379);
-
-    if (redisUrl) {
-      this.redis = new Redis(redisUrl);
-    } else {
-      this.redis = new Redis({
-        host: redisHost,
-        port: redisPort,
-      });
-    }
-
-    // Carregar limites do banco
+  ) {    // Carregar limites do banco
     this.loadLimits();
   }
 
@@ -158,11 +142,11 @@ export class RateLimiterService {
     const tpmKey = `ratelimit:${provider}:tpm:${minuteKey}`;
 
     // Incrementa contadores com TTL de 2 minutos
-    await this.redis.incr(rpmKey);
-    await this.redis.expire(rpmKey, 120);
+    await this.redisService.getClient().incr(rpmKey);
+    await this.redisService.getClient().expire(rpmKey, 120);
 
-    await this.redis.incrby(tpmKey, tokensUsed);
-    await this.redis.expire(tpmKey, 120);
+    await this.redisService.getClient().incrby(tpmKey, tokensUsed);
+    await this.redisService.getClient().expire(tpmKey, 120);
   }
 
   /**
@@ -175,7 +159,7 @@ export class RateLimiterService {
     const rpmKey = `ratelimit:${provider}:rpm:${minuteKey}`;
     const tpmKey = `ratelimit:${provider}:tpm:${minuteKey}`;
 
-    const [rpm, tpm] = await Promise.all([this.redis.get(rpmKey), this.redis.get(tpmKey)]);
+    const [rpm, tpm] = await Promise.all([this.redisService.getClient().get(rpmKey), this.redisService.getClient().get(tpmKey)]);
 
     const nextMinute = (minuteKey + 1) * 60000;
     const resetAt = new Date(nextMinute);
@@ -225,12 +209,12 @@ export class RateLimiterService {
     if (provider) {
       const rpmKey = `ratelimit:${provider}:rpm:${minuteKey}`;
       const tpmKey = `ratelimit:${provider}:tpm:${minuteKey}`;
-      await this.redis.del(rpmKey, tpmKey);
+      await this.redisService.getClient().del(rpmKey, tpmKey);
     } else {
       // Reseta todos
-      const keys = await this.redis.keys('ratelimit:*');
+      const keys = await this.redisService.getClient().keys('ratelimit:*');
       if (keys.length > 0) {
-        await this.redis.del(...keys);
+        await this.redisService.getClient().del(...keys);
       }
     }
 

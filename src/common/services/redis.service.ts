@@ -1,0 +1,118 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+
+/**
+ * Redis Service (Singleton)
+ * Gerencia uma única conexão Redis para toda a aplicação
+ */
+@Injectable()
+export class RedisService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
+  private client: Redis | null = null;
+  private isConnected = false;
+
+  constructor(private readonly configService: ConfigService) {}
+
+  async onModuleInit() {
+    await this.connect();
+  }
+
+  async onModuleDestroy() {
+    await this.disconnect();
+  }
+
+  private async connect(): Promise<void> {
+    try {
+      const redisUrl = this.configService.get<string>('REDIS_URL');
+      const redisHost = this.configService.get<string>('REDIS_HOST', 'localhost');
+      const redisPort = this.configService.get<number>('REDIS_PORT', 6379);
+      const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
+
+      if (redisUrl) {
+        this.logger.log(`🔗 Conectando ao Redis via URL...`);
+        this.client = new Redis(redisUrl, {
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
+          lazyConnect: false,
+        });
+      } else {
+        this.logger.log(`🔗 Conectando ao Redis em ${redisHost}:${redisPort}...`);
+        this.client = new Redis({
+          host: redisHost,
+          port: redisPort,
+          password: redisPassword,
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
+          lazyConnect: false,
+        });
+      }
+
+      this.client.on('connect', () => {
+        this.isConnected = true;
+        this.logger.log(`✅ Redis conectado com sucesso`);
+      });
+
+      this.client.on('error', (error) => {
+        this.isConnected = false;
+        this.logger.error(`❌ Redis erro: ${error.message}`);
+      });
+
+      this.client.on('close', () => {
+        this.isConnected = false;
+        this.logger.warn(`⚠️  Redis desconectado`);
+      });
+
+      // Aguardar conexão
+      await this.client.ping();
+      this.logger.log(`✅ Redis pronto para uso`);
+    } catch (error) {
+      this.logger.error(`❌ Falha ao conectar Redis: ${error.message}`);
+      this.client = null;
+      this.isConnected = false;
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.client) {
+      await this.client.quit();
+      this.client = null;
+      this.isConnected = false;
+      this.logger.log('Redis desconectado');
+    }
+  }
+
+  /**
+   * Retorna o cliente Redis
+   * @throws Error se não estiver conectado
+   */
+  getClient(): Redis {
+    if (!this.client || !this.isConnected) {
+      throw new Error('Redis não está conectado');
+    }
+    return this.client;
+  }
+
+  /**
+   * Verifica se está conectado
+   */
+  isReady(): boolean {
+    return this.isConnected && this.client !== null;
+  }
+
+  /**
+   * Tenta reconectar se desconectado
+   */
+  async ensureConnection(): Promise<boolean> {
+    if (this.isReady()) {
+      return true;
+    }
+
+    try {
+      await this.connect();
+      return this.isReady();
+    } catch {
+      return false;
+    }
+  }
+}

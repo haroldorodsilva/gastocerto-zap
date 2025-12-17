@@ -6,6 +6,7 @@ import { GroqProvider } from './providers/groq.provider';
 import { DeepSeekProvider } from './providers/deepseek.provider';
 import { RateLimiterService } from '../../common/services/rate-limiter.service';
 import { AICacheService } from '../../common/services/ai-cache.service';
+import { RedisService } from '../../common/services/redis.service';
 import { AIUsageLoggerService } from './ai-usage-logger.service';
 import { AIUsageTrackerService } from './ai-usage-tracker.service';
 import { AIConfigService } from './ai-config.service';
@@ -15,6 +16,7 @@ import { PrismaService } from '@core/database/prisma.service';
 @Module({
   providers: [
     PrismaService,
+    RedisService,
     AIProviderFactory,
     OpenAIProvider,
     GoogleGeminiProvider,
@@ -29,6 +31,7 @@ import { PrismaService } from '@core/database/prisma.service';
   ],
   exports: [
     AIProviderFactory,
+    RedisService,
     RateLimiterService,
     AICacheService,
     AIUsageLoggerService,
