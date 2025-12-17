@@ -6,7 +6,7 @@ import { UserDto } from './dto/user.dto';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { RAGService } from '../../infrastructure/ai/rag/rag.service';
 import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
-import Redis from 'ioredis';
+import { RedisService } from '@common/services/redis.service';
 
 /**
  * Expande categorias com subcategorias para indexação no RAG
@@ -52,36 +52,17 @@ export function expandCategoriesForRAG(categories: any[]): any[] {
 @Injectable()
 export class UserCacheService {
   private readonly logger = new Logger(UserCacheService.name);
-  private readonly redis: Redis;
   private readonly CACHE_TTL = 3600; // 1 hora em segundos
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly gastoCertoApi: GastoCertoApiService,
+    private readonly redisService: RedisService,
     @Optional() private readonly ragService?: RAGService,
     @Optional() private readonly aiConfigService?: AIConfigService,
   ) {
-    // Inicializar Redis
-    const redisUrl = this.configService.get<string>('redis.url');
-    if (redisUrl) {
-      this.redis = new Redis(redisUrl);
-    } else {
-      this.redis = new Redis({
-        host: this.configService.get<string>('redis.host', 'localhost'),
-        port: this.configService.get<number>('redis.port', 6379),
-        password: this.configService.get<string>('redis.password'),
-        db: this.configService.get<number>('redis.db', 0),
-      });
-    }
-
-    this.redis.on('connect', () => {
-      this.logger.log('✅ Conectado ao Redis');
-    });
-
-    this.redis.on('error', (error) => {
-      this.logger.error('❌ Erro no Redis', error);
-    });
+    this.logger.log('✅ UserCacheService inicializado');
   }
 
   /**
@@ -501,7 +482,7 @@ export class UserCacheService {
   async invalidateUser(phoneNumber: string): Promise<void> {
     try {
       // Remover do Redis
-      await this.redis.del(`user:${phoneNumber}`);
+      await this.redisService.getClient().del(`user:${phoneNumber}`);
 
       // Remover do banco (opcional, pode manter histórico)
       // await this.prisma.userCache.delete({ where: { phoneNumber } });
@@ -517,7 +498,7 @@ export class UserCacheService {
    */
   private async getUserFromRedis(phoneNumber: string): Promise<UserCache | null> {
     try {
-      const cached = await this.redis.get(`user:${phoneNumber}`);
+      const cached = await this.redisService.getClient().get(`user:${phoneNumber}`);
       if (!cached) return null;
 
       return JSON.parse(cached) as UserCache;
@@ -532,7 +513,7 @@ export class UserCacheService {
    */
   private async setUserInRedis(phoneNumber: string, user: UserCache): Promise<void> {
     try {
-      await this.redis.setex(`user:${phoneNumber}`, this.CACHE_TTL, JSON.stringify(user));
+      await this.redisService.getClient().setex(`user:${phoneNumber}`, this.CACHE_TTL, JSON.stringify(user));
     } catch (error) {
       this.logger.error('Erro ao salvar no Redis:', error);
     }
@@ -828,9 +809,9 @@ export class UserCacheService {
       });
 
       // Invalidar cache Redis (todos os identificadores)
-      if (updated.phoneNumber) await this.redis.del(`user:${updated.phoneNumber}`);
-      if (updated.telegramId) await this.redis.del(`user:${updated.telegramId}`);
-      if (updated.whatsappId) await this.redis.del(`user:${updated.whatsappId}`);
+      if (updated.phoneNumber) await this.redisService.getClient().del(`user:${updated.phoneNumber}`);
+      if (updated.telegramId) await this.redisService.getClient().del(`user:${updated.telegramId}`);
+      if (updated.whatsappId) await this.redisService.getClient().del(`user:${updated.whatsappId}`);
 
       const account = accounts.find((acc) => acc.id === accountId);
       this.logger.log(
@@ -900,9 +881,9 @@ export class UserCacheService {
             });
 
             // Invalidar cache Redis
-            await this.redis.del(`user:${user.phoneNumber}`);
-            if (user.telegramId) await this.redis.del(`user:${user.telegramId}`);
-            if (user.whatsappId) await this.redis.del(`user:${user.whatsappId}`);
+            await this.redisService.getClient().del(`user:${user.phoneNumber}`);
+            if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
+            if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
@@ -980,9 +961,9 @@ export class UserCacheService {
             });
 
             // Invalidar cache Redis
-            await this.redis.del(`user:${user.phoneNumber}`);
-            if (user.telegramId) await this.redis.del(`user:${user.telegramId}`);
-            if (user.whatsappId) await this.redis.del(`user:${user.whatsappId}`);
+            await this.redisService.getClient().del(`user:${user.phoneNumber}`);
+            if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
+            if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
@@ -1029,7 +1010,7 @@ export class UserCacheService {
     this.logger.log('🧹 Limpando todo o cache Redis...');
 
     try {
-      await this.redis.flushdb();
+      await this.redisService.getClient().flushdb();
       this.logger.log('✅ Cache Redis limpo com sucesso');
     } catch (error) {
       this.logger.error('❌ Erro ao limpar cache Redis:', error);
