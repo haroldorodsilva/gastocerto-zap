@@ -18,7 +18,8 @@ export interface IntentAnalysisResult {
 export enum MessageIntent {
   REGISTER_TRANSACTION = 'REGISTER_TRANSACTION', // Registrar transação (despesa/receita)
   CONFIRMATION_RESPONSE = 'CONFIRMATION_RESPONSE', // Responder sim/não para confirmação
-  LIST_PENDING = 'LIST_PENDING', // Listar transações pendentes
+  LIST_PENDING = 'LIST_PENDING', // Listar transações pendentes de confirmação
+  LIST_PENDING_PAYMENTS = 'LIST_PENDING_PAYMENTS', // Listar contas pendentes de pagamento
   CHECK_BALANCE = 'CHECK_BALANCE', // Consultar saldo
   LIST_TRANSACTIONS = 'LIST_TRANSACTIONS', // Listar transações
   SWITCH_ACCOUNT = 'SWITCH_ACCOUNT', // Trocar conta ativa
@@ -125,11 +126,21 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 7. Verificar listagem de pendentes
+    // 7. Verificar listagem de pendentes de CONFIRMAÇÃO
     if (this.isListPendingRequest(normalizedText)) {
       this.logger.log(`✅ Intent: LIST_PENDING (confidence: 0.95)`);
       return {
         intent: MessageIntent.LIST_PENDING,
+        confidence: 0.95,
+        shouldProcess: true, // Precisa processar para listar
+      };
+    }
+
+    // 7.1. Verificar listagem de pendentes de PAGAMENTO
+    if (this.isListPendingPaymentsRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: LIST_PENDING_PAYMENTS (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.LIST_PENDING_PAYMENTS,
         confidence: 0.95,
         shouldProcess: true, // Precisa processar para listar
       };
@@ -495,26 +506,42 @@ export class IntentAnalyzerService {
   }
 
   /**
-   * Verifica se é pedido para listar pendentes
+   * Verifica se é pedido para listar pendentes de CONFIRMAÇÃO
    */
   private isListPendingRequest(text: string): boolean {
     const listPendingKeywords = [
-      'pendente',
-      'pendentes',
-      'aguardando',
-      'confirmar',
-      'listar',
-      'lista',
-      'o que está pendente',
-      'o que esta pendente',
-      'tem pendente',
-      'cadê a pendente',
-      'cade a pendente',
-      'mostrar pendente',
-      'ver pendente',
+      'pendente de confirmação',
+      'pendentes de confirmação',
+      'aguardando confirmação',
       'falta confirmar',
+      'confirmar transação',
+      'transações para confirmar',
     ];
     return listPendingKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é pedido para listar pendentes de PAGAMENTO
+   */
+  private isListPendingPaymentsRequest(text: string): boolean {
+    const listPendingPaymentsKeywords = [
+      'pendente',
+      'pendentes',
+      'contas pendentes',
+      'contas a pagar',
+      'pagar pendentes',
+      'ver pendentes',
+      'mostrar pendentes',
+      'listar pendentes',
+      'lista pendentes',
+      'pagamentos pendentes',
+      'o que tenho que pagar',
+      'o que tenho pra pagar',
+      'o que falta pagar',
+      'contas em aberto',
+      'minhas contas',
+    ];
+    return listPendingPaymentsKeywords.some((k) => text.includes(k));
   }
 
   /**
