@@ -520,11 +520,25 @@ export class TransactionRegistrationService {
 
       // 1. Transcrever áudio
       this.logger.log(`🤖 Transcrevendo áudio...`);
+      const startTime = Date.now();
       const transcription = await this.aiFactory.transcribeAudio(audioBuffer, mimeType);
+      const responseTime = Date.now() - startTime;
 
       this.logger.log(`📝 Transcrição: "${transcription}"`);
 
-      // 2. Processar como texto
+      // ✅ Registrar uso de IA para transcrição de áudio
+      await this.logAIUsage({
+        phoneNumber,
+        userId: user.id,
+        operation: 'AUDIO_TRANSCRIPTION',
+        inputType: 'AUDIO',
+        inputText: `Audio: ${mimeType} (${audioBuffer.length} bytes)`,
+        responseTimeMs: responseTime,
+        mimeType,
+        imageSize: audioBuffer.length, // Reutilizar campo para tamanho do áudio
+      });
+
+      // 2. Processar como texto (que vai registrar outro uso de IA se necessário)
       return await this.processTextTransaction(
         phoneNumber,
         transcription,

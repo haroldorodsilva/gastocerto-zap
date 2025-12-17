@@ -338,6 +338,25 @@ export class TransactionsService {
         };
       }
 
+      // 3e.2. Pagar fatura/conta (PAY_BILL)
+      if (intentResult.intent === 'PAY_BILL') {
+        this.logger.log(`✅ Delegando para TransactionPaymentService.processPayment`);
+        // Por padrão, lista pendentes (usuário pode escolher qual pagar)
+        const result = await this.paymentService.processPayment(user, {
+          paymentType: 'pending_list',
+        });
+
+        this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
       // 3f. Consultar saldo
       if (intentResult.intent === 'CHECK_BALANCE') {
         this.logger.log(`✅ Delegando para TransactionSummaryService.generateBalanceSummary`);

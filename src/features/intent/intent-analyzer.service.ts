@@ -583,14 +583,21 @@ export class IntentAnalyzerService {
       '💰 *Registrar Receitas:*\n' +
       '   • "Recebi 1000 de salário"\n' +
       '   • "Ganhei 200 de freelance"\n\n' +
+      '💵 *Consultar Finanças:*\n' +
+      '   • "Meu saldo" - Ver balanço geral\n' +
+      '   • "Minhas transações" - Listar últimas 10\n' +
+      '   • "Histórico" - Ver histórico completo\n\n' +
+      '📋 *Contas Pendentes:*\n' +
+      '   • "Pendentes" - Ver contas a pagar\n' +
+      '   • "Pagar 3" - Pagar item #3 da lista\n' +
+      '   • "Ver pendentes" - Listar pendências\n\n' +
+      '✅ *Confirmações:*\n' +
+      '   • "Pendentes de confirmação" - Ver aguardando\n' +
+      '   • "Sim" ou "Não" - Confirmar/Rejeitar\n\n' +
       '🏦 *Gerenciar Perfil:*\n' +
-      '   • "Meus perfis" - Ver todas os perfis\n' +
-      '   • "Mudar Perfil" - Trocar perfil\n' +
-      '   • "Perfil" ou "meu perfil" - Ver conta atual\n' +
-      '   • "Usar Pessoal" - Trocar diretamente para Pessoal\n\n' +
-      '💳 *Pagamentos:*\n' +
-      '   • "Pagar fatura" - Pagar fatura do cartão\n' +
-      '   • "Quitar conta" - Marcar conta como paga\n\n' +
+      '   • "Meus perfis" - Ver todas as contas\n' +
+      '   • "Perfil" ou "conta ativa" - Ver conta atual\n' +
+      '   • "Usar Pessoal" - Trocar para conta Pessoal\n\n' +
       '📷 *Nota Fiscal:*\n' +
       '   • Tire uma foto e envie\n' +
       '   • Detectamos valores automaticamente\n\n' +
@@ -598,9 +605,9 @@ export class IntentAnalyzerService {
       '   • Grave descrevendo a transação\n' +
       '   • Ex: "Gastei 40 reais no posto"\n\n' +
       '💡 *Dicas:*\n' +
-      '   • Seja específico com valores\n' +
-      '   • Mencione a categoria (mercado, transporte, etc)\n' +
-      '   • Use linguagem natural e simples'
+      '   • Use linguagem natural\n' +
+      '   • Referências numéricas funcionam em listas\n' +
+      '   • Envie fotos e áudios para registrar rápido'
     );
   }
 
