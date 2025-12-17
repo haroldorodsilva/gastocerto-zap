@@ -132,7 +132,14 @@ export class TransactionsService {
         this.logger.log(`⏸️  Usuário tem confirmação pendente - bloqueando novas transações`);
 
         // Permitir apenas: confirmação (sim/não) ou consultas
-        const allowedIntents = ['CONFIRMATION_RESPONSE', 'LIST_PENDING', 'HELP', 'GREETING'];
+        const allowedIntents = [
+          'CONFIRMATION_RESPONSE',
+          'LIST_PENDING',
+          'CHECK_BALANCE',
+          'LIST_TRANSACTIONS',
+          'HELP',
+          'GREETING',
+        ];
 
         if (!allowedIntents.includes(intentResult.intent)) {
           const blockMessage =
@@ -282,7 +289,42 @@ export class TransactionsService {
         };
       }
 
-      // 3f. Registro de transação (padrão)
+      // 3f. Consultar saldo
+      if (intentResult.intent === 'CHECK_BALANCE') {
+        this.logger.log(`✅ Delegando para TransactionSummaryService.generateBalanceSummary`);
+        const result = await this.summaryService.generateSummary(user, { summaryType: 'balance' });
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g. Listar transações
+      if (intentResult.intent === 'LIST_TRANSACTIONS') {
+        this.logger.log(`✅ Delegando para TransactionListingService.listTransactions`);
+        const result = await this.listingService.listTransactions(user, {
+          period: 'month', // Padrão: mês atual
+          limit: 10, // Mostrar últimas 10
+        });
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3h. Registro de transação (padrão)
       this.logger.log(`✅ Delegando para TransactionRegistrationService`);
       const result = await this.registrationService.processTextTransaction(
         phoneNumber,
@@ -359,6 +401,17 @@ export class TransactionsService {
           confirmationId: hasPending.id,
         };
       }
+
+      // ✨ FEEDBACK IMEDIATO: Avisar que está analisando a imagem
+      const processingMessage =
+        '🖼️ *Analisando sua imagem...*\n\n' +
+        '🤖 Estou extraindo as informações da nota fiscal.\n' +
+        '_Isso pode levar alguns segundos._';
+
+      this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
+        processing: true,
+        type: 'image',
+      });
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processImageTransaction(
@@ -437,6 +490,17 @@ export class TransactionsService {
           confirmationId: hasPending.id,
         };
       }
+
+      // ✨ FEEDBACK IMEDIATO: Avisar que está transcrevendo o áudio
+      const processingMessage =
+        '🎤 *Processando seu áudio...*\n\n' +
+        '🤖 Estou transcrevendo e analisando a mensagem.\n' +
+        '_Aguarde um momento._';
+
+      this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
+        processing: true,
+        type: 'audio',
+      });
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processAudioTransaction(

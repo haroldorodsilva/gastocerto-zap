@@ -152,14 +152,17 @@ export class IntentAnalyzerService {
       return {
         intent: MessageIntent.CHECK_BALANCE,
         confidence: 0.9,
-        shouldProcess: false,
-        suggestedResponse:
-          '📊 *Consulta de saldo em desenvolvimento!*\n\n' +
-          'Em breve você poderá consultar seu saldo e extrato diretamente aqui.\n\n' +
-          'Por enquanto, você pode:\n' +
-          '💸 Registrar gastos e receitas\n' +
-          '📷 Enviar fotos de notas fiscais\n' +
-          '🎤 Gravar áudios com suas transações',
+        shouldProcess: true, // ✅ AGORA PROCESSA para buscar saldo real
+      };
+    }
+
+    // 9.1. Verificar listagem de transações
+    if (this.isListTransactions(normalizedText)) {
+      this.logger.log(`✅ Intent: LIST_TRANSACTIONS (confidence: 0.90)`);
+      return {
+        intent: MessageIntent.LIST_TRANSACTIONS,
+        confidence: 0.9,
+        shouldProcess: true, // ✅ PROCESSA para listar transações
       };
     }
 
@@ -398,17 +401,46 @@ export class IntentAnalyzerService {
       'extrato',
       'quanto gastei',
       'quanto recebi',
+      'resumo',
+      'balanço',
+      'sobro quanto',
+      'sobrou quanto',
+      'tem dinheiro',
+      'posso gastar',
+      'meu saldo',
+      'saldo atual',
+      'quanto tenho',
+      'total gasto',
+      'total recebido',
+    ];
+    return balanceKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é listagem de transações
+   */
+  private isListTransactions(text: string): boolean {
+    const listKeywords = [
       'minhas transações',
       'minhas transacoes',
       'meus gastos',
       'minhas receitas',
-      'resumo',
-      'balanço',
-      'sobro quanto',
-      'tem dinheiro',
-      'posso gastar',
+      'listar transações',
+      'listar transacoes',
+      'listar gastos',
+      'listar receitas',
+      'ver transações',
+      'ver transacoes',
+      'ver gastos',
+      'ver receitas',
+      'mostrar transações',
+      'mostrar transacoes',
+      'mostrar gastos',
+      'mostrar receitas',
+      'histórico',
+      'historico',
     ];
-    return balanceKeywords.some((k) => text.includes(k));
+    return listKeywords.some((k) => text.includes(k));
   }
 
   /**
