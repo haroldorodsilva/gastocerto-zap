@@ -565,22 +565,42 @@ export class GastoCertoApiService {
   }
 
   /**
-   * Busca contas pendentes por categoria
-   * TODO: Implementar endpoint real na API GastoCerto
+   * Busca contas pendentes de uma categoria específica
+   * Usa POST /external/transactions/list com filtros
    */
   async getPendingBillsByCategory(
-    userGastoCertoId: string,
-    category: string,
+    accountId: string,
+    categoryId: string,
   ): Promise<{ success: boolean; data?: any[]; error?: string }> {
     try {
-      this.logger.log(`🧾 [STUB] Buscando contas pendentes da categoria ${category}`);
-      // TODO: Implementar chamada real à API
+      this.logger.log(
+        `🧾 Buscando contas pendentes da categoria ${categoryId} - accountId: ${accountId}`,
+      );
+
+      // Usar listTransactions com filtros de status e categoria
+      const result = await this.listTransactions(accountId, {
+        status: 'PENDING',
+        categoryId,
+      });
+
+      if (!result.success) {
+        return {
+          success: false,
+          error: 'Erro ao buscar transações pendentes',
+        };
+      }
+
+      this.logger.log(
+        `✅ ${result.transactions?.length || 0} contas pendentes da categoria ${categoryId}`,
+      );
+
       return {
         success: true,
-        data: [],
+        data: result.transactions || [],
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar contas:`, error);
+      this.logger.error(`❌ Erro ao buscar contas pendentes:`);
+      this.logger.error(`   Mensagem: ${error.message}`);
       return {
         success: false,
         error: error.message,
@@ -590,23 +610,37 @@ export class GastoCertoApiService {
 
   /**
    * Busca todos os pagamentos pendentes
-   * TODO: Implementar endpoint real na API GastoCerto
+   * Endpoint: POST /external/transactions/list com status=PENDING
    */
   async getPendingPayments(
-    userGastoCertoId: string,
+    accountId: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      this.logger.log(`📋 [STUB] Buscando pagamentos pendentes`);
-      // TODO: Implementar chamada real à API
+      this.logger.log(
+        `📋 Buscando pagamentos pendentes - accountId: ${accountId}`,
+      );
+
+      // Usar listTransactions com filtro de status PENDING
+      const result = await this.listTransactions(accountId, {
+        status: 'PENDING',
+      });
+
+      if (!result.success) {
+        return result;
+      }
+
+      this.logger.log(`✅ ${result.transactions?.length || 0} pendentes encontrados`);
+
       return {
         success: true,
         data: {
-          total: 0,
-          items: [],
+          total: result.total || 0,
+          items: result.transactions || [],
         },
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar pendentes:`, error);
+      this.logger.error(`❌ Erro ao buscar pagamentos pendentes:`);
+      this.logger.error(`   Mensagem: ${error.message}`);
       return {
         success: false,
         error: error.message,
@@ -627,10 +661,16 @@ export class GastoCertoApiService {
       const currentDate = new Date();
       const targetMonth = month || currentDate.getMonth() + 1;
       const targetYear = year || currentDate.getFullYear();
-      
-      this.logger.log(`📊 Buscando resumo mensal ${targetYear}-${targetMonth.toString().padStart(2, '0')}`);
 
-      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ accountId, month: targetMonth, year: targetYear });
+      this.logger.log(
+        `📊 Buscando resumo mensal ${targetYear}-${targetMonth.toString().padStart(2, '0')}`,
+      );
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+        month: targetMonth,
+        year: targetYear,
+      });
 
       const response = await firstValueFrom(
         this.httpService.post(
@@ -656,7 +696,19 @@ export class GastoCertoApiService {
         data: response.data,
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar resumo:`, error.message);
+      this.logger.error(`❌ Erro ao buscar resumo mensal:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/balance/monthly-resume`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         error: error.message,
@@ -666,26 +718,71 @@ export class GastoCertoApiService {
 
   /**
    * Busca análise por categoria
-   * TODO: Implementar endpoint real na API GastoCerto
+   * Endpoint: POST /external/balance/category-breakdown
    */
   async getCategoryBreakdown(
-    userGastoCertoId: string,
+    accountId: string,
     monthReference: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      this.logger.log(`📊 [STUB] Buscando análise por categoria ${monthReference}`);
-      // TODO: Implementar chamada real à API
+      this.logger.log(
+        `📊 Buscando análise por categoria - accountId: ${accountId}, mês: ${monthReference}`,
+      );
+
+      const [year, month] = monthReference.split('-').map(Number);
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+        month,
+        year,
+      });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/balance/category-breakdown`,
+          {
+            accountId,
+            month,
+            year,
+          },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      this.logger.log(`✅ Análise de categorias recebida`);
+
       return {
         success: true,
-        data: {
-          totalExpenses: 0,
-          totalIncome: 0,
-          expenses: [],
-          income: [],
-        },
+        data: response.data,
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar análise:`, error);
+      this.logger.error(`❌ Erro ao buscar análise de categorias:`);
+      this.logger.error(
+        `   URL: ${this.baseUrl}/external/balance/category-breakdown`,
+      );
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(
+          `   Resposta da API:`,
+          JSON.stringify(error.response.data),
+        );
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️ API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(
+          `   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`,
+        );
+      }
+
       return {
         success: false,
         error: error.message,
@@ -695,24 +792,58 @@ export class GastoCertoApiService {
 
   /**
    * Busca balanço geral
-   * TODO: Implementar endpoint real na API GastoCerto
+   * Endpoint: POST /external/balance/overall
    */
   async getOverallBalance(
-    userGastoCertoId: string,
+    accountId: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      this.logger.log(`💰 [STUB] Buscando balanço geral`);
-      // TODO: Implementar chamada real à API
+      this.logger.log(`💰 Buscando balanço geral - accountId: ${accountId}`);
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+      });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/balance/overall`,
+          { accountId },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      this.logger.log(`✅ Balanço geral recebido`);
+
       return {
         success: true,
-        data: {
-          totalIncome: 0,
-          totalExpenses: 0,
-          pendingPayments: 0,
-        },
+        data: response.data,
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar balanço:`, error);
+      this.logger.error(`❌ Erro ao buscar balanço geral:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/balance/overall`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(
+          `   Resposta da API:`,
+          JSON.stringify(error.response.data),
+        );
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️ API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(
+          `   ⚠️ TIMEOUT - API não respondeu em ${this.timeout}ms`,
+        );
+      }
+
       return {
         success: false,
         error: error.message,
@@ -807,6 +938,8 @@ export class GastoCertoApiService {
   }> {
     try {
       this.logger.log(`📋 Listando transações - userId: ${userId}`);
+      this.logger.log(`   Filtros:`, JSON.stringify(filters || {}));
+      this.logger.log(`   URL: ${this.baseUrl}/external/transactions/list`);
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ userId, ...filters });
 
@@ -833,7 +966,19 @@ export class GastoCertoApiService {
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao listar transações:`, error.message);
+      this.logger.error(`❌ Erro ao listar transações:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/transactions/list`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         transactions: [],
@@ -885,7 +1030,19 @@ export class GastoCertoApiService {
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao pagar transação:`, error.message);
+      this.logger.error(`❌ Erro ao pagar transação:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/transactions/pay`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         error: error.message,
@@ -1031,9 +1188,15 @@ export class GastoCertoApiService {
     data?: any[];
   }> {
     try {
-      this.logger.log(`💳 Listando faturas - accountId: ${accountId}, creditCardId: ${creditCardId}, monthYear: ${monthYear || 'ALL'}`);
+      this.logger.log(
+        `💳 Listando faturas - accountId: ${accountId}, creditCardId: ${creditCardId}, monthYear: ${monthYear || 'ALL'}`,
+      );
 
-      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ accountId, creditCardId, monthYear });
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+        creditCardId,
+        monthYear,
+      });
 
       const response = await firstValueFrom(
         this.httpService.post(

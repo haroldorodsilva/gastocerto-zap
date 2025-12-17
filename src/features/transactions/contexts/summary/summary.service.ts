@@ -214,7 +214,7 @@ export class TransactionSummaryService {
 
       this.logger.log(`📊 Gerando análise por categoria: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.getCategoryBreakdown(user.gastoCertoId, targetMonth);
+      const result = await this.gastoCertoApi.getCategoryBreakdown(user.activeAccountId, targetMonth);
 
       if (!result.success || !result.data) {
         return {
@@ -272,7 +272,7 @@ export class TransactionSummaryService {
     try {
       this.logger.log(`💰 Gerando balanço geral para ${user.phoneNumber}`);
 
-      const result = await this.gastoCertoApi.getOverallBalance(user.gastoCertoId);
+      const result = await this.gastoCertoApi.getOverallBalance(user.activeAccountId);
 
       if (!result.success || !result.data) {
         return {

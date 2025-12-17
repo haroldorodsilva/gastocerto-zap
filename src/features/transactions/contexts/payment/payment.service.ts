@@ -254,6 +254,8 @@ export class TransactionPaymentService {
 
   /**
    * Paga conta por categoria (luz, água, etc)
+   * NOTA: Este método requer um categoryId (UUID), não um nome de categoria
+   * TODO: Implementar mapeamento de nome para categoryId
    */
   private async payBillByCategory(
     user: UserCache,
@@ -274,38 +276,21 @@ export class TransactionPaymentService {
     try {
       this.logger.log(`🧾 Buscando contas pendentes na categoria: ${category}`);
 
-      const result = await this.gastoCertoApi.getPendingBillsByCategory(
-        user.gastoCertoId,
-        category,
-      );
-
-      if (!result.success || !result.data || result.data.length === 0) {
-        return {
-          success: true,
-          message: `✅ Nenhuma conta pendente de *${category}*.`,
-        };
-      }
-
-      const bills = result.data;
-      let message = `🧾 *Contas Pendentes - ${category}*\n\n`;
-
-      bills.forEach((bill, index) => {
-        message += `${index + 1}. 💸 *R$ ${bill.amount.toFixed(2)}*\n`;
-        message += `   📅 Vencimento: ${bill.dueDate}\n`;
-        if (bill.description) {
-          message += `   📝 ${bill.description}\n`;
-        }
-        message += `   🆔 ID: ${bill.id}\n\n`;
-      });
-
-      message += '\n💡 _Para pagar, responda com o número ou ID da conta._';
-
+      // TEMPORÁRIO: Retornar mensagem informando que precisa usar categoryId
       return {
-        success: true,
-        message,
+        success: false,
+        message:
+          '⚠️ *Funcionalidade em manutenção*\n\n' +
+          'Por favor, use "minhas transações" para ver suas transações pendentes.',
       };
-    } catch (error) {
-      this.logger.error(`❌ Erro ao buscar contas:`, error);
+
+      // TODO: Implementar busca de categoryId por nome ou refatorar para usar outro filtro
+      // const result = await this.gastoCertoApi.getPendingBillsByCategory(
+      //   user.activeAccountId,
+      //   categoryId, // precisa do UUID da categoria
+      // );
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao buscar contas pendentes:`, error);
       return {
         success: false,
         message: '❌ Erro ao buscar contas pendentes.',
@@ -322,7 +307,7 @@ export class TransactionPaymentService {
     try {
       this.logger.log(`📋 Listando pagamentos pendentes para ${user.phoneNumber}`);
 
-      const result = await this.gastoCertoApi.getPendingPayments(user.gastoCertoId);
+      const result = await this.gastoCertoApi.getPendingPayments(user.activeAccountId);
 
       if (!result.success || !result.data || result.data.length === 0) {
         return {
