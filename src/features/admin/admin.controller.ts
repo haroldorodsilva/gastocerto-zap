@@ -21,6 +21,7 @@ import { SessionsService } from '../../infrastructure/whatsapp/sessions/sessions
 import { SessionManagerService } from '../../infrastructure/whatsapp/sessions/session-manager.service';
 import { TelegramSessionsService } from '../../infrastructure/whatsapp/sessions/telegram/telegram-sessions.service';
 import { RAGService } from '../../infrastructure/ai/rag/rag.service';
+import { RedisService } from '@common/services/redis.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
@@ -35,6 +36,7 @@ export class AdminController {
     private readonly sessionManager: SessionManagerService,
     private readonly telegramSessionsService: TelegramSessionsService,
     private readonly ragService: RAGService,
+    private readonly redisService: RedisService,
   ) {}
 
   /**
@@ -619,7 +621,8 @@ export class AdminController {
       const usersWithCacheInfo = await Promise.all(
         users.map(async (user) => {
           const redisKey = `user:${user.phoneNumber}`;
-          const ttl = await this.cacheService['redis'].ttl(redisKey);
+          const redis = this.redisService.getClient();
+          const ttl = await redis.ttl(redisKey);
           const inRedis = ttl > -2; // -2 significa que a chave não existe
 
           return {
