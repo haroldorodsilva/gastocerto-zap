@@ -27,8 +27,19 @@ import { GastoCertoApiService } from './gasto-certo-api.service';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => {
-        const redisConfig = configService.get('redis');
+        const redisUrl = configService.get<string>('REDIS_URL');
         
+        if (redisUrl) {
+          // Usar URL completa (para Upstash, Redis Cloud, etc)
+          return {
+            store: await redisStore({
+              url: redisUrl,
+            }),
+          };
+        }
+        
+        // Fallback para host/port separados
+        const redisConfig = configService.get('redis');
         return {
           store: await redisStore({
             socket: {
