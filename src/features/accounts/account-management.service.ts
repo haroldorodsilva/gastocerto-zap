@@ -328,20 +328,51 @@ export class AccountManagementService {
     accounts: Array<{ id: string; name: string; type: string; isActive: boolean }>,
   ): any | null {
     const normalizedText = messageText.toLowerCase().trim();
+    
+    // Remover palavras comuns de comando
+    const cleanedText = normalizedText
+      .replace(/^(usar|usar o|usar a|trocar para|mudar para|selecionar|escolher)\s+/i, '')
+      .trim();
 
     for (const acc of accounts) {
       const accountNameLower = acc.name.toLowerCase();
       const accountTypeLower = acc.type.toLowerCase();
 
-      // Verificar se a mensagem contém o nome ou tipo da conta
+      // 1. Verificar match exato do nome completo ou tipo
+      if (cleanedText === accountNameLower || cleanedText === accountTypeLower) {
+        return acc;
+      }
+
+      // 2. Verificar se a mensagem contém o nome ou tipo da conta
       if (normalizedText.includes(accountNameLower) || normalizedText.includes(accountTypeLower)) {
         return acc;
       }
 
-      // Verificar aliases comuns
+      // 3. Buscar por palavras individuais do nome da conta
+      // Ex: "hrs" deve encontrar "HRS Tecnologia"
+      const accountWords = accountNameLower.split(/\s+/);
+      for (const word of accountWords) {
+        if (word.length >= 3 && cleanedText.includes(word)) {
+          return acc;
+        }
+        // Match parcial para palavras pequenas (siglas)
+        if (word.length >= 2 && cleanedText === word) {
+          return acc;
+        }
+      }
+
+      // 4. Verificar se o texto digitado inicia alguma palavra do nome
+      // Ex: "tec" deve encontrar "HRS Tecnologia"
+      for (const word of accountWords) {
+        if (word.startsWith(cleanedText) && cleanedText.length >= 3) {
+          return acc;
+        }
+      }
+
+      // 5. Verificar aliases comuns
       const aliases: Record<string, string[]> = {
-        personal: ['pessoal', 'pessoa física', 'pf'],
-        business: ['pj', 'pessoa jurídica', 'empresa', 'cnpj'],
+        personal: ['pessoal', 'pessoa física', 'pf', 'fisica'],
+        business: ['pj', 'pessoa jurídica', 'empresa', 'cnpj', 'juridica'],
       };
 
       for (const [type, aliasList] of Object.entries(aliases)) {
