@@ -126,23 +126,28 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 7. Verificar listagem de pendentes de CONFIRMAÇÃO
-    if (this.isListPendingRequest(normalizedText)) {
-      this.logger.log(`✅ Intent: LIST_PENDING (confidence: 0.95)`);
+    // 7. Verificar listagem de pendentes (com priorização inteligente)
+    // IMPORTANTE: Prioridade = Termos específicos > Termos genéricos
+    const hasConfirmationKeywords = this.isListPendingRequest(normalizedText);
+    const hasPaymentKeywords = this.isListPendingPaymentsRequest(normalizedText);
+
+    // Se detectou palavras de CONFIRMAÇÃO (mais específico), priorizar
+    if (hasConfirmationKeywords) {
+      this.logger.log(`✅ Intent: LIST_PENDING (confirmações) - confidence: 0.95`);
       return {
         intent: MessageIntent.LIST_PENDING,
         confidence: 0.95,
-        shouldProcess: true, // Precisa processar para listar
+        shouldProcess: true,
       };
     }
 
-    // 7.1. Verificar listagem de pendentes de PAGAMENTO
-    if (this.isListPendingPaymentsRequest(normalizedText)) {
-      this.logger.log(`✅ Intent: LIST_PENDING_PAYMENTS (confidence: 0.95)`);
+    // Se detectou palavras de PAGAMENTO (genérico), usar como fallback
+    if (hasPaymentKeywords) {
+      this.logger.log(`✅ Intent: LIST_PENDING_PAYMENTS (pagamentos) - confidence: 0.95`);
       return {
         intent: MessageIntent.LIST_PENDING_PAYMENTS,
         confidence: 0.95,
-        shouldProcess: true, // Precisa processar para listar
+        shouldProcess: true,
       };
     }
 
@@ -507,41 +512,62 @@ export class IntentAnalyzerService {
 
   /**
    * Verifica se é pedido para listar pendentes de CONFIRMAÇÃO
+   * Palavras-chave ESPECÍFICAS para evitar ambiguidade
    */
   private isListPendingRequest(text: string): boolean {
     const listPendingKeywords = [
       'pendente de confirmação',
       'pendentes de confirmação',
+      'pendência de confirmação',
+      'pendências de confirmação',
       'aguardando confirmação',
       'falta confirmar',
+      'precisa confirmar',
       'confirmar transação',
       'transações para confirmar',
+      'transações pendentes de confirmação',
+      'o que está aguardando confirmação',
+      'o que precisa confirmar',
+      'minhas confirmações pendentes',
     ];
     return listPendingKeywords.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é pedido para listar pendentes de PAGAMENTO
+   * Palavras-chave GENÉRICAS (só usa se não for confirmação)
+   *
+   * IMPORTANTE: Este método só é chamado se isListPendingRequest() retornar false
    */
   private isListPendingPaymentsRequest(text: string): boolean {
     const listPendingPaymentsKeywords = [
-      'pendente',
-      'pendentes',
       'contas pendentes',
       'contas a pagar',
+      'contas abertas',
+      'contas em aberto',
       'pagar pendentes',
       'ver pendentes',
       'mostrar pendentes',
       'listar pendentes',
       'lista pendentes',
       'pagamentos pendentes',
+      'pendentes de pagamento',
+      'pendências de pagamento',
       'o que tenho que pagar',
       'o que tenho pra pagar',
+      'o que preciso pagar',
       'o que falta pagar',
-      'contas em aberto',
       'minhas contas',
+      'minhas dívidas',
+      'dívidas pendentes',
+      'boletos pendentes',
+      'faturas pendentes',
     ];
-    return listPendingPaymentsKeywords.some((k) => text.includes(k));
+
+    // Apenas palavra "pendentes" ou "pendente" sozinha também conta como PAGAMENTO
+    const hasPendingWord = text === 'pendentes' || text === 'pendente' || text === 'pendências';
+
+    return listPendingPaymentsKeywords.some((k) => text.includes(k)) || hasPendingWord;
   }
 
   /**
