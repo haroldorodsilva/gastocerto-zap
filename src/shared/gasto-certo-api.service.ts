@@ -616,29 +616,47 @@ export class GastoCertoApiService {
 
   /**
    * Busca resumo mensal
-   * TODO: Implementar endpoint real na API GastoCerto
+   * Endpoint: POST /external/balance/monthly-resume
    */
   async getMonthlySummary(
-    userGastoCertoId: string,
-    monthReference: string,
+    accountId: string,
+    month?: number,
+    year?: number,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      this.logger.log(`📊 [STUB] Buscando resumo mensal ${monthReference}`);
-      // TODO: Implementar chamada real à API
+      const currentDate = new Date();
+      const targetMonth = month || currentDate.getMonth() + 1;
+      const targetYear = year || currentDate.getFullYear();
+      
+      this.logger.log(`📊 Buscando resumo mensal ${targetYear}-${targetMonth.toString().padStart(2, '0')}`);
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ accountId, month: targetMonth, year: targetYear });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/balance/monthly-resume`,
+          {
+            accountId,
+            month: targetMonth,
+            year: targetYear,
+          },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      this.logger.log(`✅ Resumo mensal obtido com sucesso`);
       return {
         success: true,
-        data: {
-          monthReference,
-          totalIncome: 0,
-          totalExpense: 0,
-          balance: 0,
-          topCategories: [],
-          transactionCount: 0,
-          averagePerDay: 0,
-        },
+        data: response.data,
       };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar resumo:`, error);
+      this.logger.error(`❌ Erro ao buscar resumo:`, error.message);
       return {
         success: false,
         error: error.message,
@@ -763,9 +781,10 @@ export class GastoCertoApiService {
   async listTransactions(
     userId: string,
     filters?: {
+      accountId?: string;
       monthYear?: string;
       type?: 'INCOME' | 'EXPENSES';
-      status?: 'PENDING' | 'PAID';
+      status?: 'PENDING' | 'DONE' | 'OVERDUE';
       categoryId?: string;
       page?: number;
       limit?: number;
@@ -773,6 +792,12 @@ export class GastoCertoApiService {
   ): Promise<{
     success: boolean;
     transactions?: any[];
+    total?: number;
+    resume?: {
+      income: number;
+      expenses: number;
+      balance: number;
+    };
     pagination?: {
       page: number;
       limit: number;
@@ -822,31 +847,27 @@ export class GastoCertoApiService {
    * Endpoint: POST /external/transactions/pay
    */
   async payTransaction(
-    userId: string,
+    accountId: string,
     transactionId: string,
-    paidAt?: string,
   ): Promise<{
     success: boolean;
     message?: string;
-    transaction?: any;
     error?: string;
   }> {
     try {
-      this.logger.log(`💳 Pagando transação ${transactionId} - userId: ${userId}`);
+      this.logger.log(`💳 Pagando transação ${transactionId} - accountId: ${accountId}`);
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
-        userId,
+        accountId,
         transactionId,
-        paidAt,
       });
 
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.baseUrl}/external/transactions/pay`,
           {
-            userId,
+            accountId,
             transactionId,
-            paidAt: paidAt || new Date().toISOString().split('T')[0],
           },
           {
             headers: {
@@ -876,9 +897,7 @@ export class GastoCertoApiService {
    * Lista cartões de crédito do usuário
    * Endpoint: POST /external/cards
    */
-  async listCreditCards(
-    accountId: string,
-  ): Promise<{
+  async listCreditCards(accountId: string): Promise<{
     success: boolean;
     data?: Array<{
       id: string;
@@ -1001,27 +1020,28 @@ export class GastoCertoApiService {
 
   /**
    * Lista faturas de cartão de crédito
-   * Endpoint: POST /external/credit-card/invoices/list
-   * Nota: Documentação usa /external/cards/invoices mas endpoint real é /external/credit-card/invoices/list
+   * Endpoint: POST /external/cards/invoices
    */
   async listCreditCardInvoices(
-    userId: string,
-    status?: 'OPEN' | 'CLOSED' | 'PAID' | 'OVERDUE',
+    accountId: string,
+    creditCardId: string,
+    monthYear?: string,
   ): Promise<{
     success: boolean;
-    invoices?: any[];
+    data?: any[];
   }> {
     try {
-      this.logger.log(`💳 Listando faturas - userId: ${userId}, status: ${status || 'ALL'}`);
+      this.logger.log(`💳 Listando faturas - accountId: ${accountId}, creditCardId: ${creditCardId}, monthYear: ${monthYear || 'ALL'}`);
 
-      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ userId, status });
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ accountId, creditCardId, monthYear });
 
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.baseUrl}/external/credit-card/invoices/list`,
+          `${this.baseUrl}/external/cards/invoices`,
           {
-            userId,
-            ...(status && { status }),
+            accountId,
+            creditCardId,
+            ...(monthYear && { monthYear }),
           },
           {
             headers: {
@@ -1033,14 +1053,14 @@ export class GastoCertoApiService {
         ),
       );
 
-      if (response.data.success) {
-        this.logger.log(`✅ ${response.data.invoices.length} faturas encontradas`);
+      if (response.data.data) {
+        this.logger.log(`✅ ${response.data.data.length} faturas encontradas`);
       }
 
       return response.data;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao listar faturas:`, error.message);
-      return { success: false, invoices: [] };
+      return { success: false, data: [] };
     }
   }
 

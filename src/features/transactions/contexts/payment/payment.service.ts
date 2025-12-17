@@ -107,16 +107,19 @@ export class TransactionPaymentService {
       this.logger.log(`💳 Buscando fatura do cartão para ${targetMonth}`);
 
       // Buscar faturas de crédito
-      const result = await this.gastoCertoApi.listCreditCardInvoices(user.gastoCertoId, 'CLOSED');
+      const result = await this.gastoCertoApi.listCreditCardInvoices(
+        user.activeAccountId,
+        user.gastoCertoId, // TODO: Passar creditCardId real quando disponível
+      );
 
-      if (!result.success || !result.invoices || result.invoices.length === 0) {
+      if (!result.success || !result.data || result.data.length === 0) {
         return {
           success: false,
           message: '❌ Nenhuma fatura encontrada para o mês.',
         };
       }
 
-      const invoice = result.invoices[0]; // Primeira fatura fechada
+      const invoice = result.data[0]; // Primeira fatura fechada
 
       if (!invoice || invoice.transactions.length === 0) {
         return {

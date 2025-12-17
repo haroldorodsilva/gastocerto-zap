@@ -99,10 +99,17 @@ export class TransactionSummaryService {
   ): Promise<{ success: boolean; message: string }> {
     try {
       const targetMonth = monthReference || this.getCurrentMonthReference();
+      
+      // Extrair mês e ano do formato YYYY-MM
+      const [year, month] = targetMonth.split('-').map(Number);
 
       this.logger.log(`📊 Gerando resumo mensal: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.getMonthlySummary(user.gastoCertoId, targetMonth);
+      const result = await this.gastoCertoApi.getMonthlySummary(
+        user.activeAccountId,
+        month,
+        year,
+      );
 
       if (!result.success || !result.data) {
         return {
@@ -140,16 +147,19 @@ export class TransactionSummaryService {
 
       this.logger.log(`💳 Gerando fatura do cartão: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.listCreditCardInvoices(user.gastoCertoId, 'CLOSED');
+      const result = await this.gastoCertoApi.listCreditCardInvoices(
+        user.activeAccountId,
+        user.gastoCertoId, // TODO: Passar creditCardId real quando disponível
+      );
 
-      if (!result.success || !result.invoices || result.invoices.length === 0) {
+      if (!result.success || !result.data || result.data.length === 0) {
         return {
           success: false,
           message: '❌ Erro ao buscar fatura do cartão.',
         };
       }
 
-      const invoice = result.invoices[0]; // Primeira fatura fechada
+      const invoice = result.data[0]; // Primeira fatura fechada
 
       if (invoice.transactions.length === 0) {
         return {

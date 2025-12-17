@@ -16,10 +16,30 @@ export interface TransactionListItem {
   id: string;
   type: 'EXPENSES' | 'INCOME';
   amount: number;
-  category: string;
-  description?: string;
-  date: string;
+  category: string; // STRING - Nome legível (ex: "Alimentação")
+  categoryId: string;
+  subCategory?: string; // STRING - Nome da subcategoria
+  subCategoryId?: string;
+  description: string;
+  date: string; // YYYY-MM-DD
+  dueDate?: string; // YYYY-MM-DD
+  paidAt?: string; // ISO 8601
   merchant?: string;
+  status: 'PENDING' | 'DONE' | 'OVERDUE';
+  accountId: string;
+  accountName: string; // STRING - Nome da conta
+  paymentMethod?: 'DEBIT_CARD' | 'CREDIT_CARD' | 'PIX' | 'CASH' | 'BANK_TRANSFER' | 'BANK_SLIP';
+  installments?: number;
+  installmentNumber?: number;
+  bankId?: string;
+  bankName?: string; // STRING - Nome do banco
+  bankAccountType?: 'CHECKING' | 'SAVINGS' | 'INVESTMENT';
+  creditCardId?: string;
+  creditCardName?: string; // STRING - Nome do cartão
+  recurrent?: boolean;
+  note?: string;
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
 }
 
 /**
@@ -70,6 +90,7 @@ export class TransactionListingService {
 
       // 2. Buscar transações na API
       const result = await this.gastoCertoApi.listTransactions(user.gastoCertoId, {
+        accountId: user.activeAccountId,
         monthYear: `${dateRange.startDate.substring(0, 7)}`,
         type: filters.type,
         categoryId: filters.category,
@@ -84,6 +105,11 @@ export class TransactionListingService {
       }
 
       const transactions = result.transactions || [];
+
+      // DEBUG: Log para ver estrutura das transações retornadas
+      if (transactions.length > 0) {
+        this.logger.debug(`📊 Primeira transação da API: ${JSON.stringify(transactions[0])}`);
+      }
 
       // 3. Verificar se há transações
       if (transactions.length === 0) {
@@ -199,14 +225,14 @@ export class TransactionListingService {
       message += '\n';
     }
 
-    // Calcular totais
+    // Calcular totais (valores vêm em centavos)
     const totalExpenses = transactions
       .filter((t) => t.type === 'EXPENSES')
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + t.amount, 0) / 100;
 
     const totalIncome = transactions
       .filter((t) => t.type === 'INCOME')
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + t.amount, 0) / 100;
 
     // Resumo
     message += `💵 *Total:* ${transactions.length} transações\n`;
@@ -223,19 +249,51 @@ export class TransactionListingService {
 
     transactions.slice(0, filters.limit || 20).forEach((t, index) => {
       const emoji = t.type === 'EXPENSES' ? '💸' : '💰';
+      
+      // Converter de centavos para reais
+      const amountInReais = t.amount / 100;
+      
+      // Formatar data
       const date = new Date(t.date).toLocaleDateString('pt-BR', {
         day: '2-digit',
         month: '2-digit',
       });
 
-      message += `${index + 1}. ${emoji} *R$ ${t.amount.toFixed(2)}*\n`;
+      message += `${index + 1}. ${emoji} *R$ ${amountInReais.toFixed(2)}*\n`;
       message += `   📂 ${t.category}`;
+      if (t.subCategory) {
+        message += ` > ${t.subCategory}`;
+      }
       if (t.description) {
         message += ` • ${t.description}`;
       }
       message += `\n   📅 ${date}`;
+      
+      // Informações adicionais
+      if (t.bankName) {
+        message += ` • 🏦 ${t.bankName}`;
+      } else if (t.creditCardName) {
+        message += ` • 💳 ${t.creditCardName}`;
+      }
+      
       if (t.merchant) {
         message += ` • 🏪 ${t.merchant}`;
+      }
+      
+      // Parcelamento
+      if (t.installments && t.installments > 1) {
+        message += ` • ${t.installmentNumber}/${t.installments}x`;
+      }
+      
+      // Status
+      if (t.status === 'PENDING') {
+        const dueDate = t.dueDate ? new Date(t.dueDate).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
+        message += `\n   ⏳ Pendente`;
+        if (dueDate) {
+          message += ` (vence ${dueDate})`;
+        }
+      } else if (t.status === 'OVERDUE') {
+        message += `\n   ⚠️ Vencida`;
       }
       message += '\n\n';
     });

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { UserCache } from '@prisma/client';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { IntentAnalyzerService } from '@features/intent/intent-analyzer.service';
 import { AccountManagementService } from '@features/accounts/account-management.service';
