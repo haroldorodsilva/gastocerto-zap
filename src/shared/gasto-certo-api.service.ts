@@ -873,8 +873,136 @@ export class GastoCertoApiService {
   }
 
   /**
+   * Lista cartões de crédito do usuário
+   * Endpoint: POST /external/cards
+   */
+  async listCreditCards(
+    accountId: string,
+  ): Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      name: string;
+      limit: number;
+      closingDay: number;
+      dueDay: number;
+      bankName: string;
+      createdAt: string;
+    }>;
+    error?: string;
+  }> {
+    try {
+      this.logger.log(`💳 Listando cartões - accountId: ${accountId}`);
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({ accountId });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/cards`,
+          { accountId },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      if (response.data.data) {
+        this.logger.log(`✅ ${response.data.data.length} cartão(ões) encontrado(s)`);
+      }
+
+      return { success: true, data: response.data.data };
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao listar cartões:`, error.message);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Busca detalhes completos de uma fatura de cartão
+   * Endpoint: POST /external/cards/invoices/details
+   */
+  async getInvoiceDetails(
+    accountId: string,
+    invoiceId: string,
+  ): Promise<{
+    success: boolean;
+    data?: {
+      id: string;
+      yearMonth: string;
+      status: 'OPEN' | 'CLOSED' | 'PAID' | 'OVERDUE';
+      closingDate: string;
+      dueDate: string;
+      grossAmount: number;
+      totalAmount: number;
+      refundAmount: number;
+      advanceAmount: number;
+      paidAmount: number;
+      creditCardName: string;
+      transactions: Array<{
+        id: string;
+        description: string;
+        amount: number;
+        date: string;
+        type: 'EXPENSES' | 'INCOME';
+        categoryName: string;
+        subCategoryName?: string;
+        note?: string;
+      }>;
+    };
+    error?: string;
+  }> {
+    try {
+      this.logger.log(`💳 Buscando detalhes da fatura ${invoiceId} - accountId: ${accountId}`);
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+        invoiceId,
+      });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/cards/invoices/details`,
+          {
+            accountId,
+            invoiceId,
+          },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      if (response.data) {
+        this.logger.log(
+          `✅ Fatura ${invoiceId} - ${response.data.transactions?.length || 0} transação(ões)`,
+        );
+      }
+
+      return { success: true, data: response.data };
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao buscar detalhes da fatura:`, error.message);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
    * Lista faturas de cartão de crédito
    * Endpoint: POST /external/credit-card/invoices/list
+   * Nota: Documentação usa /external/cards/invoices mas endpoint real é /external/credit-card/invoices/list
    */
   async listCreditCardInvoices(
     userId: string,

@@ -18,7 +18,8 @@ export interface IntentAnalysisResult {
 export enum MessageIntent {
   REGISTER_TRANSACTION = 'REGISTER_TRANSACTION', // Registrar transação (despesa/receita)
   CONFIRMATION_RESPONSE = 'CONFIRMATION_RESPONSE', // Responder sim/não para confirmação
-  LIST_PENDING = 'LIST_PENDING', // Listar transações pendentes
+  LIST_PENDING = 'LIST_PENDING', // Listar transações pendentes de confirmação
+  LIST_PENDING_PAYMENTS = 'LIST_PENDING_PAYMENTS', // Listar contas pendentes de pagamento
   CHECK_BALANCE = 'CHECK_BALANCE', // Consultar saldo
   LIST_TRANSACTIONS = 'LIST_TRANSACTIONS', // Listar transações
   SWITCH_ACCOUNT = 'SWITCH_ACCOUNT', // Trocar conta ativa
@@ -125,13 +126,28 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 7. Verificar listagem de pendentes
-    if (this.isListPendingRequest(normalizedText)) {
-      this.logger.log(`✅ Intent: LIST_PENDING (confidence: 0.95)`);
+    // 7. Verificar listagem de pendentes (com priorização inteligente)
+    // IMPORTANTE: Prioridade = Termos específicos > Termos genéricos
+    const hasConfirmationKeywords = this.isListPendingRequest(normalizedText);
+    const hasPaymentKeywords = this.isListPendingPaymentsRequest(normalizedText);
+
+    // Se detectou palavras de CONFIRMAÇÃO (mais específico), priorizar
+    if (hasConfirmationKeywords) {
+      this.logger.log(`✅ Intent: LIST_PENDING (confirmações) - confidence: 0.95`);
       return {
         intent: MessageIntent.LIST_PENDING,
         confidence: 0.95,
-        shouldProcess: true, // Precisa processar para listar
+        shouldProcess: true,
+      };
+    }
+
+    // Se detectou palavras de PAGAMENTO (genérico), usar como fallback
+    if (hasPaymentKeywords) {
+      this.logger.log(`✅ Intent: LIST_PENDING_PAYMENTS (pagamentos) - confidence: 0.95`);
+      return {
+        intent: MessageIntent.LIST_PENDING_PAYMENTS,
+        confidence: 0.95,
+        shouldProcess: true,
       };
     }
 
@@ -152,14 +168,17 @@ export class IntentAnalyzerService {
       return {
         intent: MessageIntent.CHECK_BALANCE,
         confidence: 0.9,
-        shouldProcess: false,
-        suggestedResponse:
-          '📊 *Consulta de saldo em desenvolvimento!*\n\n' +
-          'Em breve você poderá consultar seu saldo e extrato diretamente aqui.\n\n' +
-          'Por enquanto, você pode:\n' +
-          '💸 Registrar gastos e receitas\n' +
-          '📷 Enviar fotos de notas fiscais\n' +
-          '🎤 Gravar áudios com suas transações',
+        shouldProcess: true, // ✅ AGORA PROCESSA para buscar saldo real
+      };
+    }
+
+    // 9.1. Verificar listagem de transações
+    if (this.isListTransactions(normalizedText)) {
+      this.logger.log(`✅ Intent: LIST_TRANSACTIONS (confidence: 0.90)`);
+      return {
+        intent: MessageIntent.LIST_TRANSACTIONS,
+        confidence: 0.9,
+        shouldProcess: true, // ✅ PROCESSA para listar transações
       };
     }
 
@@ -398,17 +417,46 @@ export class IntentAnalyzerService {
       'extrato',
       'quanto gastei',
       'quanto recebi',
+      'resumo',
+      'balanço',
+      'sobro quanto',
+      'sobrou quanto',
+      'tem dinheiro',
+      'posso gastar',
+      'meu saldo',
+      'saldo atual',
+      'quanto tenho',
+      'total gasto',
+      'total recebido',
+    ];
+    return balanceKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é listagem de transações
+   */
+  private isListTransactions(text: string): boolean {
+    const listKeywords = [
       'minhas transações',
       'minhas transacoes',
       'meus gastos',
       'minhas receitas',
-      'resumo',
-      'balanço',
-      'sobro quanto',
-      'tem dinheiro',
-      'posso gastar',
+      'listar transações',
+      'listar transacoes',
+      'listar gastos',
+      'listar receitas',
+      'ver transações',
+      'ver transacoes',
+      'ver gastos',
+      'ver receitas',
+      'mostrar transações',
+      'mostrar transacoes',
+      'mostrar gastos',
+      'mostrar receitas',
+      'histórico',
+      'historico',
     ];
-    return balanceKeywords.some((k) => text.includes(k));
+    return listKeywords.some((k) => text.includes(k));
   }
 
   /**
@@ -463,26 +511,63 @@ export class IntentAnalyzerService {
   }
 
   /**
-   * Verifica se é pedido para listar pendentes
+   * Verifica se é pedido para listar pendentes de CONFIRMAÇÃO
+   * Palavras-chave ESPECÍFICAS para evitar ambiguidade
    */
   private isListPendingRequest(text: string): boolean {
     const listPendingKeywords = [
-      'pendente',
-      'pendentes',
-      'aguardando',
-      'confirmar',
-      'listar',
-      'lista',
-      'o que está pendente',
-      'o que esta pendente',
-      'tem pendente',
-      'cadê a pendente',
-      'cade a pendente',
-      'mostrar pendente',
-      'ver pendente',
+      'pendente de confirmação',
+      'pendentes de confirmação',
+      'pendência de confirmação',
+      'pendências de confirmação',
+      'aguardando confirmação',
       'falta confirmar',
+      'precisa confirmar',
+      'confirmar transação',
+      'transações para confirmar',
+      'transações pendentes de confirmação',
+      'o que está aguardando confirmação',
+      'o que precisa confirmar',
+      'minhas confirmações pendentes',
     ];
     return listPendingKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é pedido para listar pendentes de PAGAMENTO
+   * Palavras-chave GENÉRICAS (só usa se não for confirmação)
+   *
+   * IMPORTANTE: Este método só é chamado se isListPendingRequest() retornar false
+   */
+  private isListPendingPaymentsRequest(text: string): boolean {
+    const listPendingPaymentsKeywords = [
+      'contas pendentes',
+      'contas a pagar',
+      'contas abertas',
+      'contas em aberto',
+      'pagar pendentes',
+      'ver pendentes',
+      'mostrar pendentes',
+      'listar pendentes',
+      'lista pendentes',
+      'pagamentos pendentes',
+      'pendentes de pagamento',
+      'pendências de pagamento',
+      'o que tenho que pagar',
+      'o que tenho pra pagar',
+      'o que preciso pagar',
+      'o que falta pagar',
+      'minhas contas',
+      'minhas dívidas',
+      'dívidas pendentes',
+      'boletos pendentes',
+      'faturas pendentes',
+    ];
+
+    // Apenas palavra "pendentes" ou "pendente" sozinha também conta como PAGAMENTO
+    const hasPendingWord = text === 'pendentes' || text === 'pendente' || text === 'pendências';
+
+    return listPendingPaymentsKeywords.some((k) => text.includes(k)) || hasPendingWord;
   }
 
   /**
@@ -498,14 +583,21 @@ export class IntentAnalyzerService {
       '💰 *Registrar Receitas:*\n' +
       '   • "Recebi 1000 de salário"\n' +
       '   • "Ganhei 200 de freelance"\n\n' +
+      '💵 *Consultar Finanças:*\n' +
+      '   • "Meu saldo" - Ver balanço geral\n' +
+      '   • "Minhas transações" - Listar últimas 10\n' +
+      '   • "Histórico" - Ver histórico completo\n\n' +
+      '📋 *Contas Pendentes:*\n' +
+      '   • "Pendentes" - Ver contas a pagar\n' +
+      '   • "Pagar 3" - Pagar item #3 da lista\n' +
+      '   • "Ver pendentes" - Listar pendências\n\n' +
+      '✅ *Confirmações:*\n' +
+      '   • "Pendentes de confirmação" - Ver aguardando\n' +
+      '   • "Sim" ou "Não" - Confirmar/Rejeitar\n\n' +
       '🏦 *Gerenciar Perfil:*\n' +
-      '   • "Meus perfis" - Ver todas os perfis\n' +
-      '   • "Mudar Perfil" - Trocar perfil\n' +
-      '   • "Perfil" ou "meu perfil" - Ver conta atual\n' +
-      '   • "Usar Pessoal" - Trocar diretamente para Pessoal\n\n' +
-      '💳 *Pagamentos:*\n' +
-      '   • "Pagar fatura" - Pagar fatura do cartão\n' +
-      '   • "Quitar conta" - Marcar conta como paga\n\n' +
+      '   • "Meus perfis" - Ver todas as contas\n' +
+      '   • "Perfil" ou "conta ativa" - Ver conta atual\n' +
+      '   • "Usar Pessoal" - Trocar para conta Pessoal\n\n' +
       '📷 *Nota Fiscal:*\n' +
       '   • Tire uma foto e envie\n' +
       '   • Detectamos valores automaticamente\n\n' +
@@ -513,9 +605,9 @@ export class IntentAnalyzerService {
       '   • Grave descrevendo a transação\n' +
       '   • Ex: "Gastei 40 reais no posto"\n\n' +
       '💡 *Dicas:*\n' +
-      '   • Seja específico com valores\n' +
-      '   • Mencione a categoria (mercado, transporte, etc)\n' +
-      '   • Use linguagem natural e simples'
+      '   • Use linguagem natural\n' +
+      '   • Referências numéricas funcionam em listas\n' +
+      '   • Envie fotos e áudios para registrar rápido'
     );
   }
 

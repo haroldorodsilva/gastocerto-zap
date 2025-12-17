@@ -454,6 +454,43 @@ export class TransactionRegistrationService {
         };
       }
 
+      // 3.1. Verificar se categoria é vaga/genérica E se não há descrição clara
+      const vagueCategories = [
+        'outros',
+        'diversos',
+        'geral',
+        'sem categoria',
+        'indefinido',
+        'não identificado',
+        'desconhecido',
+      ];
+
+      const categoryIsVague =
+        !extractedData.category ||
+        vagueCategories.some((vague) => extractedData.category?.toLowerCase().includes(vague));
+
+      const descriptionIsEmpty =
+        !extractedData.description || extractedData.description.trim().length < 5;
+
+      // Se categoria vaga E sem descrição, perguntar ao usuário
+      if (categoryIsVague && descriptionIsEmpty && extractedData.confidence < 0.7) {
+        this.logger.log(
+          `❓ Categoria vaga (${extractedData.category}) e sem descrição - pedindo esclarecimento`,
+        );
+
+        const questionMessage =
+          '❓ *Consegui extrair o valor, mas preciso de mais informações!*\n\n' +
+          `💵 *Valor encontrado:* R$ ${extractedData.amount.toFixed(2)}\n\n` +
+          '📝 *Poderia me dizer sobre o que foi esse gasto?*\n\n' +
+          '_Exemplo: "Foi no supermercado" ou "Conta de luz"_';
+
+        return {
+          success: false,
+          message: questionMessage,
+          requiresConfirmation: false,
+        };
+      }
+
       // 4. Sempre pedir confirmação para imagens (mesmo com alta confiança)
       return await this.createConfirmation(phoneNumber, extractedData, messageId, user, platform);
     } catch (error) {
@@ -483,11 +520,25 @@ export class TransactionRegistrationService {
 
       // 1. Transcrever áudio
       this.logger.log(`🤖 Transcrevendo áudio...`);
+      const startTime = Date.now();
       const transcription = await this.aiFactory.transcribeAudio(audioBuffer, mimeType);
+      const responseTime = Date.now() - startTime;
 
       this.logger.log(`📝 Transcrição: "${transcription}"`);
 
-      // 2. Processar como texto
+      // ✅ Registrar uso de IA para transcrição de áudio
+      await this.logAIUsage({
+        phoneNumber,
+        userId: user.id,
+        operation: 'AUDIO_TRANSCRIPTION',
+        inputType: 'AUDIO',
+        inputText: `Audio: ${mimeType} (${audioBuffer.length} bytes)`,
+        responseTimeMs: responseTime,
+        mimeType,
+        imageSize: audioBuffer.length, // Reutilizar campo para tamanho do áudio
+      });
+
+      // 2. Processar como texto (que vai registrar outro uso de IA se necessário)
       return await this.processTextTransaction(
         phoneNumber,
         transcription,

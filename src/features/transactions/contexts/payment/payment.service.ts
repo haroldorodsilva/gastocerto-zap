@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCache } from '@prisma/client';
 import { AccountManagementService } from '@features/accounts/account-management.service';
+import { ListContextService, ListContextItem } from '../../list-context.service';
 
 export interface PaymentRequest {
   paymentType: 'credit_card' | 'bill' | 'transaction_id' | 'pending_list';
@@ -26,6 +27,7 @@ export class TransactionPaymentService {
   constructor(
     private readonly gastoCertoApi: GastoCertoApiService,
     private readonly accountManagement: AccountManagementService,
+    private readonly listContext: ListContextService,
   ) {}
 
   /**
@@ -161,6 +163,58 @@ export class TransactionPaymentService {
   }
 
   /**
+   * Paga item da lista por número (contexto)
+   */
+  async payItemByNumber(
+    user: UserCache,
+    itemNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      this.logger.log(`🔢 Tentando pagar item #${itemNumber} para ${user.phoneNumber}`);
+
+      // Buscar item do contexto
+      const result = this.listContext.getItemByNumber(user.phoneNumber, itemNumber);
+
+      if (!result.found || !result.item) {
+        return {
+          success: false,
+          message: result.message || '❌ Item não encontrado.',
+        };
+      }
+
+      const item = result.item;
+
+      // Verificar tipo do item
+      if (item.type !== 'payment') {
+        return {
+          success: false,
+          message:
+            `❌ O item #${itemNumber} não é uma conta pendente de pagamento.\n\n` +
+            `É do tipo: ${item.type}\n\n` +
+            `Use *"ver pendentes"* para listar contas que podem ser pagas.`,
+        };
+      }
+
+      // Pagar a transação
+      this.logger.log(`💰 Pagando transação ${item.id} (${item.description})`);
+      const payResult = await this.paySpecificTransaction(user, item.id);
+
+      // Limpar contexto após pagamento bem-sucedido
+      if (payResult.success) {
+        this.listContext.clearContext(user.phoneNumber);
+      }
+
+      return payResult;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao pagar item por número:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao processar pagamento.',
+      };
+    }
+  }
+
+  /**
    * Paga transação específica por ID
    */
   private async paySpecificTransaction(
@@ -276,6 +330,21 @@ export class TransactionPaymentService {
       }
 
       const pending = result.data;
+
+      // ✅ ARMAZENAR CONTEXTO DE LISTA
+      const contextItems: ListContextItem[] = pending.items.map((item) => ({
+        id: item.id,
+        type: 'payment' as const,
+        description: item.description || item.category,
+        amount: item.amount,
+        category: item.category,
+        metadata: {
+          dueDate: item.dueDate,
+        },
+      }));
+
+      this.listContext.setListContext(user.phoneNumber, 'pending_payments', contextItems);
+
       let message = `📋 *Contas Pendentes*\n\n`;
       message += `💵 *Total:* R$ ${pending.total.toFixed(2)}\n`;
       message += `📊 *Quantidade:* ${pending.items.length}\n\n`;
@@ -291,7 +360,7 @@ export class TransactionPaymentService {
         message += `   🆔 ID: ${item.id}\n\n`;
       });
 
-      message += '\n💡 _Para pagar, responda com o número ou ID da conta._';
+      message += '\n💡 _Para pagar, responda: *"pagar 1"* ou *"pagar 5"*_';
 
       return {
         success: true,

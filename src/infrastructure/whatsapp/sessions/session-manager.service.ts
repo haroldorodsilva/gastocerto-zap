@@ -20,6 +20,8 @@ interface SessionInfo {
   qrTimer?: NodeJS.Timeout;
   restartAttempts: number;
   restartTimer?: NodeJS.Timeout;
+  error515Attempts?: number; // Tentativas específicas para erro 515
+  lastError515?: Date; // Última ocorrência do erro 515
 }
 
 /**
@@ -36,6 +38,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY_MS = 5000;
   private readonly RECONNECT_DELAY_515_MS = 300000; // 5 minutos para erro 515 (ban temporário)
+  private readonly MAX_ERROR_515_ATTEMPTS = 10; // Mais tentativas para erro 515 (2-24h)
   private readonly QR_TIMEOUT_MS = 120000; // 2 minutes
 
   constructor(
@@ -318,6 +321,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     if (sessionInfo) {
       sessionInfo.isConnected = true;
       sessionInfo.restartAttempts = 0;
+      sessionInfo.error515Attempts = 0; // Reset contador de erro 515 ao conectar
       sessionInfo.lastActivity = new Date();
 
       // Clear QR timer
@@ -397,33 +401,63 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     if (isError515) {
       this.logger.warn(`⚠️  WhatsApp error 515 detected for ${sessionId} - Temporary ban detected`);
 
+      if (!sessionInfo) {
+        this.logger.error(`Session ${sessionId} not found in memory for error 515 handling`);
+        return;
+      }
+
       // IMPORTANTE: Erro 515 É TEMPORÁRIO - NÃO limpar credenciais!
       // As credenciais são válidas, apenas aguardar e tentar reconectar
       this.logger.log(`🕒 Keeping credentials intact - error 515 is temporary`);
 
-      await this.stopSession(sessionId);
+      // Incrementar contador de tentativas específico para erro 515
+      sessionInfo.error515Attempts = (sessionInfo.error515Attempts || 0) + 1;
+      sessionInfo.lastError515 = new Date();
+      sessionInfo.isConnected = false;
+
+      // Verificar se excedeu o limite de tentativas para erro 515
+      if (sessionInfo.error515Attempts > this.MAX_ERROR_515_ATTEMPTS) {
+        this.logger.error(
+          `❌ Max error 515 attempts (${this.MAX_ERROR_515_ATTEMPTS}) reached for ${sessionId}`,
+        );
+        await this.stopSession(sessionId);
+        await this.authStateManager.clearAuthState(sessionId);
+        this.eventEmitter.emit('session.error.515.max_attempts', {
+          sessionId,
+          message: `Máximo de tentativas para erro 515 atingido. Por favor, reconecte manualmente.`,
+        });
+        return;
+      }
+
+      // Apenas desconectar o provider, MAS MANTER sessionInfo no Map
+      try {
+        await sessionInfo.provider.disconnect();
+      } catch (error) {
+        this.logger.warn(`Error disconnecting provider for ${sessionId}: ${error.message}`);
+      }
+
+      // Atualizar status no banco
       await this.prisma.whatsAppSession.update({
         where: { sessionId },
         data: {
-          isActive: false,
-          status: SessionStatus.DISCONNECTED, // ← DISCONNECTED ao invés de ERROR
+          status: SessionStatus.DISCONNECTED,
+          lastSeen: new Date(),
         },
       });
 
-      this.logger.log(`⏰ WhatsApp temporary ban detected - Will retry after extended delay`);
-      this.logger.log(`✅ Credentials preserved - No need to scan QR again`);
+      this.logger.log(
+        `⏰ WhatsApp temporary ban - Attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}`,
+      );
+      this.logger.log(`✅ Credentials preserved - Will retry with extended delay`);
 
       // Emit event
       this.eventEmitter.emit('session.error.515', {
         sessionId,
-        message:
-          'WhatsApp error 515: Temporary ban detected. Credentials preserved. Retrying with extended delay...',
+        message: `WhatsApp error 515: Temporary ban detected (attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}). Credentials preserved. Retrying with extended delay...`,
       });
 
-      // ✅ PERMITIR RETRY com delay de 5 minutos
-      if (sessionInfo) {
-        await this.scheduleReconnect(sessionId, true, 'error_515');
-      }
+      // ✅ AGENDAR RETRY com delay de 5 minutos (sessionInfo ainda está no Map!)
+      await this.scheduleReconnect(sessionId, true, 'error_515');
       return;
     }
 
@@ -495,36 +529,77 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
 
   private async scheduleReconnect(sessionId: string, isError515: boolean = false, reason?: string) {
     const sessionInfo = this.sessions.get(sessionId);
-    if (!sessionInfo) return;
-
-    if (sessionInfo.restartAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-      this.logger.error(
-        `❌ Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached for session: ${sessionId}`,
-      );
-      await this.stopSession(sessionId);
+    if (!sessionInfo) {
+      this.logger.warn(`Cannot schedule reconnect for ${sessionId}: session not found in memory`);
       return;
     }
 
-    sessionInfo.restartAttempts++;
+    // Limpar timer anterior se existir
+    if (sessionInfo.restartTimer) {
+      clearTimeout(sessionInfo.restartTimer);
+      sessionInfo.restartTimer = undefined;
+    }
 
-    // Use longer delay for WhatsApp error 515 (temporary ban)
-    const baseDelay = isError515 ? this.RECONNECT_DELAY_515_MS : this.RECONNECT_DELAY_MS;
-    const delay = baseDelay * sessionInfo.restartAttempts;
+    // Para erro 515, usar contador e limite específicos
+    if (isError515) {
+      const attempts = sessionInfo.error515Attempts || 0;
+      const maxAttempts = this.MAX_ERROR_515_ATTEMPTS;
 
-    const delayMinutes = Math.floor(delay / 60000);
-    const delaySeconds = Math.floor((delay % 60000) / 1000);
-    const delayStr = delayMinutes > 0 ? `${delayMinutes}m ${delaySeconds}s` : `${delaySeconds}s`;
-
-    this.logger.log(
-      `🔄 Scheduling reconnect for session ${sessionId} (attempt ${sessionInfo.restartAttempts}/${this.MAX_RECONNECT_ATTEMPTS}) in ${delayStr}${isError515 ? ' [Error 515 - Extended delay]' : ''}${reason ? ` - Reason: ${reason}` : ''}`,
-    );
-
-    sessionInfo.restartTimer = setTimeout(async () => {
-      try {
-        await this.restartSession(sessionId);
-      } catch (error) {
-        this.logger.error(`Reconnect failed for session ${sessionId}: ${error.message}`);
+      if (attempts >= maxAttempts) {
+        this.logger.error(
+          `❌ Max error 515 attempts (${maxAttempts}) reached for session: ${sessionId}`,
+        );
+        await this.stopSession(sessionId);
+        await this.authStateManager.clearAuthState(sessionId);
+        return;
       }
-    }, delay);
+
+      // Delay progressivo: 5min, 10min, 15min, etc.
+      const delay = this.RECONNECT_DELAY_515_MS * attempts;
+      const delayMinutes = Math.floor(delay / 60000);
+      const delaySeconds = Math.floor((delay % 60000) / 1000);
+      const delayStr = delayMinutes > 0 ? `${delayMinutes}m ${delaySeconds}s` : `${delaySeconds}s`;
+
+      this.logger.log(
+        `🔄 Scheduling reconnect for error 515 - ${sessionId} (attempt ${attempts}/${maxAttempts}) in ${delayStr}`,
+      );
+
+      sessionInfo.restartTimer = setTimeout(async () => {
+        try {
+          this.logger.log(`🔄 Attempting to restart session ${sessionId} after error 515...`);
+          await this.restartSession(sessionId);
+        } catch (error) {
+          this.logger.error(`Reconnect failed for session ${sessionId}: ${error.message}`);
+        }
+      }, delay);
+    } else {
+      // Lógica normal para outros erros
+      if (sessionInfo.restartAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+        this.logger.error(
+          `❌ Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached for session: ${sessionId}`,
+        );
+        await this.stopSession(sessionId);
+        return;
+      }
+
+      sessionInfo.restartAttempts++;
+
+      const delay = this.RECONNECT_DELAY_MS * sessionInfo.restartAttempts;
+      const delayMinutes = Math.floor(delay / 60000);
+      const delaySeconds = Math.floor((delay % 60000) / 1000);
+      const delayStr = delayMinutes > 0 ? `${delayMinutes}m ${delaySeconds}s` : `${delaySeconds}s`;
+
+      this.logger.log(
+        `🔄 Scheduling reconnect for session ${sessionId} (attempt ${sessionInfo.restartAttempts}/${this.MAX_RECONNECT_ATTEMPTS}) in ${delayStr}${reason ? ` - Reason: ${reason}` : ''}`,
+      );
+
+      sessionInfo.restartTimer = setTimeout(async () => {
+        try {
+          await this.restartSession(sessionId);
+        } catch (error) {
+          this.logger.error(`Reconnect failed for session ${sessionId}: ${error.message}`);
+        }
+      }, delay);
+    }
   }
 }

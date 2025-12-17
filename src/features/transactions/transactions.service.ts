@@ -9,6 +9,7 @@ import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
 import { TransactionConfirmationService } from './transaction-confirmation.service';
+import { ListContextService } from './list-context.service';
 
 export interface ProcessMessageResult {
   success: boolean;
@@ -47,6 +48,7 @@ export class TransactionsService {
     private readonly paymentService: TransactionPaymentService,
     private readonly summaryService: TransactionSummaryService,
     private readonly confirmationService: TransactionConfirmationService,
+    private readonly listContext: ListContextService,
   ) {
     this.logger.log('🎯 TransactionsService (Orchestrator) inicializado');
   }
@@ -118,6 +120,34 @@ export class TransactionsService {
         };
       }
 
+      // 1.5. VERIFICAR REFERÊNCIA NUMÉRICA DE LISTA ("pagar 5", "pagar item 3")
+      const listReference = this.detectListReference(text);
+      if (listReference.found && listReference.number) {
+        this.logger.log(
+          `🔢 Referência de lista detectada: "${listReference.action}" #${listReference.number}`,
+        );
+
+        // Processar ação baseada no contexto da lista
+        const result = await this.processListReference(
+          user,
+          listReference.action,
+          listReference.number,
+          platform,
+        );
+
+        if (result) {
+          this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
+            success: result.success,
+          });
+
+          return {
+            success: result.success,
+            message: result.message,
+            requiresConfirmation: false,
+          };
+        }
+      }
+
       // 2. Analisar intenção com NLP
       const intentResult = await this.intentAnalyzer.analyzeIntent(text, phoneNumber, user.id);
 
@@ -132,7 +162,15 @@ export class TransactionsService {
         this.logger.log(`⏸️  Usuário tem confirmação pendente - bloqueando novas transações`);
 
         // Permitir apenas: confirmação (sim/não) ou consultas
-        const allowedIntents = ['CONFIRMATION_RESPONSE', 'LIST_PENDING', 'HELP', 'GREETING'];
+        const allowedIntents = [
+          'CONFIRMATION_RESPONSE',
+          'LIST_PENDING',
+          'LIST_PENDING_PAYMENTS',
+          'CHECK_BALANCE',
+          'LIST_TRANSACTIONS',
+          'HELP',
+          'GREETING',
+        ];
 
         if (!allowedIntents.includes(intentResult.intent)) {
           const blockMessage =
@@ -266,7 +304,7 @@ export class TransactionsService {
         };
       }
 
-      // 3e. Listar transações pendentes
+      // 3e. Listar transações pendentes de CONFIRMAÇÃO
       if (intentResult.intent === 'LIST_PENDING') {
         this.logger.log(`✅ Delegando para listPendingConfirmations`);
         const listResult = await this.listPendingConfirmations(phoneNumber);
@@ -282,7 +320,79 @@ export class TransactionsService {
         };
       }
 
-      // 3f. Registro de transação (padrão)
+      // 3e.1. Listar contas pendentes de PAGAMENTO
+      if (intentResult.intent === 'LIST_PENDING_PAYMENTS') {
+        this.logger.log(`✅ Delegando para TransactionPaymentService.listPendingPayments`);
+        const result = await this.paymentService.processPayment(user, {
+          paymentType: 'pending_list',
+        });
+
+        this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3e.2. Pagar fatura/conta (PAY_BILL)
+      if (intentResult.intent === 'PAY_BILL') {
+        this.logger.log(`✅ Delegando para TransactionPaymentService.processPayment`);
+        // Por padrão, lista pendentes (usuário pode escolher qual pagar)
+        const result = await this.paymentService.processPayment(user, {
+          paymentType: 'pending_list',
+        });
+
+        this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3f. Consultar saldo
+      if (intentResult.intent === 'CHECK_BALANCE') {
+        this.logger.log(`✅ Delegando para TransactionSummaryService.generateBalanceSummary`);
+        const result = await this.summaryService.generateSummary(user, { summaryType: 'balance' });
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g. Listar transações
+      if (intentResult.intent === 'LIST_TRANSACTIONS') {
+        this.logger.log(`✅ Delegando para TransactionListingService.listTransactions`);
+        const result = await this.listingService.listTransactions(user, {
+          period: 'month', // Padrão: mês atual
+          limit: 10, // Mostrar últimas 10
+        });
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3h. Registro de transação (padrão)
       this.logger.log(`✅ Delegando para TransactionRegistrationService`);
       const result = await this.registrationService.processTextTransaction(
         phoneNumber,
@@ -359,6 +469,17 @@ export class TransactionsService {
           confirmationId: hasPending.id,
         };
       }
+
+      // ✨ FEEDBACK IMEDIATO: Avisar que está analisando a imagem
+      const processingMessage =
+        '🖼️ *Analisando sua imagem...*\n\n' +
+        '🤖 Estou extraindo as informações da nota fiscal.\n' +
+        '_Isso pode levar alguns segundos._';
+
+      this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
+        processing: true,
+        type: 'image',
+      });
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processImageTransaction(
@@ -437,6 +558,17 @@ export class TransactionsService {
           confirmationId: hasPending.id,
         };
       }
+
+      // ✨ FEEDBACK IMEDIATO: Avisar que está transcrevendo o áudio
+      const processingMessage =
+        '🎤 *Processando seu áudio...*\n\n' +
+        '🤖 Estou transcrevendo e analisando a mensagem.\n' +
+        '_Aguarde um momento._';
+
+      this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
+        processing: true,
+        type: 'audio',
+      });
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processAudioTransaction(
@@ -662,6 +794,105 @@ export class TransactionsService {
       return {
         success: false,
         message: '❌ Erro ao gerar resumo.',
+      };
+    }
+  }
+
+  /**
+   * Detecta referência numérica em lista
+   * Exemplos: "pagar 5", "pagar item 3", "pagar número 2", "5", "item 1"
+   */
+  private detectListReference(text: string): {
+    found: boolean;
+    action?: string;
+    number?: number;
+  } {
+    const normalized = text.toLowerCase().trim();
+
+    // Padrões de ação + número
+    const patterns = [
+      /(?:pagar|paga|quitar|marcar)\s+(?:o\s+)?(?:item\s+)?(?:n[uú]mero\s+)?(\d+)/i,
+      /(?:pagar|paga|quitar|marcar)\s+(\d+)/i,
+      /^(\d+)$/, // Apenas número
+    ];
+
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (match) {
+        const number = parseInt(match[1], 10);
+
+        // Determinar ação
+        let action = 'pay'; // Padrão: pagar
+        if (normalized.includes('pagar') || normalized.includes('paga') || normalized.includes('quitar')) {
+          action = 'pay';
+        }
+
+        return {
+          found: true,
+          action,
+          number,
+        };
+      }
+    }
+
+    return { found: false };
+  }
+
+  /**
+   * Processa referência de lista baseado no contexto
+   */
+  private async processListReference(
+    user: UserCache,
+    action: string,
+    itemNumber: number,
+    platform: string,
+  ): Promise<{ success: boolean; message: string } | null> {
+    try {
+      // Buscar contexto do usuário
+      const context = this.listContext.getContext(user.phoneNumber);
+
+      if (!context) {
+        // Sem contexto - retornar null para processar normalmente
+        return null;
+      }
+
+      this.logger.log(
+        `📝 Contexto encontrado: ${context.listType} com ${context.items.length} itens`,
+      );
+
+      // Processar baseado no tipo de lista
+      switch (context.listType) {
+        case 'pending_payments':
+          // Pagar item da lista de pendentes
+          if (action === 'pay') {
+            return await this.paymentService.payItemByNumber(user, itemNumber);
+          }
+          break;
+
+        case 'transactions':
+          // Futura implementação: ações em transações da lista
+          return {
+            success: false,
+            message:
+              '⚠️ Ação em transações ainda não implementada.\n\n' +
+              'Use *"ver pendentes"* para listar contas que podem ser pagas.',
+          };
+
+        case 'confirmations':
+          // Futura implementação: confirmar item específico da lista
+          return {
+            success: false,
+            message:
+              '⚠️ Para confirmar transações, use *"sim"* ou *"não"*.',
+          };
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error('Erro ao processar referência de lista:', error);
+      return {
+        success: false,
+        message: '❌ Erro ao processar sua solicitação.',
       };
     }
   }

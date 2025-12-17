@@ -291,7 +291,8 @@ Verifique a `REDIS_URL` e se o resource Redis está rodando.
 ### WhatsApp desconecta com erro 515
 
 - **Causa**: Ban temporário do WhatsApp (2-24 horas)
-- **Solução**: Aguarde e reconecte. O sistema preserva as credenciais automaticamente.
+- **Solução Automática**: O sistema agora reconecta automaticamente com backoff exponencial (5min, 10min, 15min...) até 10 tentativas. As credenciais são preservadas automaticamente.
+- **Comportamento**: A sessão permanece em memória e tenta reconectar periodicamente sem precisar escanear o QR code novamente.
 - **Prevenção**: Evite múltiplas conexões simultâneas do mesmo número.
 
 ### Migrations não aplicadas

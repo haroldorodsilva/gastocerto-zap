@@ -64,9 +64,11 @@ Sistema unificado que processa mensagens de **WhatsApp** (via Baileys) e **Teleg
 │    Intenções detectadas:                                    │
 │    • REGISTER_TRANSACTION → Registrar gasto/receita         │
 │    • CONFIRMATION_RESPONSE → Sim/Não para confirmação       │
-│    • QUERY_BALANCE → "quanto gastei", "meu saldo"          │
-│    • LIST_TRANSACTIONS → "minhas transações"                │
-│    • PAYMENT → "paguei a conta de luz"                     │
+│    • CHECK_BALANCE → "saldo", "quanto tenho"               │
+│    • LIST_TRANSACTIONS → "minhas transações", "histórico"  │
+│    • PAY_BILL → "pagar fatura", "quitar conta"            │
+│    • LIST_ACCOUNTS → "meus perfis", "minhas contas"        │
+│    • SWITCH_ACCOUNT → "mudar perfil", "usar pessoal"       │
 │    • HELP → Pedir ajuda                                     │
 │    • GREETING → Cumprimentos                                │
 │                                                              │
@@ -77,11 +79,13 @@ Sistema unificado que processa mensagens de **WhatsApp** (via Baileys) e **Teleg
 ┌─────────────────────────────────────────────────────────────┐
 │ 6. ROTEAMENTO POR INTENÇÃO                                  │
 │                                                              │
-│    REGISTER_TRANSACTION → TransactionsService.processText   │
-│    CONFIRMATION_RESPONSE → TransactionsService.confirm      │
-│    QUERY_BALANCE → TransactionsService.getBalance           │
-│    LIST_TRANSACTIONS → TransactionsService.list             │
-│    PAYMENT → TransactionsService.processPayment             │
+│    REGISTER_TRANSACTION → TransactionRegistrationService    │
+│    CONFIRMATION_RESPONSE → TransactionConfirmationService   │
+│    CHECK_BALANCE → TransactionSummaryService (saldo real)  │
+│    LIST_TRANSACTIONS → TransactionListingService (API)      │
+│    PAY_BILL → TransactionPaymentService                     │
+│    LIST_ACCOUNTS → AccountManagementService                 │
+│    SWITCH_ACCOUNT → AccountManagementService                │
 │    HELP/GREETING → Resposta direta (sem IA)                 │
 └────────────────────┬────────────────────────────────────────┘
                      │
@@ -224,30 +228,158 @@ Sistema unificado que processa mensagens de **WhatsApp** (via Baileys) e **Teleg
 ✅ Transação confirmada e enviada para a API!
 ```
 
-### Exemplo 3: Consulta de Saldo (Ultra Rápido)
+### Exemplo 3: Consulta de Saldo (Agora Funcional!)
 
 ```
 👤 "Meu saldo"
 
 🔐 Segurança: ✅ Pass (15ms)
-🧠 Intent: QUERY_BALANCE (cache hit - 30ms)
-💾 Redis: Saldo cacheado (50ms)
+🧠 Intent: CHECK_BALANCE (90% confiança)
+🌐 API: Buscando dados da GastoCerto API (120ms)
 
-✅ RESPOSTA (95ms total):
+✅ RESPOSTA (135ms total):
 ━━━━━━━━━━━━━━━━━━━━
-💰 *Seu saldo atual*
+💰 *Balanço Geral*
 
-🏦 Saldo: R$ 3.247,85
+📅 Atualizado: 17/12/2025
 
-📊 *Resumo de Dezembro/2025*
-📉 Despesas: R$ 2.450,30
-📈 Receitas: R$ 5.698,15
+───────────────────
 
-💵 Resultado: +R$ 3.247,85
+💵 *Receitas Totais:* R$ 5.698,15
+💸 *Despesas Totais:* R$ 2.450,30
+
+✅ *Saldo:* R$ 3.247,85
+
+✨ _Ótimo! Você está economizando. Continue assim!_
 ━━━━━━━━━━━━━━━━━━━━
 ```
 
-### Exemplo 4: Quick Response (Instantâneo)
+### Exemplo 3.1: Listagem de Transações
+
+```
+👤 "minhas transações"
+
+🔐 Segurança: ✅ Pass
+🧠 Intent: LIST_TRANSACTIONS (90% confiança)
+🌐 API: Listando transações do mês (150ms)
+
+✅ RESPOSTA:
+━━━━━━━━━━━━━━━━━━━━
+📋 *Transações*
+
+💵 *Total:* 8 transações
+💸 *Gastos:* R$ 450,00
+💰 *Receitas:* R$ 1.000,00
+
+───────────────────
+
+1. 💸 *R$ 50,00*
+   📂 Alimentação > Supermercado
+   📅 15/12
+
+2. 💸 *R$ 120,00*
+   📂 Transporte > Combustível
+   📅 14/12
+
+3. 💰 *R$ 1.000,00*
+   📂 Salário
+   📅 10/12
+
+_Mostrando últimas 10 transações_
+━━━━━━━━━━━━━━━━━━━━
+```
+
+### Exemplo 4: Processamento de Imagem (Com Feedback!)
+
+```
+👤 [Envia foto de nota fiscal]
+
+🔐 Segurança: ✅ Pass (10ms)
+📤 FEEDBACK IMEDIATO (50ms):
+━━━━━━━━━━━━━━━━━━━━
+🖼️ *Analisando sua imagem...*
+
+🤖 Estou extraindo as informações da nota fiscal.
+_Isso pode levar alguns segundos._
+━━━━━━━━━━━━━━━━━━━━
+
+🤖 IA: Analisando imagem (800ms)
+📋 Extraído: R$ 45.50 - Supermercado
+
+✅ RESPOSTA FINAL (850ms total):
+━━━━━━━━━━━━━━━━━━━━
+📋 *Confirme a transação:*
+
+💸 *Valor:* R$ 45,50
+📂 *Categoria:* Alimentação > Supermercado
+📅 *Data:* 17/12/2025
+
+✅ Está correto? Digite:
+• *"sim"* para confirmar
+• *"não"* para cancelar
+
+⏱️ Expira em 24 horas
+━━━━━━━━━━━━━━━━━━━━
+```
+
+### Exemplo 4.1: Imagem Sem Categoria Clara
+
+```
+👤 [Envia foto de recibo genérico]
+
+📤 FEEDBACK IMEDIATO:
+🖼️ *Analisando sua imagem...*
+🤖 Estou extraindo as informações da nota fiscal.
+
+🤖 IA: Extraído valor mas categoria vaga (750ms)
+
+✅ RESPOSTA:
+━━━━━━━━━━━━━━━━━━━━
+❓ *Consegui extrair o valor, mas preciso de mais informações!*
+
+💵 *Valor encontrado:* R$ 89,90
+
+📝 *Poderia me dizer sobre o que foi esse gasto?*
+
+_Exemplo: "Foi no supermercado" ou "Conta de luz"_
+━━━━━━━━━━━━━━━━━━━━
+
+👤 "Foi na farmácia"
+
+✅ Agora sim! Criando transação com categoria correta.
+```
+
+### Exemplo 5: Processamento de Áudio (Com Feedback!)
+
+```
+👤 [Envia áudio: "Gastei 30 reais de uber"]
+
+🔐 Segurança: ✅ Pass (10ms)
+📤 FEEDBACK IMEDIATO (40ms):
+━━━━━━━━━━━━━━━━━━━━
+🎤 *Processando seu áudio...*
+
+🤖 Estou transcrevendo e analisando a mensagem.
+_Aguarde um momento._
+━━━━━━━━━━━━━━━━━━━━
+
+🤖 IA: Transcrevendo (600ms)
+📝 Transcrição: "Gastei 30 reais de uber"
+🧠 Processando como texto (200ms)
+
+✅ RESPOSTA FINAL (840ms total):
+━━━━━━━━━━━━━━━━━━━━
+✅ *Gasto registrado automaticamente!*
+
+💸 *Valor:* R$ 30,00
+📂 *Categoria:* Transporte > Aplicativo
+📅 *Data:* 17/12/2025
+
+🚀 Registrado automaticamente (confiança: 95%)
+━━━━━━━━━━━━━━━━━━━━
+```
+
+### Exemplo 6: Quick Response (Instantâneo)
 
 ```
 👤 "Oi"
