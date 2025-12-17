@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCache } from '@prisma/client';
 import { AccountManagementService } from '@features/accounts/account-management.service';
+import { formatCurrency, formatCurrencyFromCents } from '@/utils/currency';
+import { ListTransactionsResponseDto } from '@/shared/types';
 
 export interface ListingFilters {
   period?: 'today' | 'week' | 'month' | 'last_month' | 'custom';
@@ -87,15 +89,18 @@ export class TransactionListingService {
 
       // 1. Calcular datas baseado no período
       const dateRange = this.calculateDateRange(filters.period, filters.startDate, filters.endDate);
-
-      // 2. Buscar transações na API
-      const result = await this.gastoCertoApi.listTransactions(user.gastoCertoId, {
+      const filter = {
         accountId: user.activeAccountId,
         monthYear: `${dateRange.startDate.substring(0, 7)}`,
         type: filters.type,
         categoryId: filters.category,
-        limit: filters.limit || 20,
-      });
+        limit: filters.limit || 100, //TODO: futuramente ver como paginar os registros por mensagem
+      };
+
+      // 2. Buscar transações na API
+
+      const result = await this.gastoCertoApi.listTransactions(user.gastoCertoId, filter);
+      this.logger.log(`📋 [listTransactions] Resultado da API: ${JSON.stringify(result)}`);
 
       if (!result.success) {
         return {
@@ -104,7 +109,7 @@ export class TransactionListingService {
         };
       }
 
-      const transactions = result.transactions || [];
+      const transactions = result.data?.data || [];
 
       // DEBUG: Log para ver estrutura das transações retornadas
       if (transactions.length > 0) {
@@ -121,12 +126,11 @@ export class TransactionListingService {
       }
 
       // 4. Formatar mensagem de listagem
-      const message = this.formatTransactionList(transactions, filters);
+      const message = this.formatTransactionList(result, filters);
 
       return {
         success: true,
         message,
-        transactions,
       };
     } catch (error) {
       this.logger.error(`❌ Erro ao listar transações:`, error);
@@ -196,10 +200,13 @@ export class TransactionListingService {
    * Formata lista de transações para exibição
    */
   private formatTransactionList(
-    transactions: TransactionListItem[],
+    data: ListTransactionsResponseDto,
     filters: ListingFilters,
   ): string {
     const { type, category, period } = filters;
+
+    const transactions = data.data?.data || [];
+    const resume = data.data?.resume;
 
     // Cabeçalho
     let message = '📋 *Transações*\n\n';
@@ -225,76 +232,69 @@ export class TransactionListingService {
       message += '\n';
     }
 
-    // Calcular totais (valores vêm em centavos)
-    const totalExpenses = transactions
-      .filter((t) => t.type === 'EXPENSES')
-      .reduce((sum, t) => sum + t.amount, 0) / 100;
-
-    const totalIncome = transactions
-      .filter((t) => t.type === 'INCOME')
-      .reduce((sum, t) => sum + t.amount, 0) / 100;
-
-    // Resumo
-    message += `💵 *Total:* ${transactions.length} transações\n`;
-    if (totalExpenses > 0) {
-      message += `💸 *Gastos:* R$ ${totalExpenses.toFixed(2)}\n`;
+    // Resumo financeiro
+    if (resume) {
+      message += `💵 *Total:* ${transactions.length} transação${transactions.length !== 1 ? 'ões' : ''}\n`;
+      message += `💸 *Gastos:* R$ ${formatCurrencyFromCents(resume.expenseTotal || 0)}\n`;
+      message += `💰 *Receitas:* R$ ${formatCurrencyFromCents(resume.incomeTotal || 0)}\n`;
+      message += `📊 *Balanço:* R$ ${formatCurrencyFromCents(resume.finalBalance || 0)}\n`;
+      message += '\n';
     }
-    if (totalIncome > 0) {
-      message += `💰 *Receitas:* R$ ${totalIncome.toFixed(2)}\n`;
-    }
-    message += '\n';
 
     // Lista de transações
     message += '───────────────────\n\n';
 
     transactions.slice(0, filters.limit || 20).forEach((t, index) => {
-      const emoji = t.type === 'EXPENSES' ? '💸' : '💰';
-      
-      // Converter de centavos para reais
-      const amountInReais = t.amount / 100;
-      
-      // Formatar data
-      const date = new Date(t.date).toLocaleDateString('pt-BR', {
-        day: '2-digit',
-        month: '2-digit',
-      });
+      // 1. Definir label (description > subcategory > category)
+      let label = t.description;
+      if (!label) {
+        label = t.subCategory?.name || t.category?.name || 'Sem descrição';
+      }
 
-      message += `${index + 1}. ${emoji} *R$ ${amountInReais.toFixed(2)}*\n`;
-      message += `   📂 ${t.category}`;
-      if (t.subCategory) {
-        message += ` > ${t.subCategory}`;
+      // 2. Adicionar parcelamento ao label se existir
+      if (t.installment && t.installmentTotal && t.installmentTotal > 1) {
+        label = `${label} (${t.installment}/${t.installmentTotal})`;
       }
-      if (t.description) {
-        message += ` • ${t.description}`;
+
+      // 3. Formatar valor com cor (emoji como indicador visual)
+      const amountInReais = t.amount / 100;
+      const typeEmoji = t.type === 'EXPENSES' ? '🔴' : '🟢';
+      const amountFormatted = formatCurrency(amountInReais);
+
+      // 4. Header: Label + Valor
+      message += `${index + 1}. ${label}\n`;
+      message += `   ${typeEmoji} *R$ ${amountFormatted}*\n`;
+
+      // 5. Categoria/Subcategoria
+      const categoryText = t.subCategory?.name || t.category?.name || 'Sem categoria';
+      message += `   📂 ${categoryText}`;
+
+      // 6. Status e Tipo
+      const statusBadges = this.getStatusBadges(t);
+      if (statusBadges) {
+        message += ` • ${statusBadges}`;
       }
-      message += `\n   📅 ${date}`;
-      
-      // Informações adicionais
-      if (t.bankName) {
-        message += ` • 🏦 ${t.bankName}`;
-      } else if (t.creditCardName) {
-        message += ` • 💳 ${t.creditCardName}`;
+      message += '\n';
+
+      // 7. Data
+      const date = t.dueDate
+        ? new Date(t.dueDate).toLocaleDateString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+          })
+        : '';
+      if (date) {
+        message += `   📅 ${date}`;
       }
-      
-      if (t.merchant) {
-        message += ` • 🏪 ${t.merchant}`;
+
+      // 8. Banco ou Cartão
+      if (t.bank?.name) {
+        message += ` • 🏦 ${t.bank.name}`;
+      } else if (t.creditCard?.name) {
+        message += ` • 💳 ${t.creditCard.name}`;
       }
-      
-      // Parcelamento
-      if (t.installments && t.installments > 1) {
-        message += ` • ${t.installmentNumber}/${t.installments}x`;
-      }
-      
-      // Status
-      if (t.status === 'PENDING') {
-        const dueDate = t.dueDate ? new Date(t.dueDate).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
-        message += `\n   ⏳ Pendente`;
-        if (dueDate) {
-          message += ` (vence ${dueDate})`;
-        }
-      } else if (t.status === 'OVERDUE') {
-        message += `\n   ⚠️ Vencida`;
-      }
+
       message += '\n\n';
     });
 
@@ -303,6 +303,35 @@ export class TransactionListingService {
     }
 
     return message.trim();
+  }
+
+  /**
+   * Retorna badges de status da transação
+   */
+  private getStatusBadges(transaction: any): string {
+    const badges: string[] = [];
+
+    // Tipo especial
+    if (transaction.transactionFixedId) {
+      badges.push('🔄 Recorrente');
+    } else if (transaction.origin === 'CARD' && transaction.isGrouped) {
+      badges.push('💳 Cartão');
+    }
+
+    // Status
+    switch (transaction.status) {
+      case 'PENDING':
+        badges.push('⏳ Pendente');
+        break;
+      case 'DONE':
+        badges.push('✅ Pago');
+        break;
+      case 'OVERDUE':
+        badges.push('⚠️ Vencido');
+        break;
+    }
+
+    return badges.join(' ');
   }
 
   /**

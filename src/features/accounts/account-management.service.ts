@@ -107,10 +107,11 @@ export class AccountManagementService {
       const message =
         `🏦 *Conta Ativa:*\n\n` +
         `✅ *${activeAccount.name}*\n` +
-        `📋 Tipo: ${roleLabel}${primaryBadge}\n\n` +
+        `📋 Tipo: ${roleLabel}${primaryBadge}\n` +
+        // `🆔 ID: ${activeAccount.id}\n\n` +
         `💡 Para trocar de perfil, digite: *"mudar perfil"*`;
 
-      this.logger.log(`✅ Perfil ativo: ${activeAccount.name}`);
+      this.logger.log(`✅ Perfil ativo: ${activeAccount.name} (ID: ${activeAccount.id})`);
 
       return {
         success: true,

@@ -25,8 +25,11 @@ IMPORTANTE:
 - Use a categoria e subcategoria fornecidas pelo usuário quando possível
 - Para "mercado" ou "supermercado", use categoria "Alimentação" e subcategoria "Supermercado"
 - **DESCRIÇÃO**: Sempre escreva palavras COMPLETAS, NUNCA TRUNCAR (ex: "supermercado", não "supermerca")
-- **DESCRIÇÃO**: Se a mensagem é curta, use ela completa como descrição
-- **DESCRIÇÃO**: Se a mensagem tem contexto, crie um resumo claro e completo
+- **DESCRIÇÃO**: Extraia APENAS o item/produto específico, NÃO repita categoria, subcategoria, valor ou moeda
+- **DESCRIÇÃO**: Se a mensagem menciona um produto específico (ex: "mouse", "teclado", "livro"), use APENAS o nome do produto
+- **DESCRIÇÃO**: Remova palavras genéricas que já estão na categoria (ex: se categoria é "Equipamentos", não repita "equipamento" na descrição)
+- **DESCRIÇÃO**: Remova valores monetários e moedas (ex: "30 reais", "R$ 50") da descrição
+- **DESCRIÇÃO**: Se não houver informação específica além da categoria, deixe description como null
 - Sempre responda em JSON válido
 - Confidence deve ser um número entre 0 e 1 indicando sua certeza
 - **DATA TEMPORAL**: Se o usuário mencionar "ontem", "anteontem", "semana passada", calcule a data correspondente considerando que HOJE é ${today}
@@ -100,7 +103,20 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
       amount: 50.0,
       category: 'Alimentação',
       subCategory: 'Supermercado',
-      description: 'Compras no mercado',
+      description: null, // Sem informação específica além da categoria
+      date: null,
+      merchant: null,
+      confidence: 0.95,
+    },
+  },
+  {
+    input: 'comprei um mouse para o computador por 30 reais',
+    output: {
+      type: 'EXPENSES',
+      amount: 30.0,
+      category: 'Eletrônicos',
+      subCategory: 'Equipamentos',
+      description: 'Mouse', // APENAS o produto específico
       date: null,
       merchant: null,
       confidence: 0.95,
@@ -113,7 +129,7 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
       amount: 150.5,
       category: 'Serviços',
       subCategory: 'Energia',
-      description: 'Conta de luz',
+      description: null, // "Conta de luz" já está implícito na subcategoria
       date: null,
       merchant: null,
       confidence: 0.98,
@@ -126,7 +142,7 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
       amount: 1500.0,
       category: 'Recebimentos',
       subCategory: 'Salário',
-      description: 'Salário mensal',
+      description: null, // "Salário" já está na subcategoria
       date: null,
       merchant: null,
       confidence: 0.99,
@@ -139,23 +155,36 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
       amount: 25.0,
       category: 'Transporte',
       subCategory: 'Uber',
-      description: 'Corrida de Uber',
+      description: null, // "Uber" já está na subcategoria
       date: '2025-12-15T00:00:00.000Z', // ontem = hoje - 1 dia
       merchant: 'Uber',
       confidence: 0.92,
     },
   },
   {
-    input: 'Academia 89,90 todo dia 5',
+    input: 'Academia SmartFit 89,90 todo dia 5',
     output: {
       type: 'EXPENSES',
       amount: 89.9,
       category: 'Saúde',
       subCategory: 'Academia',
-      description: 'Mensalidade da academia',
+      description: 'SmartFit', // Nome específico da academia
+      date: null,
+      merchant: 'SmartFit',
+      confidence: 0.9,
+    },
+  },
+  {
+    input: 'Comprei o livro Clean Code por 80 reais',
+    output: {
+      type: 'EXPENSES',
+      amount: 80.0,
+      category: 'Educação',
+      subCategory: 'Livros',
+      description: 'Clean Code', // Nome específico do livro
       date: null,
       merchant: null,
-      confidence: 0.9,
+      confidence: 0.95,
     },
   },
 ];

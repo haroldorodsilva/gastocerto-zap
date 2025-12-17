@@ -1,0 +1,7 @@
+export enum BankType {
+  CASH = 'CASH',
+  CHECKING = 'CHECKING',
+  SAVING = 'SAVING',
+  INVESTMENT = 'INVESTMENT',
+  OTHERS = 'OTHERS',
+}

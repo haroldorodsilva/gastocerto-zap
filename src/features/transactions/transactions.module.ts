@@ -14,6 +14,7 @@ import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
 import { ListContextService } from './list-context.service';
+import { CreditCardService } from '../credit-cards/credit-card.service';
 import { TransactionsController } from './transactions.controller';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
 import { AiModule } from '../../infrastructure/ai/ai.module';
@@ -90,6 +91,7 @@ import { PrismaService } from '@core/database/prisma.service';
     TransactionListingService,
     TransactionPaymentService,
     TransactionSummaryService,
+    CreditCardService, // ✅ Serviço de cartões de crédito
     ListContextService, // ✅ Serviço de contexto de lista
     PrismaService,
   ],

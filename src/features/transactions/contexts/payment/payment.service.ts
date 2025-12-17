@@ -226,8 +226,25 @@ export class TransactionPaymentService {
   ): Promise<{ success: boolean; message: string }> {
     try {
       this.logger.log(`💰 Marcando transação ${transactionId} como paga`);
+      this.logger.log(`   📋 user.activeAccountId (cache): ${user.activeAccountId}`);
 
-      const result = await this.gastoCertoApi.payTransaction(user.gastoCertoId, transactionId);
+      // Buscar conta ativa
+      const activeAccount = await this.accountManagement.validateActiveAccount(user.phoneNumber);
+      if (!activeAccount.valid || !activeAccount.account) {
+        return {
+          success: false,
+          message: '❌ Você precisa ter uma conta ativa para pagar transações.',
+        };
+      }
+
+      this.logger.log(`   ✅ activeAccount.id (validado): ${activeAccount.account.id}`);
+      this.logger.log(`   👤 userId: ${user.gastoCertoId}`);
+
+      const result = await this.gastoCertoApi.payTransaction(
+        user.gastoCertoId,
+        activeAccount.account.id,
+        transactionId,
+      );
 
       if (result.success) {
         return {
@@ -235,16 +252,23 @@ export class TransactionPaymentService {
           message: `✅ *Transação marcada como paga!*\n\n🆔 ID: ${transactionId}`,
         };
       } else {
+        // Mensagem amigável - NUNCA expor detalhes técnicos
         return {
           success: false,
-          message: `❌ Erro ao marcar transação como paga.\n\n${result.error || 'Transação não encontrada'}`,
+          message:
+            '❌ *Não foi possível marcar a transação como paga*\n\n' +
+            'Verifique se a transação existe e não foi paga anteriormente.\n\n' +
+            '💡 _Tente novamente ou entre em contato com o suporte._',
         };
       }
     } catch (error) {
       this.logger.error(`❌ Erro ao pagar transação:`, error);
       return {
         success: false,
-        message: '❌ Erro ao processar pagamento da transação.',
+        message:
+          '❌ *Erro ao processar pagamento*\n\n' +
+          'Ocorreu um problema ao tentar pagar esta transação.\n\n' +
+          '💡 _Tente novamente em alguns instantes._',
       };
     }
   }
@@ -304,9 +328,12 @@ export class TransactionPaymentService {
     try {
       this.logger.log(`📋 Listando pagamentos pendentes para ${user.phoneNumber}`);
 
-      const result = await this.gastoCertoApi.getPendingPayments(user.activeAccountId);
+      const result = await this.gastoCertoApi.getPendingPayments(
+        user.gastoCertoId,
+        user.activeAccountId,
+      );
 
-      if (!result.success || !result.data || result.data.length === 0) {
+      if (!result.success || !result.data || !result.data.data || result.data.data.length === 0) {
         return {
           success: true,
           message:
@@ -314,15 +341,17 @@ export class TransactionPaymentService {
         };
       }
 
-      const pending = result.data;
+      const pending = result.data.data;
+      const totalAmount = pending.reduce((sum, item) => sum + (item.amount / 100 || 0), 0);
 
       // ✅ ARMAZENAR CONTEXTO DE LISTA
-      const contextItems: ListContextItem[] = pending.items.map((item) => ({
+      const contextItems: ListContextItem[] = pending.map((item) => ({
         id: item.id,
         type: 'payment' as const,
-        description: item.description || item.category,
-        amount: item.amount,
-        category: item.category,
+        description:
+          item.description || item.subCategory?.name || item.category?.name || 'Sem descrição',
+        amount: item.amount / 100,
+        category: item.category?.name || 'Sem categoria',
         metadata: {
           dueDate: item.dueDate,
         },
@@ -330,22 +359,73 @@ export class TransactionPaymentService {
 
       this.listContext.setListContext(user.phoneNumber, 'pending_payments', contextItems);
 
-      let message = `📋 *Contas Pendentes*\n\n`;
-      message += `💵 *Total:* R$ ${pending.total.toFixed(2)}\n`;
-      message += `📊 *Quantidade:* ${pending.items.length}\n\n`;
+      // 🎨 FORMATO IGUAL "MINHAS TRANSAÇÕES"
+      let message = `📋 *Transações Pendentes*\n\n`;
+      message += `💵 *Total:* R$ ${totalAmount.toFixed(2)}\n`;
+      message += `📊 *Quantidade:* ${pending.length}\n\n`;
       message += '───────────────────\n\n';
 
-      pending.items.forEach((item, index) => {
-        message += `${index + 1}. 💸 *R$ ${item.amount.toFixed(2)}*\n`;
-        message += `   📂 ${item.category}`;
-        if (item.description) {
-          message += ` • ${item.description}`;
+      pending.forEach((item, index) => {
+        // 1. Label (description > subcategory > category)
+        let label = item.description;
+        if (!label) {
+          label = item.subCategory?.name || item.category?.name || 'Sem descrição';
         }
-        message += `\n   📅 Vencimento: ${item.dueDate}\n`;
-        message += `   🆔 ID: ${item.id}\n\n`;
+
+        // 2. Parcelamento no label (se houver)
+        if (item.installment && item.installmentTotal && item.installmentTotal > 1) {
+          label = `${label} (${item.installment}/${item.installmentTotal})`;
+        }
+
+        // 3. Valor com emoji de tipo
+        const amountInReais = item.amount / 100;
+        const typeEmoji = item.type === 'EXPENSES' ? '🔴' : '🟢';
+
+        // 4. Header: Label + Valor
+        message += `${index + 1}. ${label}\n`;
+        message += `   ${typeEmoji} *R$ ${amountInReais.toFixed(2)}*\n`;
+
+        // 5. Categoria/Subcategoria
+        const categoryText = item.subCategory?.name || item.category?.name || 'Sem categoria';
+        message += `   📂 ${categoryText}`;
+
+        // 6. Status badges
+        const badges: string[] = [];
+        if (item.transactionFixedId) {
+          badges.push('🔄 Recorrente');
+        }
+        if (item.origin === 'CARD') {
+          badges.push('💳 Cartão');
+        }
+        badges.push('⏳ Pendente');
+
+        if (badges.length > 0) {
+          message += ` • ${badges.join(' ')}`;
+        }
+        message += '\n';
+
+        // 7. Data de vencimento
+        const dueDate = new Date(item.dueDate).toLocaleDateString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+        message += `   📅 Vencimento: ${dueDate}`;
+
+        // 8. Banco ou Cartão
+        if (item.bank?.name) {
+          message += ` • 🏦 ${item.bank.name}`;
+        } else if (item.creditCard?.name) {
+          message += ` • 💳 ${item.creditCard.name}`;
+        }
+
+        // 9. ID da transação (para debug/validação)
+        // message += `\n   🆔 ID: ${item.id}`;
+
+        message += '\n\n';
       });
 
-      message += '\n💡 _Para pagar, responda: *"pagar 1"* ou *"pagar 5"*_';
+      message += '💡 _Para pagar, responda: *"pagar 1"* ou *"pagar 2"*_';
 
       return {
         success: true,

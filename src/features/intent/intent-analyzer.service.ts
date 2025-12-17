@@ -26,6 +26,10 @@ export enum MessageIntent {
   LIST_ACCOUNTS = 'LIST_ACCOUNTS', // Listar todas as contas
   SHOW_ACTIVE_ACCOUNT = 'SHOW_ACTIVE_ACCOUNT', // Mostrar conta ativa
   PAY_BILL = 'PAY_BILL', // Pagar fatura/conta
+  LIST_CREDIT_CARDS = 'LIST_CREDIT_CARDS', // Listar cartões de crédito
+  LIST_INVOICES = 'LIST_INVOICES', // Listar faturas de cartão
+  SHOW_INVOICE_DETAILS = 'SHOW_INVOICE_DETAILS', // Detalhes de uma fatura
+  PAY_INVOICE = 'PAY_INVOICE', // Pagar fatura de cartão (invoice)
   HELP = 'HELP', // Pedir ajuda
   GREETING = 'GREETING', // Saudação
   UNKNOWN = 'UNKNOWN', // Não reconhecido
@@ -116,7 +120,48 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 6. Verificar pagamento de fatura/conta
+    // 6. Verificar consultas de cartão de crédito
+    // 6.1. Listar cartões
+    if (this.isListCreditCardsRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: LIST_CREDIT_CARDS (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.LIST_CREDIT_CARDS,
+        confidence: 0.95,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.2. Listar faturas de cartão
+    if (this.isListInvoicesRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: LIST_INVOICES (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.LIST_INVOICES,
+        confidence: 0.95,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.3. Ver detalhes de fatura
+    if (this.isShowInvoiceDetailsRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: SHOW_INVOICE_DETAILS (confidence: 0.90)`);
+      return {
+        intent: MessageIntent.SHOW_INVOICE_DETAILS,
+        confidence: 0.9,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.4. Pagar fatura de cartão (invoice)
+    if (this.isPayInvoiceRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: PAY_INVOICE (confidence: 0.90)`);
+      return {
+        intent: MessageIntent.PAY_INVOICE,
+        confidence: 0.9,
+        shouldProcess: true,
+      };
+    }
+
+    // 7. Verificar pagamento de fatura/conta (transação pendente)
     if (this.isPayBillRequest(normalizedText)) {
       this.logger.log(`✅ Intent: PAY_BILL (confidence: 0.90)`);
       return {
@@ -550,6 +595,8 @@ export class IntentAnalyzerService {
       'mostrar pendentes',
       'listar pendentes',
       'lista pendentes',
+      'transações pendentes',
+      'transacoes pendentes',
       'pagamentos pendentes',
       'pendentes de pagamento',
       'pendências de pagamento',
@@ -562,6 +609,12 @@ export class IntentAnalyzerService {
       'dívidas pendentes',
       'boletos pendentes',
       'faturas pendentes',
+      'pendentes de recebimento',
+      'pendências de recebimento',
+      'o que tenho que receber',
+      'o que tenho pra receber',
+      'o que preciso receber',
+      'o que falta receber',
     ];
 
     // Apenas palavra "pendentes" ou "pendente" sozinha também conta como PAGAMENTO
@@ -587,6 +640,11 @@ export class IntentAnalyzerService {
       '   • "Meu saldo" - Ver balanço geral\n' +
       '   • "Minhas transações" - Listar últimas 10\n' +
       '   • "Histórico" - Ver histórico completo\n\n' +
+      '💳 *Cartões de Crédito:*\n' +
+      '   • "Meus cartões" - Listar cartões\n' +
+      '   • "Minhas faturas" - Ver faturas\n' +
+      '   • "Ver fatura 1" - Detalhes da fatura\n' +
+      '   • "Pagar fatura 2" - Pagar fatura\n\n' +
       '📋 *Contas Pendentes:*\n' +
       '   • "Pendentes" - Ver contas a pagar\n' +
       '   • "Pagar 3" - Pagar item #3 da lista\n' +
@@ -695,6 +753,90 @@ export class IntentAnalyzerService {
       'quitar cartão',
     ];
     return payBillKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para listar cartões de crédito
+   */
+  private isListCreditCardsRequest(text: string): boolean {
+    const listCardsKeywords = [
+      'meus cartões',
+      'meus cartoes',
+      'listar cartões',
+      'listar cartoes',
+      'ver cartões',
+      'ver cartoes',
+      'mostrar cartões',
+      'mostrar cartoes',
+      'quais cartões',
+      'quais cartoes',
+      'cartões de crédito',
+      'cartoes de credito',
+      'lista de cartões',
+      'lista de cartoes',
+    ];
+    return listCardsKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para listar faturas de cartão
+   */
+  private isListInvoicesRequest(text: string): boolean {
+    const listInvoicesKeywords = [
+      'minhas faturas',
+      'listar faturas',
+      'ver faturas',
+      'mostrar faturas',
+      'faturas do cartão',
+      'faturas do cartao',
+      'fatura do cartão',
+      'fatura do cartao',
+      'fatura pendente',
+      'faturas pendentes',
+      'quanto tenho de cartão',
+      'quanto tenho de cartao',
+      'quanto devo no cartão',
+      'quanto devo no cartao',
+      'minha fatura',
+      'quanto é a fatura',
+      'quanto é minha fatura',
+    ];
+    return listInvoicesKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para ver detalhes de uma fatura
+   */
+  private isShowInvoiceDetailsRequest(text: string): boolean {
+    const invoiceDetailsKeywords = [
+      'detalhes da fatura',
+      'ver fatura',
+      'listar fatura',
+      'faturas',
+      'mostrar fatura',
+      'o que tem na fatura',
+      'o que tem dentro da fatura',
+      'itens da fatura',
+      'gastos da fatura',
+    ];
+    return invoiceDetailsKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para pagar fatura de cartão (invoice)
+   */
+  private isPayInvoiceRequest(text: string): boolean {
+    const payInvoiceKeywords = [
+      'pagar invoice',
+      'quitar invoice',
+      'pagar fatura de cartão',
+      'pagar fatura de cartao',
+      'quitar fatura de cartão',
+      'quitar fatura de cartao',
+      'pagar fatura do cartão',
+      'pagar fatura do cartao',
+    ];
+    return payInvoiceKeywords.some((k) => text.includes(k));
   }
 
   /**

@@ -6,6 +6,7 @@ import {
   SUMMARY_INTENT_SYSTEM_PROMPT,
   SUMMARY_GENERATION_PROMPT,
 } from './prompts/summary-intent.prompt';
+import { DateUtil } from '@/utils/date.util';
 
 export interface SummaryRequest {
   summaryType: 'monthly' | 'credit_card_invoice' | 'category_breakdown' | 'balance';
@@ -271,7 +272,7 @@ export class TransactionSummaryService {
     try {
       this.logger.log(`💰 Gerando balanço geral para ${user.phoneNumber}`);
 
-      const result = await this.gastoCertoApi.getOverallBalance(user.activeAccountId);
+      const result = await this.gastoCertoApi.getOverallBalance(user.id, user.activeAccountId);
 
       if (!result.success || !result.data) {
         return {
@@ -280,29 +281,39 @@ export class TransactionSummaryService {
         };
       }
 
-      const balance = result.data;
+      const resume = result.data.resume;
 
-      let message = `💰 *Balanço Geral*\n\n`;
-      message += `📅 Atualizado: ${new Date().toLocaleDateString('pt-BR')}\n\n`;
-      message += '───────────────────\n\n';
-      message += `💵 *Receitas Totais:* R$ ${balance.totalIncome.toFixed(2)}\n`;
-      message += `💸 *Despesas Totais:* R$ ${balance.totalExpenses.toFixed(2)}\n\n`;
+      // Converter valores de centavos para reais
+      const balance = (resume.balance || 0) / 100;
+      const income = (resume.incomeTotal || 0) / 100;
+      const expenses = (resume.expenseTotal || 0) / 100;
+      const finalBalance = (resume.finalBalance || 0) / 100;
+      const predictedFinalBalance = (resume.predictedFinalBalance || 0) / 100;
+      const cardInvoicesTotal = (resume.cardInvoicesTotal || 0) / 100;
 
-      const finalBalance = balance.totalIncome - balance.totalExpenses;
       const balanceEmoji = finalBalance >= 0 ? '✅' : '⚠️';
-      message += `${balanceEmoji} *Saldo:* R$ ${finalBalance.toFixed(2)}\n\n`;
 
-      if (balance.pendingPayments && balance.pendingPayments > 0) {
-        message += `⏳ *Pagamentos Pendentes:* R$ ${balance.pendingPayments.toFixed(2)}\n\n`;
+      let message = `💰 *Resumo Financeiro ${DateUtil.formatYearMonthToMMYYYY(resume.yearMonth)}*\n`;
+
+      // Saldo inicial
+      message += `💼 *Saldo Atual*\n`;
+      message += `R$ ${balance.toFixed(2)}\n\n`;
+
+      // Movimentações
+      message += `*Movimentações*\n`;
+      message += `↗️ Entradas: R$ ${income.toFixed(2)}\n`;
+      message += `↘️ Saídas: R$ ${expenses.toFixed(2)}\n`;
+      message += `${balanceEmoji} Resultado: R$ ${finalBalance.toFixed(2)}\n\n`;
+
+      // Cartões
+      if (cardInvoicesTotal > 0) {
+        message += `💳 *Faturas de Cartão*\n`;
+        message += `R$ ${cardInvoicesTotal.toFixed(2)}\n\n`;
       }
 
-      // Adicionar dicas
-      if (finalBalance < 0) {
-        message +=
-          '\n💡 _Suas despesas estão maiores que suas receitas. Considere revisar seus gastos._';
-      } else if (finalBalance > 0) {
-        message += '\n✨ _Ótimo! Você está economizando. Continue assim!_';
-      }
+      const predictedEmoji = predictedFinalBalance >= 0 ? '📈' : '📉';
+      message += `${predictedEmoji} *Saldo Previsto*\n`;
+      message += `R$ ${predictedFinalBalance.toFixed(2)}\n`;
 
       return {
         success: true,

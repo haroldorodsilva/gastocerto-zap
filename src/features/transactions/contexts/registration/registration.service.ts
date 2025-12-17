@@ -660,6 +660,15 @@ export class TransactionRegistrationService {
         try {
           const activeAccount = await this.userCache.getActiveAccount(phoneNumber);
           accountId = activeAccount?.id;
+
+          // 🔍 LOG DE DEBUG: Rastrear conta ativa sendo usada
+          this.logger.log(
+            `👤 [PERFIL DEBUG] Conta ativa para transação: ` +
+              `phoneNumber=${phoneNumber}, ` +
+              `accountId=${accountId || 'NENHUMA'}, ` +
+              `accountName=${activeAccount?.name || 'N/A'}, ` +
+              `userId=${user.gastoCertoId}`,
+          );
         } catch (error) {
           this.logger.warn(`Não foi possível buscar conta ativa: ${error.message}`);
         }
@@ -715,13 +724,30 @@ export class TransactionRegistrationService {
 
             if (result.success) {
               const typeEmoji = data.type === 'EXPENSES' ? '💸' : '💰';
+
+              // 👤 Buscar nome da conta ativa
+              let accountName = 'Conta não identificada';
+              if (user.accounts && Array.isArray(user.accounts)) {
+                const accounts = user.accounts as Array<{
+                  id: string;
+                  name: string;
+                  type?: string;
+                  isPrimary?: boolean;
+                }>;
+                const activeAcc = accounts.find((acc) => acc.id === accountId);
+                if (activeAcc) {
+                  accountName = activeAcc.name;
+                }
+              }
+
               return {
                 success: true,
                 message:
-                  `${typeEmoji} *Transação registrada automaticamente!*\n\n` +
+                  `${typeEmoji} *Transação registrada com sucesso!*\n\n` +
                   `💵 *Valor:* R$ ${data.amount.toFixed(2)}\n` +
                   `📂 *Categoria:* ${data.category}${data.subCategory ? ` > ${data.subCategory}` : ''}\n` +
-                  `${data.description ? `📝 ${data.description}\n` : ''}\n`,
+                  `${data.description ? `📝 ${data.description}\n` : ''}` +
+                  `👤 *Perfil:* ${accountName}\n`,
                 // `🤖 _Registrado com ${(data.confidence * 100).toFixed(1)}% de confiança_`,
                 requiresConfirmation: false,
                 confirmationId: '',
@@ -768,6 +794,21 @@ export class TransactionRegistrationService {
         ? `${data.category} > ${data.subCategory}`
         : `${data.category}\n📂 *Subcategoria:* Não encontrada`;
 
+      // 👤 Buscar nome da conta ativa do usuário
+      let accountName = 'Conta não identificada';
+      if (user.accounts && Array.isArray(user.accounts)) {
+        const accounts = user.accounts as Array<{
+          id: string;
+          name: string;
+          type?: string;
+          isPrimary?: boolean;
+        }>;
+        const activeAccount = accounts.find((acc) => acc.id === user.activeAccountId);
+        if (activeAccount) {
+          accountName = activeAccount.name;
+        }
+      }
+
       return {
         success: true,
         message:
@@ -776,7 +817,8 @@ export class TransactionRegistrationService {
           `📂 *Categoria:* ${categoryText}\n` +
           `${data.description ? `📝 *Descrição:* ${data.description}\n` : ''}` +
           `${data.date ? `📅 *Data:* ${DateUtil.formatBR(validDate)}\n` : ''}` +
-          `${data.merchant ? `🏪 *Local:* ${data.merchant}\n` : ''}\n` +
+          `${data.merchant ? `🏪 *Local:* ${data.merchant}\n` : ''}` +
+          `👤 *Perfil:* ${accountName}\n\n` +
           `✅ Digite *"sim"* para confirmar\n` +
           `❌ Digite *"não"* para cancelar`,
         requiresConfirmation: true,
@@ -828,11 +870,30 @@ export class TransactionRegistrationService {
           ? ` > ${confirmation.subCategoryName}`
           : '';
 
+        // 👤 Buscar nome da conta da confirmação
+        let accountName = 'Conta não identificada';
+        if (confirmation.accountId) {
+          const userCache = await this.userCache.getUser(confirmation.phoneNumber);
+          if (userCache?.accounts && Array.isArray(userCache.accounts)) {
+            const accounts = userCache.accounts as Array<{
+              id: string;
+              name: string;
+              type?: string;
+              isPrimary?: boolean;
+            }>;
+            const account = accounts.find((acc) => acc.id === confirmation.accountId);
+            if (account) {
+              accountName = account.name;
+            }
+          }
+        }
+
         const successMessage =
           `${typeEmoji} *Transação registrada com sucesso!*\n\n` +
           `💵 *Valor:* R$ ${(Number(confirmation.amount) / 100).toFixed(2)}\n` +
           `📂 *Categoria:* ${confirmation.category}${subCategoryText}\n` +
-          `${confirmation.description ? `📝 ${confirmation.description}\n` : ''}`;
+          `${confirmation.description ? `📝 ${confirmation.description}\n` : ''}` +
+          `👤 *Perfil:* ${accountName}`;
 
         return {
           success: true,

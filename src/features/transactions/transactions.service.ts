@@ -11,6 +11,7 @@ import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
 import { TransactionConfirmationService } from './transaction-confirmation.service';
 import { ListContextService } from './list-context.service';
+import { CreditCardService } from '../credit-cards/credit-card.service';
 
 export interface ProcessMessageResult {
   success: boolean;
@@ -49,6 +50,7 @@ export class TransactionsService {
     private readonly paymentService: TransactionPaymentService,
     private readonly summaryService: TransactionSummaryService,
     private readonly confirmationService: TransactionConfirmationService,
+    private readonly creditCardService: CreditCardService,
     private readonly listContext: ListContextService,
   ) {
     this.logger.log('🎯 TransactionsService (Orchestrator) inicializado');
@@ -88,7 +90,9 @@ export class TransactionsService {
     platform: 'whatsapp' | 'telegram' = 'whatsapp',
   ): Promise<ProcessMessageResult> {
     try {
-      this.logger.log(`📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform}`);
+      this.logger.log(
+        `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform}`,
+      );
 
       // 0. Validação de segurança (prompt injection, mensagens maliciosas)
       const securityValidation = await this.securityService.validateUserMessage(
@@ -120,6 +124,11 @@ export class TransactionsService {
           requiresConfirmation: false,
         };
       }
+
+      // Log do activeAccountId do cache para debug
+      this.logger.log(
+        `👤 User: ${user.phoneNumber} | gastoCertoId: ${user.gastoCertoId} | activeAccountId: ${user.activeAccountId}`,
+      );
 
       // 1.5. VERIFICAR REFERÊNCIA NUMÉRICA DE LISTA ("pagar 5", "pagar item 3")
       const listReference = this.detectListReference(text);
@@ -374,12 +383,92 @@ export class TransactionsService {
         };
       }
 
-      // 3g. Listar transações
+      // 3g. Cartões de crédito
+      // 3g.1. Listar cartões
+      if (intentResult.intent === 'LIST_CREDIT_CARDS') {
+        this.logger.log(`✅ Delegando para CreditCardService.listCreditCards`);
+        const result = await this.creditCardService.listCreditCards(user);
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.2. Listar faturas
+      if (intentResult.intent === 'LIST_INVOICES') {
+        this.logger.log(`✅ Delegando para CreditCardService.listInvoices`);
+        const result = await this.creditCardService.listInvoices(user);
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.3. Detalhes de fatura (context-aware)
+      if (intentResult.intent === 'SHOW_INVOICE_DETAILS') {
+        this.logger.log(`✅ Delegando para CreditCardService.showInvoiceDetails`);
+        // TODO: Extrair número da fatura da mensagem (ex: "ver fatura 1")
+        // Por ora, retornar mensagem pedindo número
+        const result = {
+          success: false,
+          message:
+            '💡 Para ver detalhes de uma fatura, primeiro liste as faturas com:\n' +
+            '*"minhas faturas"*\n\n' +
+            'Depois use: *"ver fatura 1"* (substituindo 1 pelo número da fatura)',
+        };
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.4. Pagar fatura (context-aware)
+      if (intentResult.intent === 'PAY_INVOICE') {
+        this.logger.log(`✅ Delegando para CreditCardService.payInvoice`);
+        // TODO: Extrair número da fatura da mensagem (ex: "pagar fatura 1")
+        const result = {
+          success: false,
+          message:
+            '💡 Para pagar uma fatura, primeiro liste as faturas com:\n' +
+            '*"minhas faturas"*\n\n' +
+            'Depois use: *"pagar fatura 1"* (substituindo 1 pelo número da fatura)',
+        };
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        });
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3h. Listar transações
       if (intentResult.intent === 'LIST_TRANSACTIONS') {
         this.logger.log(`✅ Delegando para TransactionListingService.listTransactions`);
         const result = await this.listingService.listTransactions(user, {
           period: 'month', // Padrão: mês atual
-          limit: 10, // Mostrar últimas 10
+          limit: 100, //TODO: Fazer paginação futura
         });
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
@@ -801,7 +890,7 @@ export class TransactionsService {
 
   /**
    * Detecta referência numérica em lista
-   * Exemplos: "pagar 5", "pagar item 3", "pagar número 2", "5", "item 1"
+   * Exemplos: "pagar 5", "ver fatura 2", "pagar fatura 1", "5", "item 1"
    */
   private detectListReference(text: string): {
     found: boolean;
@@ -812,6 +901,8 @@ export class TransactionsService {
 
     // Padrões de ação + número
     const patterns = [
+      /(?:ver|mostrar|detalhes)\s+(?:fatura|invoice)\s+(\d+)/i, // "ver fatura 1"
+      /(?:pagar|quitar)\s+(?:fatura|invoice)\s+(\d+)/i, // "pagar fatura 1"
       /(?:pagar|paga|quitar|marcar)\s+(?:o\s+)?(?:item\s+)?(?:n[uú]mero\s+)?(\d+)/i,
       /(?:pagar|paga|quitar|marcar)\s+(\d+)/i,
       /^(\d+)$/, // Apenas número
@@ -824,7 +915,10 @@ export class TransactionsService {
 
         // Determinar ação
         let action = 'pay'; // Padrão: pagar
-        if (normalized.includes('pagar') || normalized.includes('paga') || normalized.includes('quitar')) {
+
+        if (normalized.includes('ver') || normalized.includes('mostrar') || normalized.includes('detalhes')) {
+          action = 'view';
+        } else if (normalized.includes('pagar') || normalized.includes('paga') || normalized.includes('quitar')) {
           action = 'pay';
         }
 
@@ -870,6 +964,15 @@ export class TransactionsService {
           }
           break;
 
+        case 'invoices':
+          // Ações em faturas de cartão
+          if (action === 'view') {
+            return await this.creditCardService.showInvoiceDetails(user, itemNumber);
+          } else if (action === 'pay') {
+            return await this.creditCardService.payInvoice(user, itemNumber);
+          }
+          break;
+
         case 'transactions':
           // Futura implementação: ações em transações da lista
           return {
@@ -883,8 +986,7 @@ export class TransactionsService {
           // Futura implementação: confirmar item específico da lista
           return {
             success: false,
-            message:
-              '⚠️ Para confirmar transações, use *"sim"* ou *"não"*.',
+            message: '⚠️ Para confirmar transações, use *"sim"* ou *"não"*.',
           };
       }
 

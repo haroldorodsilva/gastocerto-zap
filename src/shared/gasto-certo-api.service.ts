@@ -21,6 +21,8 @@ import {
   GastoCertoTransactionResponseDto,
 } from '@features/transactions/dto/transaction.dto';
 import { ServiceAuthService } from '@common/services/service-auth.service';
+import { MonthlyBalanceRelations } from '../models/monthly-balance.entity';
+import { ListTransactionsResponseDto } from './types';
 
 @Injectable()
 export class GastoCertoApiService {
@@ -37,6 +39,38 @@ export class GastoCertoApiService {
     this.timeout = this.configService.get<number>('gastoCertoApi.timeout', 30000);
 
     this.logger.log(`✅ GastoCertoApiService inicializado - Base URL: ${this.baseUrl}`);
+  }
+
+  /**
+   * Converte erros técnicos em mensagens amigáveis para o usuário
+   * ⚠️ NUNCA expor detalhes técnicos como stack traces, códigos HTTP, etc.
+   */
+  private getUserFriendlyError(error: any): string {
+    // Mapear erros HTTP para mensagens amigáveis
+    if (error.response?.status === 400) {
+      return 'Dados inválidos';
+    } else if (error.response?.status === 401 || error.response?.status === 403) {
+      return 'Acesso não autorizado';
+    } else if (error.response?.status === 404) {
+      return 'Recurso não encontrado';
+    } else if (error.response?.status === 409) {
+      return 'Conflito - recurso já existe';
+    } else if (error.response?.status === 422) {
+      return 'Dados inválidos ou incompletos';
+    } else if (error.response?.status === 500 || error.response?.status === 502) {
+      return 'Erro no servidor';
+    } else if (error.response?.status === 503) {
+      return 'Serviço temporariamente indisponível';
+    } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      return 'Serviço temporariamente indisponível';
+    } else if (error.code === 'ETIMEDOUT') {
+      return 'Tempo de resposta excedido';
+    } else if (error.code === 'ECONNRESET') {
+      return 'Conexão interrompida';
+    }
+
+    // Mensagem genérica para erros desconhecidos
+    return 'Não foi possível processar a solicitação';
   }
 
   /**
@@ -569,16 +603,23 @@ export class GastoCertoApiService {
    * Usa POST /external/transactions/list com filtros
    */
   async getPendingBillsByCategory(
+    userId: string,
     accountId: string,
     categoryId: string,
-  ): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  ): Promise<ListTransactionsResponseDto> {
     try {
+      // Mês/ano atual no formato YYYY-MM
+      const now = new Date();
+      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
       this.logger.log(
-        `🧾 Buscando contas pendentes da categoria ${categoryId} - accountId: ${accountId}`,
+        `🧾 Buscando contas pendentes da categoria ${categoryId} - userId: ${userId}, accountId: ${accountId}, monthYear: ${monthYear}`,
       );
 
       // Usar listTransactions com filtros de status e categoria
-      const result = await this.listTransactions(accountId, {
+      const result = await this.listTransactions(userId, {
+        accountId,
+        monthYear,
         status: 'PENDING',
         categoryId,
       });
@@ -590,20 +631,30 @@ export class GastoCertoApiService {
         };
       }
 
+      // FILTRO ADICIONAL: Remover transações que já estão DONE (bug da API retorna DONE mesmo filtrando PENDING)
+      if (result.data?.data) {
+        const originalCount = result.data.data.length;
+        result.data.data = result.data.data.filter((t: any) => t.status !== 'DONE');
+        const filteredCount = result.data.data.length;
+
+        if (originalCount !== filteredCount) {
+          this.logger.warn(
+            `⚠️ Removidas ${originalCount - filteredCount} transações DONE que vieram incorretamente`,
+          );
+        }
+      }
+
       this.logger.log(
-        `✅ ${result.transactions?.length || 0} contas pendentes da categoria ${categoryId}`,
+        `✅ ${result.data?.data?.length || 0} contas pendentes da categoria ${categoryId}`,
       );
 
-      return {
-        success: true,
-        data: result.transactions || [],
-      };
+      return result;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar contas pendentes:`);
       this.logger.error(`   Mensagem: ${error.message}`);
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -611,15 +662,25 @@ export class GastoCertoApiService {
   /**
    * Busca todos os pagamentos pendentes
    * Endpoint: POST /external/transactions/list com status=PENDING
+   * Busca no mês atual (pega pendentes do mês corrente)
    */
   async getPendingPayments(
+    userId: string,
     accountId: string,
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
+  ): Promise<ListTransactionsResponseDto> {
     try {
-      this.logger.log(`📋 Buscando pagamentos pendentes - accountId: ${accountId}`);
+      // Mês/ano atual no formato YYYY-MM
+      const now = new Date();
+      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-      // Usar listTransactions com filtro de status PENDING
-      const result = await this.listTransactions(accountId, {
+      this.logger.log(
+        `[getPendingPayments] 📋 Buscando pagamentos pendentes - userId: ${userId}, accountId: ${accountId}, monthYear: ${monthYear}`,
+      );
+
+      // Usar listTransactions com filtro de status PENDING e mês atual
+      const result = await this.listTransactions(userId, {
+        accountId,
+        monthYear,
         status: 'PENDING',
       });
 
@@ -627,21 +688,30 @@ export class GastoCertoApiService {
         return result;
       }
 
-      this.logger.log(`✅ ${result.transactions?.length || 0} pendentes encontrados`);
+      // FILTRO ADICIONAL: Remover transações que já estão DONE (bug da API retorna DONE mesmo filtrando PENDING)
+      if (result.data?.data) {
+        const originalCount = result.data.data.length;
+        result.data.data = result.data.data.filter((t: any) => t.status !== 'DONE');
+        const filteredCount = result.data.data.length;
 
-      return {
-        success: true,
-        data: {
-          total: result.total || 0,
-          items: result.transactions || [],
-        },
-      };
+        if (originalCount !== filteredCount) {
+          this.logger.warn(
+            `⚠️ Removidas ${originalCount - filteredCount} transações DONE que vieram incorretamente`,
+          );
+        }
+      }
+
+      this.logger.log(
+        `[getPendingPayments] ✅ ${result.data?.data?.length || 0} pendentes encontrados`,
+      );
+
+      return result;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar pagamentos pendentes:`);
       this.logger.error(`   Mensagem: ${error.message}`);
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -709,7 +779,7 @@ export class GastoCertoApiService {
       }
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -776,29 +846,39 @@ export class GastoCertoApiService {
 
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
 
   /**
-   * Busca balanço geral
-   * Endpoint: POST /external/balance/overall
+   * Busca balanço geral (resumo do mês atual)
+   * Endpoint: POST /external/balance/monthly-resume (sem monthYear = mês atual)
    */
   async getOverallBalance(
+    userId: string,
     accountId: string,
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    data?: {
+      resume: MonthlyBalanceRelations;
+    };
+    error?: string;
+  }> {
     try {
-      this.logger.log(`💰 Buscando balanço geral - accountId: ${accountId}`);
+      this.logger.log(
+        `💰 Buscando balanço geral (mês atual) - userId: ${userId}, accountId: ${accountId}`,
+      );
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        userId,
         accountId,
       });
 
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.baseUrl}/external/balance/overall`,
-          { accountId },
+          `${this.baseUrl}/external/balance/monthly-resume`,
+          { userId, accountId },
           {
             headers: {
               ...hmacHeaders,
@@ -809,7 +889,9 @@ export class GastoCertoApiService {
         ),
       );
 
-      this.logger.log(`✅ Balanço geral recebido`);
+      this.logger.log(
+        `✅ Balanço geral recebido - Balance: R$ ${(response.data.balance / 100).toFixed(2)}`,
+      );
 
       return {
         success: true,
@@ -817,7 +899,7 @@ export class GastoCertoApiService {
       };
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar balanço geral:`);
-      this.logger.error(`   URL: ${this.baseUrl}/external/balance/overall`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/balance/monthly-resume`);
       this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
       this.logger.error(`   Mensagem: ${error.message}`);
       if (error.response?.data) {
@@ -832,7 +914,7 @@ export class GastoCertoApiService {
 
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -897,31 +979,16 @@ export class GastoCertoApiService {
    */
   async listTransactions(
     userId: string,
-    filters?: {
-      accountId?: string;
-      monthYear?: string;
+    filters: {
+      accountId: string;
+      monthYear: string;
       type?: 'INCOME' | 'EXPENSES';
       status?: 'PENDING' | 'DONE' | 'OVERDUE';
       categoryId?: string;
       page?: number;
       limit?: number;
     },
-  ): Promise<{
-    success: boolean;
-    transactions?: any[];
-    total?: number;
-    resume?: {
-      income: number;
-      expenses: number;
-      balance: number;
-    };
-    pagination?: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-    };
-  }> {
+  ): Promise<ListTransactionsResponseDto> {
     try {
       this.logger.log(`📋 Listando transações - userId: ${userId}`);
       this.logger.log(`   Filtros:`, JSON.stringify(filters || {}));
@@ -947,15 +1014,15 @@ export class GastoCertoApiService {
       );
 
       if (response.data.success) {
-        this.logger.log(`✅ ${response.data.transactions.length} transações encontradas`);
+        this.logger.log(
+          `✅ Transações listadas com sucesso`,
+          JSON.stringify(response.data, null, 2),
+        );
+        this.logger.log(`✅ ${response.data.data?.data?.length || 0} transações encontradas`);
       }
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao listar transações:`);
-      this.logger.error(`   URL: ${this.baseUrl}/external/transactions/list`);
-      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
-      this.logger.error(`   Mensagem: ${error.message}`);
       if (error.response?.data) {
         this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
       }
@@ -967,8 +1034,6 @@ export class GastoCertoApiService {
       }
       return {
         success: false,
-        transactions: [],
-        pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
       };
     }
   }
@@ -978,6 +1043,7 @@ export class GastoCertoApiService {
    * Endpoint: POST /external/transactions/pay
    */
   async payTransaction(
+    userId: string,
     accountId: string,
     transactionId: string,
   ): Promise<{
@@ -986,9 +1052,12 @@ export class GastoCertoApiService {
     error?: string;
   }> {
     try {
-      this.logger.log(`💳 Pagando transação ${transactionId} - accountId: ${accountId}`);
+      this.logger.log(
+        `💳 Pagando transação ${transactionId} - userId: ${userId} - accountId: ${accountId}`,
+      );
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        userId,
         accountId,
         transactionId,
       });
@@ -997,6 +1066,7 @@ export class GastoCertoApiService {
         this.httpService.post(
           `${this.baseUrl}/external/transactions/pay`,
           {
+            userId,
             accountId,
             transactionId,
           },
@@ -1029,9 +1099,10 @@ export class GastoCertoApiService {
       if (error.code === 'ETIMEDOUT') {
         this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
       }
+
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -1081,7 +1152,7 @@ export class GastoCertoApiService {
       this.logger.error(`❌ Erro ao listar cartões:`, error.message);
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -1156,7 +1227,7 @@ export class GastoCertoApiService {
       this.logger.error(`❌ Erro ao buscar detalhes da fatura:`, error.message);
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }
@@ -1210,6 +1281,80 @@ export class GastoCertoApiService {
     } catch (error: any) {
       this.logger.error(`❌ Erro ao listar faturas:`, error.message);
       return { success: false, data: [] };
+    }
+  }
+
+  /**
+   * Paga fatura de cartão de crédito (invoice)
+   * Endpoint: POST /external/cards/invoices/pay
+   *
+   * Campos requeridos pela API:
+   * - accountId: ID da conta
+   * - id: ID da fatura
+   * - amount: Valor do pagamento em centavos
+   */
+  async payInvoice(
+    accountId: string,
+    invoiceId: string,
+    amount: number,
+  ): Promise<{
+    success: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      this.logger.log(
+        `💳 Pagando invoice ${invoiceId} - accountId: ${accountId}, amount: ${amount}`,
+      );
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
+        accountId,
+        id: invoiceId,
+        amount,
+      });
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/external/cards/invoices/pay`,
+          {
+            accountId,
+            id: invoiceId,
+            amount,
+          },
+          {
+            headers: {
+              ...hmacHeaders,
+              'Content-Type': 'application/json',
+            },
+            timeout: this.timeout,
+          },
+        ),
+      );
+
+      if (response.data.success) {
+        this.logger.log(`✅ Invoice paga com sucesso: ${invoiceId}`);
+      }
+
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao pagar invoice:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/cards/invoices/pay`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
+
+      return {
+        success: false,
+        error: this.getUserFriendlyError(error),
+      };
     }
   }
 
@@ -1269,7 +1414,7 @@ export class GastoCertoApiService {
       this.logger.error(`❌ Erro ao pagar fatura:`, error.message);
       return {
         success: false,
-        error: error.message,
+        error: this.getUserFriendlyError(error),
       };
     }
   }

@@ -127,6 +127,23 @@ export class UserCacheService {
 
       if (existing) {
         this.logger.warn(`⚠️ Cache já existe para gastoCertoId ${apiUser.id}. Atualizando...`);
+        
+        // Manter conta ativa existente (não sobrescrever escolha do usuário)
+        const finalActiveAccountId = existing.activeAccountId || activeAccountId;
+        if (existing.activeAccountId) {
+          // Verificar se a conta ativa ainda existe nas novas contas
+          const stillExists = accounts.some((acc) => acc.id === existing.activeAccountId);
+          if (!stillExists) {
+            this.logger.warn(
+              `⚠️ Conta ativa ${existing.activeAccountId} não existe mais nas contas atualizadas. Redefinindo.`,
+            );
+          } else {
+            this.logger.log(
+              `✅ Mantendo conta ativa existente: ${existing.activeAccountId} (banco é fonte da verdade)`,
+            );
+          }
+        }
+        
         // Atualizar cache existente
         return await this.prisma.userCache.update({
           where: { gastoCertoId: apiUser.id },
@@ -138,7 +155,7 @@ export class UserCacheService {
             isBlocked: apiUser.isBlocked ?? existing.isBlocked ?? false,
             isActive: apiUser.isActive ?? existing.isActive ?? true,
             accounts: accounts as any,
-            activeAccountId,
+            activeAccountId: finalActiveAccountId,
             categories: (apiUser.categories || []) as any,
             preferences: (apiUser.preferences || {}) as any,
             lastSyncAt: new Date(),
@@ -874,9 +891,30 @@ export class UserCacheService {
               isPrimary: acc.isPrimary,
             }));
 
-            // Definir conta ativa (priorizar primária)
-            const activeAccountId =
-              mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+            // Definir conta ativa APENAS se não existir (não sobrescrever escolha do usuário)
+            let activeAccountId = user.activeAccountId;
+            if (!activeAccountId) {
+              // Priorizar conta primária ou primeira conta
+              activeAccountId =
+                mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+              this.logger.log(
+                `🆕 Definindo conta ativa inicial: ${activeAccountId} (não existia antes)`,
+              );
+            } else {
+              // Verificar se o activeAccountId atual ainda existe nas contas
+              const stillExists = mappedAccounts.some((acc) => acc.id === activeAccountId);
+              if (!stillExists) {
+                this.logger.warn(
+                  `⚠️ Conta ativa ${activeAccountId} não existe mais. Redefinindo para primária.`,
+                );
+                activeAccountId =
+                  mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+              } else {
+                this.logger.log(
+                  `✅ Mantendo conta ativa existente: ${activeAccountId} (banco é fonte da verdade)`,
+                );
+              }
+            }
 
             // Atualizar cache no banco
             await this.prisma.userCache.update({
@@ -954,9 +992,30 @@ export class UserCacheService {
               isPrimary: acc.isPrimary,
             }));
 
-            // Definir conta ativa (priorizar primária)
-            const activeAccountId =
-              mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+            // Definir conta ativa APENAS se não existir (não sobrescrever escolha do usuário)
+            let activeAccountId = user.activeAccountId;
+            if (!activeAccountId) {
+              // Priorizar conta primária ou primeira conta
+              activeAccountId =
+                mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+              this.logger.log(
+                `🆕 Definindo conta ativa inicial: ${activeAccountId} (não existia antes)`,
+              );
+            } else {
+              // Verificar se o activeAccountId atual ainda existe nas contas
+              const stillExists = mappedAccounts.some((acc) => acc.id === activeAccountId);
+              if (!stillExists) {
+                this.logger.warn(
+                  `⚠️ Conta ativa ${activeAccountId} não existe mais. Redefinindo para primária.`,
+                );
+                activeAccountId =
+                  mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+              } else {
+                this.logger.log(
+                  `✅ Mantendo conta ativa existente: ${activeAccountId} (banco é fonte da verdade)`,
+                );
+              }
+            }
 
             // Atualizar cache no banco
             await this.prisma.userCache.update({

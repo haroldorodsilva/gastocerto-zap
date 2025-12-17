@@ -661,13 +661,13 @@ export class DateUtil {
     return this.toISODateString(date);
   }
 
-  /** 
+  /**
    * Adiciona segundos a uma data PRESERVANDO a hora exata
    * NÃO normaliza para meia-noite - usa para cálculos de timeout/expiration
    */
   static addSeconds(date: Date | string, seconds: number): Date {
     let dateObj: Date;
-    
+
     if (date instanceof Date) {
       dateObj = date;
     } else if (typeof date === 'string') {
@@ -678,11 +678,21 @@ export class DateUtil {
     } else {
       dateObj = new Date(date);
     }
-    
+
     if (!isValid(dateObj)) {
       throw new BadRequestException('Data inválida para addSeconds');
     }
-    
+
     return addSeconds(dateObj, seconds);
+  }
+
+  static formatYearMonthToMMYYYY(yearMonth?: string) {
+    if (!yearMonth) return '';
+    const parts = yearMonth.split('-');
+    if (parts.length < 2) return yearMonth;
+    const [year, month] = parts;
+    if (!/^[0-9]{4}$/.test(year) || !/^[0-9]{1,2}$/.test(month)) return yearMonth;
+    const mm = month.padStart(2, '0');
+    return `${mm}/${year}`;
   }
 }
