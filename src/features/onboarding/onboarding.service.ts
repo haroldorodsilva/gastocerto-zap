@@ -364,12 +364,19 @@ export class OnboardingService {
     try {
       this.logger.log(`Validando código ${data.verificationCode} para ${data.email}`);
       this.logger.log(`🔍 DEBUG ANTES DA VALIDAÇÃO - realPhoneNumber: ${data.realPhoneNumber}`);
+      this.logger.log(`🔍 DEBUG ANTES DA VALIDAÇÃO - phoneNumber (API): ${data.phoneNumber}`);
       this.logger.log(`🔍 DEBUG ANTES DA VALIDAÇÃO - platformId: ${phoneNumber}`);
       this.logger.log(`🔍 DEBUG ANTES DA VALIDAÇÃO - data completo: ${JSON.stringify(data)}`);
 
-      // ⚠️ VERIFICAÇÃO CRÍTICA: Se não há telefone real, não pode validar
-      if (!data.realPhoneNumber) {
-        this.logger.error(`❌ ERRO: realPhoneNumber não foi coletado! Onboarding incompleto.`);
+      // ⚠️ CORREÇÃO: Para usuários existentes, usar telefone da API
+      // Para novos usuários, usar realPhoneNumber coletado no onboarding
+      const phoneToValidate = data.phoneNumber || data.realPhoneNumber;
+
+      if (!phoneToValidate) {
+        this.logger.error(`❌ ERRO: Nenhum telefone disponível para validação!`);
+        this.logger.error(`data.phoneNumber (API): ${data.phoneNumber}`);
+        this.logger.error(`data.realPhoneNumber (coletado): ${data.realPhoneNumber}`);
+        
         return {
           success: false,
           message:
@@ -379,21 +386,23 @@ export class OnboardingService {
         };
       }
 
-      // Validar código na API - usar telefone REAL, não o ID da plataforma
+      this.logger.log(`✅ Telefone para validação: ${phoneToValidate}`);
+
+      // Validar código na API
       const result = await this.gastoCertoApi.validateAuthCode({
         email: data.email,
-        phoneNumber: data.realPhoneNumber, // Telefone real: 66996285154
+        phoneNumber: phoneToValidate,
         code: data.verificationCode,
       });
 
       if (result.success && result.user) {
         this.logger.log(`🔍 DEBUG - API retornou phoneNumber: ${result.user.phoneNumber}`);
-        this.logger.log(`🔍 DEBUG - realPhoneNumber do onboarding: ${data.realPhoneNumber}`);
+        this.logger.log(`🔍 DEBUG - phoneToValidate usado: ${phoneToValidate}`);
         this.logger.log(`🔍 DEBUG - phoneNumber parameter (platformId): ${phoneNumber}`);
 
         // Código válido - criar cache do usuário retornado com informação de plataforma
         // phoneNumber = ID da plataforma (Telegram ID ou WhatsApp ID)
-        // data.realPhoneNumber = Telefone real coletado no onboarding
+        // phoneToValidate = Telefone real (da API ou coletado no onboarding)
         const platform = data.platform || 'telegram';
         await this.userCache.createUserCacheWithPlatform(
           result.user,
@@ -463,14 +472,24 @@ export class OnboardingService {
         const apiPhoneNumber = checkResult.user.phoneNumber;
         if (apiPhoneNumber) {
           this.logger.log(`📞 Telefone da API: ${apiPhoneNumber}`);
-          // Atualizar data com telefone da API
+          // Atualizar data com telefone da API para usar na validação
           data.phoneNumber = apiPhoneNumber;
+        } else {
+          this.logger.warn(`⚠️ Usuário da API não tem telefone cadastrado`);
+          // Se não tem telefone na API, tentar usar o coletado no onboarding
+          if (data.realPhoneNumber) {
+            data.phoneNumber = data.realPhoneNumber;
+            this.logger.log(`📞 Usando telefone do onboarding: ${data.realPhoneNumber}`);
+          }
         }
 
-        // Enviar código de verificação
+        // Enviar código de verificação - usar telefone disponível ou platformId
+        const phoneForAuth = data.phoneNumber || phoneNumber;
+        this.logger.log(`📞 Telefone para autenticação: ${phoneForAuth}`);
+        
         await this.gastoCertoApi.requestAuthCode({
           email: data.email,
-          phoneNumber: apiPhoneNumber || phoneNumber,
+          phoneNumber: phoneForAuth,
           source: data.platform || 'telegram',
         });
 
