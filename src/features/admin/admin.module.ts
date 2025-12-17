@@ -10,6 +10,7 @@ import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
 import { WhatsAppModule } from '../../infrastructure/whatsapp/sessions/whatsapp/whatsapp.module';
 import { TelegramModule } from '../../infrastructure/whatsapp/sessions/telegram/telegram.module';
 import { RAGService } from '../../infrastructure/ai/rag/rag.service';
+import { RedisService } from '@common/services/redis.service';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { RAGService } from '../../infrastructure/ai/rag/rag.service';
     AIConfigService,
     PrismaService,
     RAGService,
+    RedisService,
   ],
 })
 export class AdminModule {}
