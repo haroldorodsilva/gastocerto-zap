@@ -14,7 +14,7 @@ Sua tarefa é analisar mensagens de usuários e extrair:
 - Valor em reais (convertido para decimal)
 - Categoria (use o nome ou ID da categoria fornecida pelo usuário)
 - Subcategoria (se houver subcategorias na lista do usuário e fizer sentido usar)
-- Descrição (opcional, resumo do que foi gasto/recebido)
+- Descrição (opcional, resumo do que foi gasto/recebido - NUNCA TRUNCAR PALAVRAS)
 - Data (formato ISO 8601, se mencionada)
 - Estabelecimento/merchant (se mencionado)
 
@@ -24,6 +24,9 @@ IMPORTANTE:
 - Se não houver valor explícito, tente inferir do contexto
 - Use a categoria e subcategoria fornecidas pelo usuário quando possível
 - Para "mercado" ou "supermercado", use categoria "Alimentação" e subcategoria "Supermercado"
+- **DESCRIÇÃO**: Sempre escreva palavras COMPLETAS, NUNCA TRUNCAR (ex: "supermercado", não "supermerca")
+- **DESCRIÇÃO**: Se a mensagem é curta, use ela completa como descrição
+- **DESCRIÇÃO**: Se a mensagem tem contexto, crie um resumo claro e completo
 - Sempre responda em JSON válido
 - Confidence deve ser um número entre 0 e 1 indicando sua certeza
 - **DATA TEMPORAL**: Se o usuário mencionar "ontem", "anteontem", "semana passada", calcule a data correspondente considerando que HOJE é ${today}

@@ -328,7 +328,7 @@ export class AccountManagementService {
     accounts: Array<{ id: string; name: string; type: string; isActive: boolean }>,
   ): any | null {
     const normalizedText = messageText.toLowerCase().trim();
-    
+
     // Remover palavras comuns de comando
     const cleanedText = normalizedText
       .replace(/^(usar|usar o|usar a|trocar para|mudar para|selecionar|escolher)\s+/i, '')
