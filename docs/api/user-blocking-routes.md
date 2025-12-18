@@ -36,9 +36,12 @@ Este documento descreve as rotas da API para controle de bloqueio e desbloqueio 
 ```
 
 **Comportamento:**
-- Atualiza `isBlocked` no `userCache`
+- Atualiza `isBlocked` no `userCache` (banco de dados)
+- ✅ **ATUALIZAÇÃO 2025-12-18**: Invalida cache Redis (`invalidateUser()`)
 - Se `isBlocked: true`, desativa a sessão WhatsApp
 - Se `isBlocked: false`, apenas remove o bloqueio (não ativa automaticamente)
+- ❌ Usuários bloqueados **NÃO podem enviar mensagens** (retorna mensagem de bloqueio)
+- ❌ Usuários bloqueados **NÃO iniciam onboarding**
 
 ---
 

@@ -898,7 +898,7 @@ export class AdminController {
       throw new BadRequestException(`Usuário não encontrado: ${dto.userId}`);
     }
 
-    // Atualizar status de bloqueio no userCache
+    // Atualizar status de bloqueio no userCache (banco)
     await this.prisma.userCache.update({
       where: { id: user.id },
       data: {
@@ -906,6 +906,10 @@ export class AdminController {
         updatedAt: new Date(),
       },
     });
+
+    // 🆕 ATUALIZAR CACHE REDIS
+    this.logger.log(`🔄 Atualizando cache Redis para ${user.phoneNumber}`);
+    await this.cacheService.invalidateUser(user.phoneNumber);
 
     // Se estiver bloqueando, também desativar a sessão WhatsApp
     if (dto.isBlocked) {
@@ -955,7 +959,7 @@ export class AdminController {
       throw new BadRequestException(`Usuário não encontrado: ${dto.userId}`);
     }
 
-    // Atualizar status ativo no userCache
+    // Atualizar status ativo no userCache (banco)
     await this.prisma.userCache.update({
       where: { id: user.id },
       data: {
@@ -963,6 +967,10 @@ export class AdminController {
         updatedAt: new Date(),
       },
     });
+
+    // 🆕 ATUALIZAR CACHE REDIS
+    this.logger.log(`🔄 Atualizando cache Redis para ${user.phoneNumber}`);
+    await this.cacheService.invalidateUser(user.phoneNumber);
 
     // Se estiver ativando, também ativar a sessão WhatsApp
     if (dto.isActive) {

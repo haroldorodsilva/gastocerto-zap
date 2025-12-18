@@ -95,17 +95,67 @@ export class TelegramMessageHandler {
         return;
       }
 
-      // 2. Verificar se usuário existe (está cadastrado)
-      const userExists = await this.onboardingService.checkUserExists(userId);
+      // 2. Buscar dados completos do usuário (com isBlocked e isActive)
+      const user = await this.userCacheService.getUser(userId);
 
-      if (!userExists) {
-        this.logger.log(`New user ${userId}, starting onboarding`);
+      if (!user) {
+        // Usuário não encontrado - pode ser novo, encaminhar para onboarding
+        this.logger.log(`[Telegram] New user detected: ${userId}, starting onboarding`);
         await this.startOnboarding(sessionId, message);
         return;
       }
 
-      // 3. Usuário cadastrado - processar mensagem normalmente
-      this.logger.log(`Registered user ${userId}, processing message`);
+      // 3. Verificar se usuário está bloqueado
+      if (user.isBlocked) {
+        this.logger.warn(`[Telegram] User ${userId} is blocked`);
+        this.eventEmitter.emit('telegram.reply', {
+          platformId: userId,
+          message:
+            '🚫 *Acesso Bloqueado*\n\n' +
+            'Sua conta foi bloqueada temporariamente.\n\n' +
+            '📞 Entre em contato com o suporte para mais informações:\n' +
+            'suporte@gastocerto.com',
+          context: 'ERROR',
+          platform: MessagingPlatform.TELEGRAM,
+        });
+        return;
+      }
+
+      // 4. Verificar se usuário está ativo
+      if (!user.isActive) {
+        this.logger.warn(`[Telegram] User ${userId} is inactive`);
+        this.eventEmitter.emit('telegram.reply', {
+          platformId: userId,
+          message:
+            '⚠️ *Conta Desativada*\n\n' +
+            'Sua conta está temporariamente desativada.\n\n' +
+            '✅ Para reativar, entre em contato com o suporte:\n' +
+            'suporte@gastocerto.com',
+          context: 'ERROR',
+          platform: MessagingPlatform.TELEGRAM,
+        });
+        return;
+      }
+
+      // 5. Verificar assinatura ativa
+      if (!user.hasActiveSubscription) {
+        this.logger.warn(`[Telegram] User ${userId} has no active subscription`);
+        this.eventEmitter.emit('telegram.reply', {
+          platformId: userId,
+          message:
+            '💳 *Assinatura Inativa*\n\n' +
+            'Sua assinatura expirou ou está inativa.\n\n' +
+            '🔄 Para continuar usando o GastoCerto, renove sua assinatura:\n' +
+            '👉 https://gastocerto.com/assinatura\n\n' +
+            '❓ Dúvidas? Fale conosco: suporte@gastocerto.com',
+          context: 'ERROR',
+          platform: MessagingPlatform.TELEGRAM,
+        });
+        return;
+      }
+
+      // 6. Usuário válido - processar mensagem normalmente
+      this.logger.log(`[Telegram] Processing message from registered user ${user.name}`);
       await this.processRegisteredUserMessage(sessionId, message);
     } catch (error) {
       this.logger.error(`Error processing Telegram message:`, error);
