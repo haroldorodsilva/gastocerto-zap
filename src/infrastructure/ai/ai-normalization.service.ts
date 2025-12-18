@@ -28,6 +28,9 @@ export class AINormalizationService {
     // Normaliza a categoria
     const category = this.normalizeCategory(data.category || data.categoria);
 
+    // Normaliza a subcategoria (NOVO - corrige bug de subcategoria "undefined")
+    const subCategory = this.normalizeSubCategory(data.subCategory || data.subcategoria);
+
     // Normaliza a descrição
     const description = this.normalizeDescription(data.description || data.descricao);
 
@@ -44,6 +47,7 @@ export class AINormalizationService {
       type,
       amount,
       category,
+      subCategory, // Agora incluso na normalização
       description,
       merchant,
       date,
@@ -101,6 +105,20 @@ export class AINormalizationService {
 
     // Se a categoria estiver vazia após trim, retorna "Outros"
     return categoryStr || 'Outros';
+  }
+
+  /**
+   * Normaliza a subcategoria (NOVO - corrige bug de subcategoria virando "undefined")
+   */
+  private normalizeSubCategory(subCategory: any): string | undefined {
+    if (!subCategory || subCategory === 'undefined' || subCategory === 'null') {
+      return undefined;
+    }
+
+    const subCategoryStr = String(subCategory).trim();
+
+    // Retorna undefined se vazio após trim
+    return subCategoryStr || undefined;
   }
 
   /**

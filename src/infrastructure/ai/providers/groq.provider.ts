@@ -128,7 +128,9 @@ export class GroqProvider implements IAIProvider {
       });
 
       if (!response.ok) {
-        throw new Error(`Groq API error: ${response.statusText}`);
+        const errorText = await response.text();
+        this.logger.error(`[Groq] Erro HTTP ${response.status}: ${errorText}`);
+        throw new Error(`Groq API error: ${response.statusText} - ${errorText}`);
       }
 
       const data = await response.json();

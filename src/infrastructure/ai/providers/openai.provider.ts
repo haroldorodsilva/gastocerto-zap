@@ -98,6 +98,11 @@ export class OpenAIProvider implements IAIProvider {
       this.logger.debug(`Extraindo transação de: "${text}"`);
 
       const userPrompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
+      
+      this.logger.debug(`📤 [OpenAI] Prompt enviado com ${userContext?.categories?.length || 0} categorias`);
+      if (userContext?.categories && userContext.categories.length > 0) {
+        this.logger.debug(`📂 [OpenAI] Primeira categoria: ${userContext.categories[0].name} com ${userContext.categories[0].subCategories?.length || 0} subcategorias`);
+      }
 
       const response = await this.client.chat.completions.create({
         model: this.model,
@@ -116,6 +121,8 @@ export class OpenAIProvider implements IAIProvider {
       this.logger.log(
         `✅ Transação extraída em ${processingTime}ms - Tipo: ${result.type}, Valor: ${result.amount}`,
       );
+      
+      this.logger.debug(`📝 [OpenAI] Resposta completa: ${JSON.stringify(result, null, 2)}`);
 
       return result;
     } catch (error) {

@@ -184,6 +184,13 @@ export class TransactionRegistrationService {
       const aiSettings = await this.aiConfigService.getSettings();
       const ragEnabled = aiSettings.ragEnabled && this.ragService;
 
+      // 🐛 DEBUG: Mostrar status do RAG
+      this.logger.debug(
+        `🔍 [RAG DEBUG] ragEnabled=${ragEnabled} | ` +
+        `aiSettings.ragEnabled=${aiSettings.ragEnabled} | ` +
+        `this.ragService=${!!this.ragService}`,
+      );
+
       // Indexar categorias no RAG
       if (ragEnabled && categoriesData.categories.length > 0) {
         try {
@@ -346,6 +353,12 @@ export class TransactionRegistrationService {
         } else {
           extractedData.source = 'AI_ONLY';
         }
+      } else {
+        // 🚨 RAG está desabilitado - avisar
+        this.logger.warn(
+          `⚠️ RAG DESABILITADO - Tabela rag_search_logs não será preenchida | ` +
+          `Para habilitar: UPDATE "AISettings" SET "ragEnabled" = true;`,
+        );
       }
 
       // Log de extração
@@ -680,6 +693,8 @@ export class TransactionRegistrationService {
 
       if (user && accountId) {
         try {
+          this.logger.debug(`📊 [DEBUG] Dados extraídos ANTES de resolver IDs: category="${data.category}", subCategory="${data.subCategory}"`);
+          
           const resolved = await this.resolveCategoryAndSubcategory(
             user.gastoCertoId,
             accountId,
@@ -1087,6 +1102,8 @@ export class TransactionRegistrationService {
     categoryNameOrId: string,
     subcategoryNameOrId?: string,
   ): Promise<{ categoryId: string | null; subCategoryId: string | null }> {
+    this.logger.debug(`🔍 [DEBUG] resolveCategoryAndSubcategory chamado com: category="${categoryNameOrId}", subCategory="${subcategoryNameOrId}"`);
+    
     try {
       // Buscar usuário no cache local
       const user = await this.userCache.findByPlatformId(userId, 'whatsapp');
