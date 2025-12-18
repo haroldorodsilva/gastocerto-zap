@@ -629,16 +629,21 @@ export class UserCacheService {
    */
   private async getUserFromDatabase(phoneNumber: string): Promise<UserCache | null> {
     try {
-      // Tentar buscar por Telegram ID primeiro (usando findFirst pois não é mais unique)
-      let user = await this.prisma.userCache.findFirst({
-        where: { telegramId: phoneNumber },
+      // Buscar por múltiplos identificadores (phoneNumber, telegramId, whatsappId)
+      const user = await this.prisma.userCache.findFirst({
+        where: {
+          OR: [
+            { phoneNumber }, // ✅ Buscar por phoneNumber (prioritário)
+            { telegramId: phoneNumber }, // Telegram usa chatId como identificador
+            { whatsappId: phoneNumber }, // WhatsApp usa phoneNumber completo
+          ],
+        },
       });
 
-      // Se não encontrou, tentar por WhatsApp ID
-      if (!user) {
-        user = await this.prisma.userCache.findFirst({
-          where: { whatsappId: phoneNumber },
-        });
+      if (user) {
+        this.logger.debug(
+          `✅ User found in database: ${phoneNumber} → gastoCertoId: ${user.gastoCertoId}`,
+        );
       }
 
       return user;
