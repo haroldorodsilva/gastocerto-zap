@@ -1,8 +1,8 @@
-import { BaseEntity } from "./base.entity";
-import { Accounts } from "./accounts.entity";
-import { Banks } from "./banks.entity";
-import { CreditCardInvoice } from "./credit-card-invoices.entity";
-import { Transactions } from "./transactions.entity";
+import { BaseEntity } from './base.entity';
+import { Accounts } from './accounts.entity';
+import { Banks } from './banks.entity';
+import { CreditCardInvoice } from './credit-card-invoices.entity';
+import { Transactions } from './transactions.entity';
 
 export class CreditCard extends BaseEntity {
   name: string;

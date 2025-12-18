@@ -21,8 +21,10 @@ import {
   GastoCertoTransactionResponseDto,
 } from '@features/transactions/dto/transaction.dto';
 import { ServiceAuthService } from '@common/services/service-auth.service';
+import { DiscordNotificationService } from '@common/services/discord-notification.service';
 import { MonthlyBalanceRelations } from '../models/monthly-balance.entity';
-import { ListTransactionsResponseDto } from './types';
+import { CreditCardResponseDto, ListTransactionsResponseDto } from './types';
+import { CreditCardInvoiceRelations } from '@/models/credit-card-invoices.entity';
 
 @Injectable()
 export class GastoCertoApiService {
@@ -34,11 +36,106 @@ export class GastoCertoApiService {
     private readonly configService: ConfigService,
     private readonly httpService: HttpService,
     private readonly serviceAuthService: ServiceAuthService,
+    private readonly discordNotification: DiscordNotificationService,
   ) {
     this.baseUrl = this.configService.get<string>('gastoCertoApi.baseUrl')!;
     this.timeout = this.configService.get<number>('gastoCertoApi.timeout', 30000);
 
     this.logger.log(`✅ GastoCertoApiService inicializado - Base URL: ${this.baseUrl}`);
+  }
+
+  /**
+   * Método ÚNICO de tratamento de erros da API
+   *
+   * ⚠️ TODOS os catches devem chamar este método!
+   *
+   * Responsabilidades:
+   * 1. Logar erro técnico completo (para debug)
+   * 2. Notificar Discord em erros críticos
+   * 3. Retornar mensagem amigável para o usuário
+   *
+   * @param error - Erro original da requisição
+   * @param context - Contexto da operação (ex: "getUserByPhone", "createTransaction")
+   * @param metadata - Dados adicionais para debug (phoneNumber, transactionId, etc)
+   * @param notifyDiscord - Se deve notificar Discord (padrão: true para erros 5xx)
+   */
+  private async handleApiError(
+    error: any,
+    context: string,
+    metadata?: Record<string, any>,
+    notifyDiscord = true,
+  ): Promise<string> {
+    // 1. Extrair informações do erro
+    const status = error.response?.status;
+    const statusText = error.response?.statusText;
+    const errorCode = error.code;
+    const errorMessage = error.message;
+    const responseData = error.response?.data;
+
+    // 2. Log técnico completo (para debug)
+    this.logger.error(
+      `❌ [${context}] Erro na API GastoCerto:`,
+      {
+        status,
+        statusText,
+        errorCode,
+        errorMessage,
+        responseData,
+        metadata,
+      },
+      error.stack,
+    );
+
+    // 3. Verificar se deve notificar Discord
+    const shouldNotify =
+      notifyDiscord &&
+      (status >= 500 || // Erros de servidor
+        errorCode === 'ECONNREFUSED' || // Serviço offline
+        errorCode === 'ETIMEDOUT' || // Timeout
+        errorCode === 'ENOTFOUND'); // DNS não encontrado
+
+    if (shouldNotify) {
+      // Notificar Discord de forma assíncrona (não bloqueante)
+      this.discordNotification
+        .notify({
+          title: `🚨 Erro API - ${context}`,
+          description: `Falha ao comunicar com API externa do Gasto Certo`,
+          color: 'error',
+          fields: [
+            {
+              name: '🔧 Operação',
+              value: context,
+              inline: true,
+            },
+            {
+              name: '📡 Status HTTP',
+              value: status ? `${status} ${statusText}` : errorCode || 'N/A',
+              inline: true,
+            },
+            {
+              name: '💾 Dados',
+              value: metadata ? JSON.stringify(metadata).substring(0, 500) : 'N/A',
+              inline: false,
+            },
+            {
+              name: '❌ Mensagem',
+              value: errorMessage || 'Erro desconhecido',
+              inline: false,
+            },
+            {
+              name: '📄 Response',
+              value: responseData ? JSON.stringify(responseData).substring(0, 500) : 'N/A',
+              inline: false,
+            },
+          ],
+        })
+        .catch((discordError) => {
+          this.logger.warn(`Falha ao notificar Discord: ${discordError.message}`);
+        });
+    }
+
+    // 4. Retornar mensagem amigável para o usuário
+    return this.getUserFriendlyError(error);
   }
 
   /**
@@ -103,11 +200,8 @@ export class GastoCertoApiService {
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar usuário: ${error.message}`);
-      throw new HttpException(
-        'Erro ao buscar usuário na API Gasto Certo',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+      const errorMessage = await this.handleApiError(error, 'getUserByPhone', { phoneNumber });
+      throw new HttpException(errorMessage, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -1113,15 +1207,7 @@ export class GastoCertoApiService {
    */
   async listCreditCards(accountId: string): Promise<{
     success: boolean;
-    data?: Array<{
-      id: string;
-      name: string;
-      limit: number;
-      closingDay: number;
-      dueDay: number;
-      bankName: string;
-      createdAt: string;
-    }>;
+    data?: CreditCardResponseDto[];
     error?: string;
   }> {
     try {
@@ -1143,13 +1229,21 @@ export class GastoCertoApiService {
         ),
       );
 
-      if (response.data.data) {
-        this.logger.log(`✅ ${response.data.data.length} cartão(ões) encontrado(s)`);
+      if (response.data.cards) {
+        this.logger.log(`✅ ${response.data.cards.length} cartão(ões) encontrado(s)`);
       }
 
-      return { success: true, data: response.data.data };
+      return { success: true, data: response.data.cards };
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao listar cartões:`, error.message);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         error: this.getUserFriendlyError(error),
@@ -1163,40 +1257,22 @@ export class GastoCertoApiService {
    */
   async getInvoiceDetails(
     accountId: string,
-    invoiceId: string,
+    yearMonth: string,
+    creditCardId: string,
   ): Promise<{
     success: boolean;
-    data?: {
-      id: string;
-      yearMonth: string;
-      status: 'OPEN' | 'CLOSED' | 'PAID' | 'OVERDUE';
-      closingDate: string;
-      dueDate: string;
-      grossAmount: number;
-      totalAmount: number;
-      refundAmount: number;
-      advanceAmount: number;
-      paidAmount: number;
-      creditCardName: string;
-      transactions: Array<{
-        id: string;
-        description: string;
-        amount: number;
-        date: string;
-        type: 'EXPENSES' | 'INCOME';
-        categoryName: string;
-        subCategoryName?: string;
-        note?: string;
-      }>;
-    };
+    invoice?: CreditCardInvoiceRelations;
     error?: string;
   }> {
     try {
-      this.logger.log(`💳 Buscando detalhes da fatura ${invoiceId} - accountId: ${accountId}`);
+      this.logger.log(
+        `💳 Buscando detalhes da fatura ${yearMonth} - accountId: ${accountId}, creditCardId: ${creditCardId}`,
+      );
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
         accountId,
-        invoiceId,
+        yearMonth,
+        creditCardId,
       });
 
       const response = await firstValueFrom(
@@ -1204,7 +1280,8 @@ export class GastoCertoApiService {
           `${this.baseUrl}/external/cards/invoices/details`,
           {
             accountId,
-            invoiceId,
+            yearMonth,
+            creditCardId,
           },
           {
             headers: {
@@ -1218,13 +1295,21 @@ export class GastoCertoApiService {
 
       if (response.data) {
         this.logger.log(
-          `✅ Fatura ${invoiceId} - ${response.data.transactions?.length || 0} transação(ões)`,
+          `✅ Fatura ${yearMonth} - ${response.data.invoices?.length || 0} transação(ões)`,
         );
       }
 
-      return { success: true, data: response.data };
+      return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao buscar detalhes da fatura:`, error.message);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         error: this.getUserFriendlyError(error),
@@ -1235,52 +1320,60 @@ export class GastoCertoApiService {
   /**
    * Lista faturas de cartão de crédito
    * Endpoint: POST /external/cards/invoices
+   * Se creditCardId não for fornecido, retorna faturas de todos os cartões
    */
   async listCreditCardInvoices(
     accountId: string,
-    creditCardId: string,
+    creditCardId?: string,
     monthYear?: string,
   ): Promise<{
     success: boolean;
-    data?: any[];
+    invoices?: CreditCardInvoiceRelations[];
   }> {
     try {
       this.logger.log(
-        `💳 Listando faturas - accountId: ${accountId}, creditCardId: ${creditCardId}, monthYear: ${monthYear || 'ALL'}`,
+        `💳 Listando faturas - accountId: ${accountId}, creditCardId: ${creditCardId || 'ALL'}, monthYear: ${monthYear || 'ALL'}`,
       );
 
-      const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
-        accountId,
-        creditCardId,
-        monthYear,
-      });
+      const payload: any = { accountId };
+      if (creditCardId) payload.creditCardId = creditCardId;
+      if (monthYear) payload.monthYear = monthYear;
+
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders(payload);
 
       const response = await firstValueFrom(
-        this.httpService.post(
-          `${this.baseUrl}/external/cards/invoices`,
-          {
-            accountId,
-            creditCardId,
-            ...(monthYear && { monthYear }),
+        this.httpService.post(`${this.baseUrl}/external/cards/invoices`, payload, {
+          headers: {
+            ...hmacHeaders,
+            'Content-Type': 'application/json',
           },
-          {
-            headers: {
-              ...hmacHeaders,
-              'Content-Type': 'application/json',
-            },
-            timeout: this.timeout,
-          },
-        ),
+          timeout: this.timeout,
+        }),
       );
 
-      if (response.data.data) {
-        this.logger.log(`✅ ${response.data.data.length} faturas encontradas`);
+      if (response.data.invoices) {
+        this.logger.log(`✅ ${response.data.invoices.length} faturas encontradas`);
       }
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao listar faturas:`, error.message);
-      return { success: false, data: [] };
+      this.logger.error(`❌ Erro ao listar faturas:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/cards/invoices`);
+      this.logger.error(`   AccountId: ${accountId}`);
+      this.logger.error(`   CreditCardId: ${creditCardId || 'ALL'}`);
+      this.logger.error(`   MonthYear: ${monthYear || 'ALL'}`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
+      return { success: false, invoices: [] };
     }
   }
 
@@ -1294,6 +1387,7 @@ export class GastoCertoApiService {
    * - amount: Valor do pagamento em centavos
    */
   async payInvoice(
+    userId: string,
     accountId: string,
     invoiceId: string,
     amount: number,
@@ -1309,8 +1403,9 @@ export class GastoCertoApiService {
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders({
         accountId,
-        id: invoiceId,
+        invoiceId,
         amount,
+        userId,
       });
 
       const response = await firstValueFrom(
@@ -1318,8 +1413,9 @@ export class GastoCertoApiService {
           `${this.baseUrl}/external/cards/invoices/pay`,
           {
             accountId,
-            id: invoiceId,
+            invoiceId,
             amount,
+            userId,
           },
           {
             headers: {
@@ -1411,7 +1507,22 @@ export class GastoCertoApiService {
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao pagar fatura:`, error.message);
+      this.logger.error(`❌ Erro ao pagar fatura:`);
+      this.logger.error(`   URL: ${this.baseUrl}/external/credit-card/invoices/pay`);
+      this.logger.error(`   UserId: ${userId}`);
+      this.logger.error(`   InvoiceId: ${invoiceId}`);
+      this.logger.error(`   BankId: ${bankId}`);
+      this.logger.error(`   Status HTTP: ${error.response?.status || 'N/A'}`);
+      this.logger.error(`   Mensagem: ${error.message}`);
+      if (error.response?.data) {
+        this.logger.error(`   Resposta da API:`, JSON.stringify(error.response.data));
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.logger.error(`   ⚠️  API está OFFLINE ou inacessível`);
+      }
+      if (error.code === 'ETIMEDOUT') {
+        this.logger.error(`   ⚠️  TIMEOUT - API não respondeu em ${this.timeout}ms`);
+      }
       return {
         success: false,
         error: this.getUserFriendlyError(error),

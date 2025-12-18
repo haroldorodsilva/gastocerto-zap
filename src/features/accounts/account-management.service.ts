@@ -62,8 +62,8 @@ export class AccountManagementService {
       accounts.forEach((acc, index) => {
         const indicator = acc.isActive ? '✅' : '⚪';
         const primaryBadge = acc.isPrimary ? ' 🌟' : '';
-        const roleLabel = this.getRoleLabel(acc.type);
-        message += `${indicator} ${index + 1}. *${acc.name}* (${roleLabel})${primaryBadge}\n`;
+        // const roleLabel = this.getRoleLabel(acc.type);
+        message += `${indicator} ${index + 1}. *${acc.name}* ${primaryBadge}\n`;
       });
 
       message += '\n💡 Para trocar de perfil, digite: *"mudar perfil"* ou *"usar [nome]"*';
@@ -290,16 +290,27 @@ export class AccountManagementService {
 
   /**
    * Valida se usuário tem conta ativa antes de operação
+   *
+   * ⚠️ PONTO ÚNICO DE VALIDAÇÃO
+   * Este método deve ser chamado no início de TODA operação que requer conta ativa.
+   *
+   * Retorna:
+   * - valid: se tem conta ativa ou não
+   * - account: dados completos da conta ativa (id, name, type, isPrimary)
+   * - message: mensagem de erro amigável para o usuário (se valid = false)
    */
   async validateActiveAccount(phoneNumber: string): Promise<{
     valid: boolean;
-    account?: any;
+    account?: { id: string; name: string; type: string; isPrimary?: boolean };
     message?: string;
   }> {
     try {
+      this.logger.debug(`🔍 Validando conta ativa para ${phoneNumber}`);
+
       const activeAccount = await this.userCache.getActiveAccount(phoneNumber);
 
       if (!activeAccount) {
+        this.logger.warn(`❌ Nenhuma conta ativa encontrada para ${phoneNumber}`);
         return {
           valid: false,
           message:
@@ -308,12 +319,14 @@ export class AccountManagementService {
         };
       }
 
+      this.logger.debug(`✅ Conta ativa encontrada: ${activeAccount.name} (${activeAccount.id})`);
+
       return {
         valid: true,
         account: activeAccount,
       };
     } catch (error) {
-      this.logger.error(`Erro ao validar perfil ativo: ${error.message}`);
+      this.logger.error(`Erro ao validar perfil ativo: ${error.message}`, error.stack);
       return {
         valid: false,
         message: '❌ Erro ao validar perfil. Tente novamente.',

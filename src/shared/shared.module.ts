@@ -4,16 +4,18 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-yet';
 import { GastoCertoApiService } from './gasto-certo-api.service';
+import { DiscordNotificationService } from '@common/services/discord-notification.service';
 
 /**
  * SharedModule
- * 
+ *
  * Módulo global para serviços compartilhados entre outros módulos.
  * Services aqui são exportados e podem ser injetados em qualquer módulo
  * sem necessidade de importar explicitamente.
- * 
+ *
  * Inclui:
  * - GastoCertoApiService: Cliente HTTP para API externa
+ * - DiscordNotificationService: Notificações de erros críticos
  * - Redis/Cache: Cache distribuído global (única conexão)
  */
 @Global()
@@ -53,7 +55,7 @@ import { GastoCertoApiService } from './gasto-certo-api.service';
       },
     }),
   ],
-  providers: [GastoCertoApiService],
-  exports: [GastoCertoApiService, CacheModule],
+  providers: [GastoCertoApiService, DiscordNotificationService],
+  exports: [GastoCertoApiService, DiscordNotificationService, CacheModule],
 })
 export class SharedModule {}

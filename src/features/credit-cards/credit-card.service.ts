@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCache } from '@prisma/client';
-import { AccountManagementService } from '@features/accounts/account-management.service';
+import { UserCacheService } from '@features/users/user-cache.service';
 import { ListContextService, ListContextItem } from '../transactions/list-context.service';
+import { DateUtil } from '@/utils/date.util';
+import { formatCurrencyFromCents } from '@/utils/currency';
+import { TransactionsRelations } from '@/models/transactions.entity';
 
 /**
  * CreditCardService
@@ -12,6 +15,10 @@ import { ListContextService, ListContextItem } from '../transactions/list-contex
  * - Listar faturas de um cartão
  * - Ver detalhes de uma fatura específica
  * - Pagar fatura de cartão (invoice)
+ *
+ * ⚠️ VALIDAÇÃO DE CONTA ATIVA:
+ * A validação de conta ativa é feita ANTES no TransactionsService.
+ * Este service apenas obtém a conta ativa via UserCacheService.
  */
 @Injectable()
 export class CreditCardService {
@@ -19,33 +26,35 @@ export class CreditCardService {
 
   constructor(
     private readonly gastoCertoApi: GastoCertoApiService,
-    private readonly accountManagement: AccountManagementService,
+    private readonly userCache: UserCacheService,
     private readonly listContext: ListContextService,
   ) {}
 
   /**
    * Lista todos os cartões de crédito do usuário
    */
-  async listCreditCards(
-    user: UserCache,
-  ): Promise<{
+  async listCreditCards(user: UserCache): Promise<{
     success: boolean;
     message: string;
   }> {
     try {
       this.logger.log(`💳 Listando cartões de crédito para ${user.phoneNumber}`);
 
-      // Validar conta ativa
-      const validation = await this.accountManagement.validateActiveAccount(user.phoneNumber);
-      if (!validation.valid || !validation.account) {
+      // Obter conta ativa (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      if (!activeAccount) {
+        this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
           success: false,
-          message: validation.message,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
         };
       }
 
-      const result = await this.gastoCertoApi.listCreditCards(validation.account.id);
+      this.logger.log(`💳 Usando conta: ${activeAccount.name} (${activeAccount.id})`);
 
+      const result = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+
+      this.logger.log(`💳 Cartões encontrados: ${JSON.stringify(result, null, 2)}`);
       if (!result.success || !result.data || result.data.length === 0) {
         return {
           success: true,
@@ -63,8 +72,8 @@ export class CreditCardService {
         id: card.id,
         type: 'credit_card' as const,
         description: card.name,
-        amount: card.limit / 100, // Converter centavos para reais
-        category: card.bankName,
+        amount: card.limit / 100,
+        category: card.bank?.name || '',
         metadata: {
           closingDay: card.closingDay,
           dueDay: card.dueDay,
@@ -80,8 +89,9 @@ export class CreditCardService {
 
       cards.forEach((card, index) => {
         message += `${index + 1}. 💳 *${card.name}*\n`;
-        message += `   🏦 ${card.bankName}\n`;
-        message += `   💰 Limite: R$ ${(card.limit / 100).toFixed(2)}\n`;
+        message += `   🏦 ${card.bank?.name || ''}\n`;
+        message += `   💰 Limite: R$ ${formatCurrencyFromCents(card.limit)}\n`;
+        message += `   💰 Disponível: R$ ${formatCurrencyFromCents(card.limit - (card.resume?.amountTotal || 0))}\n`;
         message += `   📅 Fechamento: dia ${card.closingDay}\n`;
         message += `   📅 Vencimento: dia ${card.dueDay}\n\n`;
       });
@@ -104,62 +114,32 @@ export class CreditCardService {
   /**
    * Lista faturas de cartão de crédito
    */
-  async listInvoices(
-    user: UserCache,
-  ): Promise<{
+  async listInvoices(user: UserCache): Promise<{
     success: boolean;
     message: string;
   }> {
     try {
       this.logger.log(`📋 Listando faturas para ${user.phoneNumber}`);
 
-      // Validar conta ativa
-      const validation = await this.accountManagement.validateActiveAccount(user.phoneNumber);
-      if (!validation.valid || !validation.account) {
+      // Obter conta ativa (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      if (!activeAccount) {
+        this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
           success: false,
-          message: validation.message,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
         };
       }
 
-      // Primeiro, buscar cartões
-      const cardsResult = await this.gastoCertoApi.listCreditCards(validation.account.id);
+      this.logger.log(`📋 Usando conta: ${activeAccount.name} (${activeAccount.id})`);
 
-      if (!cardsResult.success || !cardsResult.data || cardsResult.data.length === 0) {
-        return {
-          success: false,
-          message:
-            '💳 *Cartões de Crédito*\n\n' +
-            '📭 Você não tem cartões cadastrados.\n\n' +
-            '💡 _Cadastre um cartão no app para começar!_',
-        };
-      }
-
-      // Para cada cartão, buscar faturas
-      const allInvoices: any[] = [];
-
-      for (const card of cardsResult.data) {
-        try {
-          const invoicesResult = await this.gastoCertoApi.listCreditCardInvoices(
-            validation.account.id,
-            card.id,
-          );
-
-          if (invoicesResult.success && invoicesResult.data) {
-            allInvoices.push(
-              ...invoicesResult.data.map((invoice: any) => ({
-                ...invoice,
-                cardName: card.name,
-                cardId: card.id,
-              })),
-            );
-          }
-        } catch (err) {
-          this.logger.warn(`Erro ao buscar faturas do cartão ${card.name}:`, err);
-        }
-      }
-
-      if (allInvoices.length === 0) {
+      // Buscar todas as faturas de todos os cartões (sem especificar creditCardId)
+      const invoicesResult = await this.gastoCertoApi.listCreditCardInvoices(activeAccount.id);
+      if (
+        !invoicesResult.success ||
+        !invoicesResult.invoices ||
+        invoicesResult.invoices.length === 0
+      ) {
         return {
           success: true,
           message:
@@ -169,6 +149,8 @@ export class CreditCardService {
         };
       }
 
+      const allInvoices = invoicesResult.invoices;
+
       // Ordenar por data de vencimento
       allInvoices.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
@@ -176,14 +158,14 @@ export class CreditCardService {
       const contextItems: ListContextItem[] = allInvoices.map((invoice) => ({
         id: invoice.id,
         type: 'invoice' as const,
-        description: `${invoice.cardName} - ${this.formatMonthYear(invoice.yearMonth)}`,
-        amount: invoice.total / 100,
-        category: invoice.cardName,
+        description: `${invoice.creditCard?.name || ''} - ${this.formatMonthYear(invoice.yearMonth)}`,
+        amount: invoice.amountTotal / 100,
+        category: invoice.creditCard?.name,
         metadata: {
           yearMonth: invoice.yearMonth,
           status: invoice.status,
           dueDate: invoice.dueDate,
-          cardId: invoice.cardId,
+          cardId: invoice.creditCardId,
         },
       }));
 
@@ -196,14 +178,15 @@ export class CreditCardService {
 
       allInvoices.forEach((invoice, index) => {
         const statusEmoji = this.getStatusEmoji(invoice.status);
-        const amountInReais = invoice.total / 100;
+        const amountInReais = invoice.amountTotal / 100;
+        const cardName = invoice.creditCard?.name || '';
 
-        message += `${index + 1}. 💳 *${invoice.cardName}*\n`;
+        message += `${index + 1}. 💳 *${cardName}*\n`;
         message += `   📅 ${this.formatMonthYear(invoice.yearMonth)}\n`;
         message += `   💰 *R$ ${amountInReais.toFixed(2)}*\n`;
         message += `   ${statusEmoji} ${this.translateStatus(invoice.status)}\n`;
-        message += `   📆 Vence: ${new Date(invoice.dueDate).toLocaleDateString('pt-BR')}\n`;
-        message += `   📊 ${invoice.transactions} transação(ões)\n\n`;
+        message += `   📆 Vence: ${DateUtil.formatBR(invoice.dueDate)}\n\n`;
+        // message += `   📊 ${invoice.transactionCount || 0} transação(ões)\n\n`;
       });
 
       message +=
@@ -250,35 +233,37 @@ export class CreditCardService {
 
       const invoice = result.item;
 
-      // Buscar detalhes completos da fatura via API
-      const validation = await this.accountManagement.validateActiveAccount(user.phoneNumber);
-      if (!validation.valid || !validation.account) {
+      // Obter conta ativa (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      if (!activeAccount) {
+        this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
           success: false,
-          message: validation.message,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
         };
       }
 
       const detailsResult = await this.gastoCertoApi.getInvoiceDetails(
-        validation.account.id,
-        invoice.id,
+        activeAccount.id,
+        invoice.metadata.yearMonth,
+        invoice.metadata.cardId,
       );
 
-      if (!detailsResult.success || !detailsResult.data) {
+      if (!detailsResult.success || !detailsResult.invoice) {
         return {
           success: false,
           message: '❌ Não foi possível carregar os detalhes da fatura.',
         };
       }
 
-      const details = detailsResult.data;
+      const details = detailsResult.invoice;
 
       // Formatar mensagem igual "minhas transações"
       let message = `💳 *Detalhes da Fatura*\n\n`;
-      message += `🏦 *Cartão:* ${details.creditCardName}\n`;
+      message += `🏦 *Cartão:* ${details.creditCard?.name || ''}\n`;
       message += `📅 *Período:* ${this.formatMonthYear(details.yearMonth)}\n`;
-      message += `💰 *Total:* R$ ${(details.totalAmount / 100).toFixed(2)}\n`;
-      message += `📆 *Vencimento:* ${new Date(details.dueDate).toLocaleDateString('pt-BR')}\n`;
+      message += `💰 *Total:* R$ ${(details.amountTotal / 100).toFixed(2)}\n`;
+      message += `📆 *Vencimento:* ${DateUtil.formatBR(details.dueDate)}\n`;
       message += `📊 *Status:* ${this.translateStatus(details.status)}\n\n`;
       message += '───────────────────\n\n';
 
@@ -286,19 +271,16 @@ export class CreditCardService {
       if (details.transactions && details.transactions.length > 0) {
         message += `📋 *Transações (${details.transactions.length}):*\n\n`;
 
-        details.transactions.forEach((t: any, index: number) => {
-          const label = t.description || t.categoryName || 'Sem descrição';
+        details.transactions.forEach((t: TransactionsRelations, index: number) => {
+          const label = t.description || t.category.name || 'Sem descrição';
           const amountInReais = Math.abs(t.amount) / 100;
 
           message += `${index + 1}. ${label}\n`;
           message += `   🔴 *R$ ${amountInReais.toFixed(2)}*\n`;
-          message += `   📂 ${t.categoryName || 'Sem categoria'}`;
+          message += `   📂 ${t.category.name || 'Sem categoria'}`;
 
-          if (t.merchantName) {
-            message += ` • 🏪 ${t.merchantName}`;
-          }
           message += '\n';
-          message += `   📅 ${new Date(t.date).toLocaleDateString('pt-BR')}\n\n`;
+          message += `   📅 ${DateUtil.formatBR(t.dueDate)}\n\n`;
         });
       } else {
         message += '📭 Nenhuma transação nesta fatura.\n\n';
@@ -346,12 +328,13 @@ export class CreditCardService {
 
       const invoice = result.item;
 
-      // Validar conta ativa
-      const validation = await this.accountManagement.validateActiveAccount(user.phoneNumber);
-      if (!validation.valid || !validation.account) {
+      // Obter conta ativa (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      if (!activeAccount) {
+        this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
           success: false,
-          message: validation.message,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
         };
       }
 
@@ -362,7 +345,8 @@ export class CreditCardService {
 
       // Chamar API para pagar fatura (invoice)
       const payResult = await this.gastoCertoApi.payInvoice(
-        validation.account.id,
+        user.gastoCertoId,
+        activeAccount.id,
         invoice.id,
         amount,
       );
@@ -386,17 +370,15 @@ export class CreditCardService {
           message:
             '❌ *Não foi possível pagar a fatura*\n\n' +
             'Verifique se a fatura ainda está aberta.\n\n' +
-            '💡 _Tente novamente ou entre em contato com o suporte._',
+            payResult.message,
         };
       }
     } catch (error) {
       this.logger.error(`❌ Erro ao pagar fatura:`, error);
+
       return {
         success: false,
-        message:
-          '❌ *Erro ao processar pagamento*\n\n' +
-          'Ocorreu um problema ao tentar pagar esta fatura.\n\n' +
-          '💡 _Tente novamente em alguns instantes._',
+        message: '❌ Ocorreu um problema ao tentar pagar esta fatura.\n\n' + error.message,
       };
     }
   }
@@ -405,7 +387,7 @@ export class CreditCardService {
    * Helpers de formatação
    */
   private formatMonthYear(yearMonth: string): string {
-    const [year, month] = yearMonth.split('-');
+    const [year, month] = yearMonth?.split('-');
     const monthNames = [
       'Janeiro',
       'Fevereiro',

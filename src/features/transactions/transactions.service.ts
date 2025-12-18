@@ -222,6 +222,41 @@ export class TransactionsService {
         };
       }
 
+      // 2.5. VALIDAÇÃO CENTRALIZADA DE CONTA ATIVA
+      // Operações que NÃO precisam de conta ativa (podem ser executadas sem)
+      const operationsWithoutAccountRequired = [
+        'LIST_ACCOUNTS',          // Listar contas disponíveis
+        'SHOW_ACTIVE_ACCOUNT',    // Mostrar qual conta está ativa
+        'SWITCH_ACCOUNT',         // Trocar de conta
+        'CONFIRMATION_RESPONSE',  // Confirmar transação
+        'HELP',                   // Ajuda
+        'GREETING',               // Saudações
+      ];
+
+      if (!operationsWithoutAccountRequired.includes(intentResult.intent)) {
+        this.logger.log(`🔐 Validando conta ativa para operação: ${intentResult.intent}`);
+
+        const accountValidation = await this.accountManagement.validateActiveAccount(phoneNumber);
+
+        if (!accountValidation.valid) {
+          this.logger.warn(`❌ Operação bloqueada - sem conta ativa: ${intentResult.intent}`);
+
+          this.emitReply(phoneNumber, accountValidation.message || '', platform, 'ERROR', {
+            reason: 'no_active_account',
+          });
+
+          return {
+            success: false,
+            message: accountValidation.message || '❌ Você não possui um perfil ativo.',
+            requiresConfirmation: false,
+          };
+        }
+
+        this.logger.log(
+          `✅ Conta ativa validada: ${accountValidation.account?.name} (${accountValidation.account?.id})`,
+        );
+      }
+
       // 3. ROTEAMENTO por intent
       // 3a. Confirmação de transação (sim/não)
       if (intentResult.intent === 'CONFIRMATION_RESPONSE') {

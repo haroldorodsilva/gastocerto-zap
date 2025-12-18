@@ -1,13 +1,14 @@
-import { CardInvoiceStatus } from "../types/credit-card.types";
-import { BaseEntity } from "./base.entity";
-import { TransactionsRelations } from "./transactions.entity";
-import { CreditCardRelations } from "./credit-card.entity";
+import { CardInvoiceStatus } from '../types/credit-card.types';
+import { BaseEntity } from './base.entity';
+import { TransactionsRelations } from './transactions.entity';
+import { CreditCardRelations } from './credit-card.entity';
+import { Banks } from './banks.entity';
 
 export enum EntityNotificationStatus {
   PENDING = 'PENDING',
   SENT = 'SENT',
   FAILED = 'FAILED',
-  DISABLED = 'DISABLED'
+  DISABLED = 'DISABLED',
 }
 
 export class CreditCardInvoice extends BaseEntity {
@@ -31,4 +32,5 @@ export class CreditCardInvoice extends BaseEntity {
 export class CreditCardInvoiceRelations extends CreditCardInvoice {
   creditCard?: CreditCardRelations;
   transactions?: TransactionsRelations[];
+  bank?: Banks;
 }

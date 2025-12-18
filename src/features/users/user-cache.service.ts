@@ -73,14 +73,14 @@ export class UserCacheService {
       // 1. Tentar buscar no Redis
       const cachedUser = await this.getUserFromRedis(phoneNumber);
       if (cachedUser) {
-        this.logger.debug(`Cache HIT - Redis: ${phoneNumber}`);
+        this.logger.debug(`Cache HIT - Redis: ${phoneNumber} | activeAccountId: ${cachedUser.activeAccountId}`);
         return cachedUser;
       }
 
       // 2. Tentar buscar no banco de dados local
       const dbUser = await this.getUserFromDatabase(phoneNumber);
       if (dbUser) {
-        this.logger.debug(`Cache HIT - Database: ${phoneNumber}`);
+        this.logger.debug(`Cache HIT - Database: ${phoneNumber} | activeAccountId: ${dbUser.activeAccountId}`);
         // Atualizar Redis
         await this.setUserInRedis(phoneNumber, dbUser);
         return dbUser;
@@ -917,7 +917,7 @@ export class UserCacheService {
             }
 
             // Atualizar cache no banco
-            await this.prisma.userCache.update({
+            const updatedUser = await this.prisma.userCache.update({
               where: { gastoCertoId: user.gastoCertoId },
               data: {
                 accounts: mappedAccounts as any,
@@ -926,18 +926,22 @@ export class UserCacheService {
               },
             });
 
-            // Invalidar cache Redis
+            // Invalidar cache Redis e atualizar com dados novos
             await this.redisService.getClient().del(`user:${user.phoneNumber}`);
             if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
             if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
+
+            // Recolocar no Redis com dados atualizados
+            await this.setUserInRedis(user.phoneNumber, updatedUser);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
             );
 
-            // Atualizar variável local
+            // Atualizar variável local com dados do banco
             accounts = mappedAccounts;
-            user.activeAccountId = activeAccountId;
+            user.activeAccountId = updatedUser.activeAccountId;
+            user.accounts = updatedUser.accounts;
           } else {
             this.logger.warn(`⚠️ API não retornou contas para gastoCertoId: ${user.gastoCertoId}`);
           }
@@ -972,6 +976,9 @@ export class UserCacheService {
         this.logger.debug(`Usuário não encontrado para obter conta ativa: ${phoneNumber}`);
         return null;
       }
+
+      this.logger.log(`🔍 [DEBUG] getActiveAccount - user.activeAccountId: ${user.activeAccountId}`);
+      this.logger.log(`🔍 [DEBUG] getActiveAccount - user.accounts.length: ${((user.accounts as any[]) || []).length}`);
 
       let accounts = (user.accounts as any[]) || [];
 
@@ -1018,7 +1025,7 @@ export class UserCacheService {
             }
 
             // Atualizar cache no banco
-            await this.prisma.userCache.update({
+            const updatedUser = await this.prisma.userCache.update({
               where: { gastoCertoId: user.gastoCertoId },
               data: {
                 accounts: mappedAccounts as any,
@@ -1027,18 +1034,22 @@ export class UserCacheService {
               },
             });
 
-            // Invalidar cache Redis
+            // Invalidar cache Redis e atualizar com dados novos
             await this.redisService.getClient().del(`user:${user.phoneNumber}`);
             if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
             if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
+
+            // Recolocar no Redis com dados atualizados
+            await this.setUserInRedis(user.phoneNumber, updatedUser);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
             );
 
-            // Atualizar variáveis locais
+            // Usar dados atualizados do banco
             accounts = mappedAccounts;
-            user.activeAccountId = activeAccountId;
+            user.activeAccountId = updatedUser.activeAccountId;
+            user.accounts = updatedUser.accounts;
           } else {
             this.logger.warn(`⚠️ API não retornou contas para gastoCertoId: ${user.gastoCertoId}`);
           }

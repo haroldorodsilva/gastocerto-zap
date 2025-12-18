@@ -112,14 +112,14 @@ export class TransactionPaymentService {
         user.gastoCertoId, // TODO: Passar creditCardId real quando disponível
       );
 
-      if (!result.success || !result.data || result.data.length === 0) {
+      if (!result.success || !result.invoices || result.invoices.length === 0) {
         return {
           success: false,
           message: '❌ Nenhuma fatura encontrada para o mês.',
         };
       }
 
-      const invoice = result.data[0]; // Primeira fatura fechada
+      const invoice = result.invoices[0]; // Primeira fatura fechada
 
       if (!invoice || invoice.transactions.length === 0) {
         return {
@@ -132,21 +132,18 @@ export class TransactionPaymentService {
 
       // Formatar fatura
       let message = `💳 *Fatura do Cartão - ${this.formatMonthYear(targetMonth)}*\n\n`;
-      message += `💵 *Total:* R$ ${invoice.total.toFixed(2)}\n`;
-      message += `📊 *Transações:* ${invoice.transactions.length}\n`;
+      message += `💵 *Total:* R$ ${(invoice.amountTotal / 100).toFixed(2)}\n`;
+      message += `📊 *Transações:* ${invoice.transactions?.length || 0}\n`;
       message += `📅 *Vencimento:* ${invoice.dueDate}\n\n`;
       message += '───────────────────\n\n';
 
-      invoice.transactions.forEach((t, index) => {
-        message += `${index + 1}. 💸 *R$ ${t.amount.toFixed(2)}*\n`;
-        message += `   📂 ${t.category}`;
+      invoice.transactions?.forEach((t, index) => {
+        message += `${index + 1}. 💸 *R$ ${(Math.abs(t.amount) / 100).toFixed(2)}*\n`;
+        message += `   📂 ${t.category?.name || 'Sem categoria'}`;
         if (t.description) {
           message += ` • ${t.description}`;
         }
-        message += `\n   📅 ${new Date(t.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
-        if (t.merchant) {
-          message += ` • 🏪 ${t.merchant}`;
-        }
+        message += `\n   📅 ${new Date(t.dueDate).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
         message += '\n\n';
       });
 
@@ -249,7 +246,7 @@ export class TransactionPaymentService {
       if (result.success) {
         return {
           success: true,
-          message: `✅ *Transação marcada como paga!*\n\n🆔 ID: ${transactionId}`,
+          message: `✅ *Transação marcada como paga!*`, //🆔 ID: ${transactionId}
         };
       } else {
         // Mensagem amigável - NUNCA expor detalhes técnicos
@@ -333,7 +330,20 @@ export class TransactionPaymentService {
         user.activeAccountId,
       );
 
-      if (!result.success || !result.data || !result.data.data || result.data.data.length === 0) {
+      // Erro de API (conexão/servidor)
+      if (!result.success) {
+        this.logger.error(`❌ API retornou erro: ${result.error || 'Erro desconhecido'}`);
+        return {
+          success: false,
+          message:
+            '❌ *Não foi possível buscar as transações pendentes*\n\n' +
+            'O servidor está temporariamente indisponível.\n\n' +
+            '💡 _Tente novamente em alguns instantes._',
+        };
+      }
+
+      // Lista vazia (sucesso, mas sem transações)
+      if (!result.data || !result.data.data || result.data.data.length === 0) {
         return {
           success: true,
           message:

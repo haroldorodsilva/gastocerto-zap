@@ -2,10 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
 import { UserCache } from '@prisma/client';
-import {
-  SUMMARY_INTENT_SYSTEM_PROMPT,
-  SUMMARY_GENERATION_PROMPT,
-} from './prompts/summary-intent.prompt';
 import { DateUtil } from '@/utils/date.util';
 
 export interface SummaryRequest {
@@ -149,14 +145,14 @@ export class TransactionSummaryService {
         user.gastoCertoId, // TODO: Passar creditCardId real quando disponível
       );
 
-      if (!result.success || !result.data || result.data.length === 0) {
+      if (!result.success || !result.invoices || result.invoices.length === 0) {
         return {
           success: false,
           message: '❌ Erro ao buscar fatura do cartão.',
         };
       }
 
-      const invoice = result.data[0]; // Primeira fatura fechada
+      const invoice = result.invoices[0]; // Primeira fatura fechada
 
       if (invoice.transactions.length === 0) {
         return {
@@ -169,7 +165,7 @@ export class TransactionSummaryService {
 
       let message = `💳 *Fatura do Cartão*\n`;
       message += `📅 ${this.formatMonthYear(targetMonth)}\n\n`;
-      message += `💵 *Total:* R$ ${invoice.total.toFixed(2)}\n`;
+      message += `💵 *Total:* R$ ${(invoice.amountTotal / 100).toFixed(2)}\n`;
       message += `📊 *Transações:* ${invoice.transactions.length}\n`;
       message += `📅 *Vencimento:* ${invoice.dueDate}\n\n`;
       message += '───────────────────\n\n';
@@ -181,7 +177,7 @@ export class TransactionSummaryService {
       Object.entries(byCategory)
         .sort(([, a], [, b]) => b - a)
         .forEach(([category, amount]) => {
-          const percentage = (amount / invoice.total) * 100;
+          const percentage = (amount / (invoice.amountTotal / 100)) * 100;
           message += `${this.getCategoryEmoji(category)} ${category}\n`;
           message += `   💸 R$ ${amount.toFixed(2)} (${percentage.toFixed(1)}%)\n\n`;
         });
