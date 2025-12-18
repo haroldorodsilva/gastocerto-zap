@@ -135,16 +135,7 @@ export class WhatsAppMessageHandler {
         `🔄 [WhatsApp] Processing queued message from ${phoneNumber} (${message.type})`,
       );
 
-      // 1. Verificar se usuário está em onboarding
-      const isOnboarding = await this.onboardingService.isUserOnboarding(phoneNumber);
-
-      if (isOnboarding) {
-        this.logger.log(`[WhatsApp] User ${phoneNumber} is in onboarding`);
-        await this.handleOnboardingMessage(message);
-        return;
-      }
-
-      // 2. Buscar usuário no cache/API
+      // 1. Buscar usuário no cache/API PRIMEIRO (com isBlocked e isActive)
       const user = await this.userCacheService.getUser(phoneNumber);
 
       // 🐛 DEBUG: Logar status do usuário
@@ -159,14 +150,14 @@ export class WhatsAppMessageHandler {
         }),
       );
 
+      // 2. Se usuário não existe, iniciar onboarding
       if (!user) {
-        // Usuário não encontrado - pode ser novo, encaminhar para onboarding
         this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
         await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
         return;
       }
 
-      // 3. Verificar se usuário está bloqueado
+      // 3. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
       if (user.isBlocked) {
         this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is BLOCKED - Rejecting message`);
         this.sendMessage(
@@ -179,20 +170,35 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 4. Verificar se usuário está ativo
+      // 4. Verificar se está em processo de onboarding (ANTES de verificar isActive)
+      const isOnboarding = await this.onboardingService.isUserOnboarding(phoneNumber);
+      if (isOnboarding) {
+        // Se usuário está ativo mas tem onboarding pendente, finalizar silenciosamente
+        if (user.isActive) {
+          this.logger.log(
+            `[WhatsApp] ✅ User ${phoneNumber} is ACTIVE with pending onboarding - completing silently`,
+          );
+          await this.onboardingService.completeOnboardingForActiveUser(phoneNumber);
+        } else {
+          // Se usuário está inativo e em onboarding, processar mensagem de reativação
+          this.logger.log(
+            `[WhatsApp] 🔄 User ${phoneNumber} is INACTIVE in onboarding - processing reactivation message`,
+          );
+          await this.handleOnboardingMessage(message);
+          return;
+        }
+      }
+
+      // 5. Verificar se usuário está inativo → Iniciar reativação (apenas se NÃO está em onboarding)
       if (!user.isActive) {
-        this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is INACTIVE - Rejecting message`);
-        this.sendMessage(
-          phoneNumber,
-          '⚠️ *Conta Desativada*\n\n' +
-            'Sua conta está temporariamente desativada.\n\n' +
-            '✅ Para reativar, entre em contato com o suporte:\n' +
-            'suporte@gastocerto.com',
+        this.logger.log(
+          `[WhatsApp] 🔄 User ${phoneNumber} is INACTIVE - Starting reactivation process`,
         );
+        await this.onboardingService.reactivateUser(phoneNumber, 'whatsapp');
         return;
       }
 
-      // 5. Verificar assinatura ativa
+      // 6. Verificar assinatura ativa
       if (!user.hasActiveSubscription) {
         this.logger.warn(`[WhatsApp] User ${phoneNumber} has no active subscription`);
         this.sendMessage(
@@ -206,7 +212,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 6. Usuário válido - verificar se é confirmação de transação pendente
+      // 7. Usuário válido - verificar se é confirmação de transação pendente
       const pendingConfirmation = await this.checkPendingConfirmation(phoneNumber, message.text);
 
       if (pendingConfirmation) {
@@ -223,7 +229,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 7. Não é confirmação - processar como nova transação
+      // 8. Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
       // Enfileirar na fila de confirmação de transações

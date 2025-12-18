@@ -910,6 +910,12 @@ export class AdminController {
     // 🆕 ATUALIZAR CACHE REDIS
     this.logger.log(`🔄 Atualizando cache Redis para ${user.phoneNumber}`);
     await this.cacheService.invalidateUser(user.phoneNumber);
+    
+    // Invalidar também pelo telegramId se existir
+    if (user.telegramId) {
+      this.logger.log(`🔄 Invalidando cache Redis também pelo telegramId: ${user.telegramId}`);
+      await this.cacheService.invalidateUser(user.telegramId);
+    }
 
     // Se estiver bloqueando, também desativar a sessão WhatsApp
     if (dto.isBlocked) {
@@ -947,13 +953,28 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async activateUser(@Body() dto: { userId: string; isActive: boolean }) {
     this.logger.log(
-      `Alterando status ativo do usuário: ${dto.userId} -> isActive: ${dto.isActive}`,
+      `
+========================================
+🔧 [ADMIN] ATIVAR/DESATIVAR USUÁRIO
+========================================
+UserId: ${dto.userId}
+isActive: ${dto.isActive}
+========================================`,
     );
 
     // Buscar usuário pelo gastoCertoId
     const user = await this.prisma.userCache.findFirst({
       where: { gastoCertoId: dto.userId },
     });
+
+    this.logger.log(
+      `📊 Usuário encontrado no banco:\n` +
+        `  - phoneNumber: ${user?.phoneNumber}\n` +
+        `  - telegramId: ${user?.telegramId}\n` +
+        `  - name: ${user?.name}\n` +
+        `  - isActive (antes): ${user?.isActive}\n` +
+        `  - isBlocked: ${user?.isBlocked}`,
+    );
 
     if (!user) {
       throw new BadRequestException(`Usuário não encontrado: ${dto.userId}`);
@@ -968,9 +989,85 @@ export class AdminController {
       },
     });
 
+    this.logger.log(`✅ Status atualizado no banco: isActive = ${dto.isActive}`);
+
     // 🆕 ATUALIZAR CACHE REDIS
-    this.logger.log(`🔄 Atualizando cache Redis para ${user.phoneNumber}`);
+    this.logger.log(`🔄 Invalidando cache Redis para ${user.phoneNumber}`);
     await this.cacheService.invalidateUser(user.phoneNumber);
+    this.logger.log(`✅ Cache Redis invalidado`);
+
+    // 🆕 COMPLETAR ONBOARDING PENDENTE ao ativar usuário
+    if (dto.isActive) {
+      this.logger.log(`🔍 Buscando sessões de onboarding pendentes...`);
+      
+      // Completar qualquer sessão de onboarding pendente
+      const onboardingSession = await this.prisma.onboardingSession.findFirst({
+        where: {
+          platformId: user.phoneNumber,
+          completed: false,
+        },
+      });
+
+      if (onboardingSession) {
+        this.logger.log(
+          `🎯 Sessão de onboarding PENDENTE encontrada (phoneNumber):\n` +
+            `  - id: ${onboardingSession.id}\n` +
+            `  - platformId: ${onboardingSession.platformId}\n` +
+            `  - currentStep: ${onboardingSession.currentStep}\n` +
+            `  - completed (antes): ${onboardingSession.completed}`,
+        );
+        
+        await this.prisma.onboardingSession.update({
+          where: { id: onboardingSession.id },
+          data: {
+            completed: true,
+            currentStep: 'COMPLETED',
+            updatedAt: new Date(),
+          },
+        });
+        
+        this.logger.log(`✅ Sessão de onboarding finalizada (phoneNumber)`);
+      } else {
+        this.logger.log(`ℹ️ Nenhuma sessão de onboarding pendente encontrada (phoneNumber)`);
+      }
+
+      // Buscar também por telegramId se for Telegram
+      if (user.telegramId) {
+        this.logger.log(`🔍 Buscando sessão de onboarding Telegram (ID: ${user.telegramId})...`);
+        
+        const telegramOnboarding = await this.prisma.onboardingSession.findFirst({
+          where: {
+            platformId: user.telegramId,
+            completed: false,
+          },
+        });
+
+        if (telegramOnboarding) {
+          this.logger.log(
+            `🎯 Sessão de onboarding Telegram PENDENTE encontrada:\n` +
+              `  - id: ${telegramOnboarding.id}\n` +
+              `  - platformId: ${telegramOnboarding.platformId}\n` +
+              `  - currentStep: ${telegramOnboarding.currentStep}\n` +
+              `  - completed (antes): ${telegramOnboarding.completed}`,
+          );
+          
+          await this.prisma.onboardingSession.update({
+            where: { id: telegramOnboarding.id },
+            data: {
+              completed: true,
+              currentStep: 'COMPLETED',
+              updatedAt: new Date(),
+            },
+          });
+          
+          this.logger.log(`✅ Sessão de onboarding Telegram finalizada`);
+        } else {
+          this.logger.log(`ℹ️ Nenhuma sessão de onboarding Telegram pendente encontrada`);
+        }
+      }
+      
+      this.logger.log(`========================================\n✅ ONBOARDING FINALIZADO\n========================================`);
+    }
 
     // Se estiver ativando, também ativar a sessão WhatsApp
     if (dto.isActive) {

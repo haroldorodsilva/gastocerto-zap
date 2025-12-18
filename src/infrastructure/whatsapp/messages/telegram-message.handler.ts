@@ -11,6 +11,7 @@ import { MultiPlatformSessionService } from '../sessions/multi-platform-session.
 import { MessageContextService } from './message-context.service';
 import { IFilteredMessage } from '@common/interfaces/message.interface';
 import { UserCacheService } from '@features/users/user-cache.service';
+import { UserCache } from '@prisma/client';
 
 interface MessageReceivedEvent {
   sessionId: string;
@@ -86,17 +87,10 @@ export class TelegramMessageHandler {
           (gastoCertoId ? ` | userId: ${gastoCertoId}` : ''),
       );
 
-      // 1. Verificar se usuário está em onboarding
-      const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
-
-      if (isOnboarding) {
-        this.logger.log(`User ${userId} is in onboarding`);
-        await this.handleOnboardingMessage(sessionId, message);
-        return;
-      }
-
-      // 2. Buscar dados completos do usuário (com isBlocked e isActive)
-      const user = await this.userCacheService.getUser(userId);
+      // 1. Buscar dados completos do usuário PRIMEIRO (com isBlocked e isActive)
+      // 🔧 CRÍTICO: Usar getUserByTelegram para Telegram (busca por chatId/telegramId)
+      this.logger.log(`🔍 Buscando usuário Telegram por chatId: ${userId}`);
+      const user = await this.userCacheService.getUserByTelegram(userId);
 
       // 🐛 DEBUG: Logar status do usuário
       this.logger.log(
@@ -107,17 +101,18 @@ export class TelegramMessageHandler {
           isActive: user?.isActive,
           hasActiveSubscription: user?.hasActiveSubscription,
           gastoCertoId: user?.gastoCertoId,
+          phoneNumber: user?.phoneNumber,
         }),
       );
 
+      // 2. Se usuário não existe, iniciar onboarding
       if (!user) {
-        // Usuário não encontrado - pode ser novo, encaminhar para onboarding
         this.logger.log(`[Telegram] New user detected: ${userId}, starting onboarding`);
         await this.startOnboarding(sessionId, message);
         return;
       }
 
-      // 3. Verificar se usuário está bloqueado
+      // 3. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
       if (user.isBlocked) {
         this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED - Rejecting message`);
         this.eventEmitter.emit('telegram.reply', {
@@ -133,23 +128,33 @@ export class TelegramMessageHandler {
         return;
       }
 
-      // 4. Verificar se usuário está ativo
+      // 4. Verificar se está em processo de onboarding (ANTES de verificar isActive)
+      const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
+      if (isOnboarding) {
+        // Se usuário está ativo mas tem onboarding pendente, finalizar silenciosamente
+        if (user.isActive) {
+          this.logger.log(
+            `[Telegram] ✅ User ${userId} is ACTIVE with pending onboarding - completing silently`,
+          );
+          await this.onboardingService.completeOnboardingForActiveUser(userId);
+        } else {
+          // Se usuário está inativo e em onboarding, processar mensagem de reativação
+          this.logger.log(
+            `[Telegram] 🔄 User ${userId} is INACTIVE in onboarding - processing reactivation message`,
+          );
+          await this.handleOnboardingMessage(sessionId, message);
+          return;
+        }
+      }
+
+      // 5. Verificar se usuário está inativo → Iniciar reativação (apenas se NÃO está em onboarding)
       if (!user.isActive) {
-        this.logger.warn(`[Telegram] ❌ User ${userId} is INACTIVE - Rejecting message`);
-        this.eventEmitter.emit('telegram.reply', {
-          platformId: userId,
-          message:
-            '⚠️ *Conta Desativada*\n\n' +
-            'Sua conta está temporariamente desativada.\n\n' +
-            '✅ Para reativar, entre em contato com o suporte:\n' +
-            'suporte@gastocerto.com',
-          context: 'ERROR',
-          platform: MessagingPlatform.TELEGRAM,
-        });
+        this.logger.log(`[Telegram] 🔄 User ${userId} is INACTIVE - Starting reactivation process`);
+        await this.onboardingService.reactivateUser(userId, 'telegram');
         return;
       }
 
-      // 5. Verificar assinatura ativa
+      // 6. Verificar assinatura ativa
       if (!user.hasActiveSubscription) {
         this.logger.warn(`[Telegram] User ${userId} has no active subscription`);
         this.eventEmitter.emit('telegram.reply', {
@@ -166,9 +171,9 @@ export class TelegramMessageHandler {
         return;
       }
 
-      // 6. Usuário válido - processar mensagem normalmente
+      // 7. Usuário válido - processar mensagem normalmente
       this.logger.log(`[Telegram] Processing message from registered user ${user.name}`);
-      await this.processRegisteredUserMessage(sessionId, message);
+      await this.processRegisteredUserMessage(sessionId, message, user);
     } catch (error) {
       this.logger.error(`Error processing Telegram message:`, error);
       await this.sendErrorMessage(sessionId, message.chatId);
@@ -244,18 +249,21 @@ export class TelegramMessageHandler {
   private async processRegisteredUserMessage(
     sessionId: string,
     message: IncomingMessage,
+    user: UserCache,
   ): Promise<void> {
     this.logger.log('💰 Processing transaction message from registered user');
     const userId = message.chatId;
+    const phoneNumber = user.phoneNumber; // Usar phoneNumber real do usuário
 
     switch (message.type) {
       case MessageType.TEXT:
         if (message.text) {
           await this.transactionsService.processTextMessage(
-            userId,
+            phoneNumber, // Usar phoneNumber ao invés de chatId
             message.text,
             message.id,
             'telegram',
+            userId, // Passar chatId como platformId para respostas corretas
           );
         }
         break;
@@ -263,11 +271,12 @@ export class TelegramMessageHandler {
       case MessageType.IMAGE:
         if (message.mediaBuffer) {
           await this.transactionsService.processImageMessage(
-            userId,
+            phoneNumber, // Usar phoneNumber ao invés de chatId
             message.mediaBuffer,
             message.mimeType || 'image/jpeg',
             message.id,
             'telegram',
+            userId, // Passar chatId como platformId para respostas corretas
           );
         }
         break;
@@ -275,11 +284,12 @@ export class TelegramMessageHandler {
       case MessageType.AUDIO:
         if (message.mediaBuffer) {
           await this.transactionsService.processAudioMessage(
-            userId,
+            phoneNumber, // Usar phoneNumber ao invés de chatId
             message.mediaBuffer,
             message.mimeType || 'audio/ogg',
             message.id,
             'telegram',
+            userId, // Passar chatId como platformId para respostas corretas
           );
         }
         break;

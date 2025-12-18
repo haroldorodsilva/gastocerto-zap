@@ -114,37 +114,46 @@ export class UserCacheService {
   }
 
   /**
-   * Busca usuário no cache (Redis → Database → API)
+   * Busca usuário WhatsApp por phoneNumber (Database → Redis → API)
+   * Ordem alterada: Database primeiro para obter gastoCertoId, depois Redis
    */
   async getUser(phoneNumber: string): Promise<UserCache | null> {
     try {
-      // 1. Tentar buscar no Redis
-      const cachedUser = await this.getUserFromRedis(phoneNumber);
-      if (cachedUser) {
-        this.logger.debug(
-          `Cache HIT - Redis: ${phoneNumber} | activeAccountId: ${cachedUser.activeAccountId}`,
-        );
-        return cachedUser;
-      }
+      this.logger.debug(`🔍 [WhatsApp] Buscando usuário por phoneNumber: ${phoneNumber}`);
 
-      // 2. Tentar buscar no banco de dados local
-      const dbUser = await this.getUserFromDatabase(phoneNumber);
+      // 1. Buscar no banco de dados primeiro para obter gastoCertoId
+      const dbUser = await this.prisma.userCache.findFirst({
+        where: { phoneNumber },
+      });
+
       if (dbUser) {
+        // 2. Tentar buscar no Redis usando gastoCertoId (chave universal)
+        const cacheKey = this.getCacheKey(dbUser.gastoCertoId);
+        const cachedUser = await this.getUserFromRedisByKey(cacheKey);
+        
+        if (cachedUser) {
+          this.logger.debug(
+            `✅ Cache HIT - Redis (WhatsApp): ${phoneNumber} | isBlocked: ${cachedUser.isBlocked}, isActive: ${cachedUser.isActive}`,
+          );
+          return cachedUser;
+        }
+
+        // 3. Não está no Redis, usar dados do database e atualizar Redis
         this.logger.debug(
-          `Cache HIT - Database: ${phoneNumber} | activeAccountId: ${dbUser.activeAccountId}`,
+          `✅ Cache HIT - Database (WhatsApp): ${phoneNumber} | isBlocked: ${dbUser.isBlocked}, isActive: ${dbUser.isActive}`,
         );
-        // Atualizar Redis
-        await this.setUserInRedis(phoneNumber, dbUser);
+        await this.setUserInRedisByKey(cacheKey, dbUser);
         return dbUser;
       }
 
-      // 3. Buscar na API Gasto Certo
+      // 4. Não está no database, buscar na API Gasto Certo
       const apiResponse = await this.gastoCertoApi.getUserByPhone(phoneNumber);
       if (apiResponse.exists && apiResponse.user) {
         this.logger.log(`Cache MISS - Usuário encontrado na API: ${phoneNumber}`);
         // Salvar no banco e Redis
         const newUserCache = await this.createUserCache(apiResponse.user);
-        await this.setUserInRedis(phoneNumber, newUserCache);
+        const cacheKey = this.getCacheKey(newUserCache.gastoCertoId);
+        await this.setUserInRedisByKey(cacheKey, newUserCache);
         return newUserCache;
       }
 
@@ -152,6 +161,47 @@ export class UserCacheService {
       return null;
     } catch (error) {
       this.logger.error(`Erro ao buscar usuário ${phoneNumber}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Busca usuário Telegram por chatId (Database → Redis)
+   * Ordem alterada: Database primeiro para obter gastoCertoId, depois Redis
+   */
+  async getUserByTelegram(chatId: string): Promise<UserCache | null> {
+    try {
+      this.logger.debug(`🔍 [Telegram] Buscando usuário por chatId: ${chatId}`);
+
+      // 1. Buscar no banco de dados primeiro para obter gastoCertoId
+      const dbUser = await this.prisma.userCache.findFirst({
+        where: { telegramId: chatId },
+      });
+
+      if (dbUser) {
+        // 2. Tentar buscar no Redis usando gastoCertoId (chave universal)
+        const cacheKey = this.getCacheKey(dbUser.gastoCertoId);
+        const cachedUser = await this.getUserFromRedisByKey(cacheKey);
+        
+        if (cachedUser) {
+          this.logger.debug(
+            `✅ Cache HIT - Redis (Telegram): ${chatId} | isBlocked: ${cachedUser.isBlocked}, isActive: ${cachedUser.isActive}`,
+          );
+          return cachedUser;
+        }
+
+        // 3. Não está no Redis, usar dados do database e atualizar Redis
+        this.logger.debug(
+          `✅ Cache HIT - Database (Telegram): ${chatId} | isBlocked: ${dbUser.isBlocked}, isActive: ${dbUser.isActive}`,
+        );
+        await this.setUserInRedisByKey(cacheKey, dbUser);
+        return dbUser;
+      }
+
+      this.logger.debug(`❌ Usuário Telegram não encontrado: ${chatId}`);
+      return null;
+    } catch (error) {
+      this.logger.error(`Erro ao buscar usuário Telegram ${chatId}:`, error);
       return null;
     }
   }
@@ -555,16 +605,31 @@ export class UserCacheService {
 
   /**
    * Remove usuário do cache (Redis e Database)
+   * Aceita phoneNumber, telegramId ou gastoCertoId
    */
-  async invalidateUser(phoneNumber: string): Promise<void> {
+  async invalidateUser(identifier: string): Promise<void> {
     try {
-      // Remover do Redis
-      await this.redisService.getClient().del(`user:${phoneNumber}`);
+      // Buscar usuário para obter gastoCertoId (chave universal)
+      let user = await this.prisma.userCache.findFirst({
+        where: {
+          OR: [
+            { phoneNumber: identifier },
+            { telegramId: identifier },
+            { gastoCertoId: identifier },
+          ],
+        },
+      });
 
-      // Remover do banco (opcional, pode manter histórico)
-      // await this.prisma.userCache.delete({ where: { phoneNumber } });
+      if (!user) {
+        this.logger.warn(`Usuário não encontrado para invalidação: ${identifier}`);
+        return;
+      }
 
-      this.logger.log(`Cache invalidado: ${phoneNumber}`);
+      // Remover do Redis usando gastoCertoId (chave universal)
+      const cacheKey = this.getCacheKey(user.gastoCertoId);
+      await this.redisService.getClient().del(cacheKey);
+
+      this.logger.log(`Cache invalidado: ${identifier} (gastoCertoId: ${user.gastoCertoId})`);
     } catch (error) {
       this.logger.error(`Erro ao invalidar cache:`, error);
     }

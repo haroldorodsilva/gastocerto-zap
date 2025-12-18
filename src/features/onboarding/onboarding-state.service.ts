@@ -28,18 +28,105 @@ export class OnboardingStateService {
   /**
    * Inicia novo fluxo de onboarding
    */
+  /**
+   * Reativa usuário inativo iniciando onboarding em REQUEST_VERIFICATION_CODE
+   * Usado quando usuário com isActive=false tenta enviar mensagem
+   */
+  async reactivateUser(
+    phoneNumber: string,
+    platform?: 'telegram' | 'whatsapp',
+  ): Promise<OnboardingResponse> {
+    this.logger.log(
+      `\n========================================\n` +
+        `🔄 [REACTIVATION] Iniciando reativação\n` +
+        `========================================\n` +
+        `platformId: ${phoneNumber}\n` +
+        `platform: ${platform}\n` +
+        `========================================`,
+    );
+
+    // Deletar qualquer sessão antiga (completa ou não) para este platformId
+    await this.prisma.onboardingSession.deleteMany({
+      where: { platformId: phoneNumber },
+    });
+
+    this.logger.log(`🗑️ Sessões antigas deletadas para platformId: ${phoneNumber}`);
+
+    // Criar nova sessão começando em REQUEST_VERIFICATION_CODE
+    const session = await this.prisma.onboardingSession.create({
+      data: {
+        platformId: phoneNumber,
+        currentStep: OnboardingStep.REQUEST_VERIFICATION_CODE,
+        completed: false,
+        data: {},
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 minutos
+      },
+    });
+
+    this.logger.log(
+      `✅ Sessão de reativação criada:\n` +
+        `  - id: ${session.id}\n` +
+        `  - currentStep: ${session.currentStep}`,
+    );
+
+    return this.buildResponse(session);
+  }
+
   async startOnboarding(
     phoneNumber: string,
     platform?: 'telegram' | 'whatsapp',
   ): Promise<OnboardingResponse> {
     try {
+      this.logger.log(
+        `\n========================================\n` +
+          `🚀 [ONBOARDING] START ONBOARDING\n` +
+          `========================================\n` +
+          `platformId: ${phoneNumber}\n` +
+          `platform: ${platform}\n` +
+          `========================================`,
+      );
+      
       // Verificar se já existe sessão ativa
+      this.logger.log(`🔍 Verificando sessão ativa (completed=false)...`);
       const existingSession = await this.getActiveSession(phoneNumber);
 
       if (existingSession && !this.isExpired(existingSession)) {
-        this.logger.debug(`Sessão de onboarding já existe: ${phoneNumber}`);
+        this.logger.log(
+          `ℹ️ Sessão ativa encontrada:\n` +
+            `  - id: ${existingSession.id}\n` +
+            `  - currentStep: ${existingSession.currentStep}\n` +
+            `  - completed: ${existingSession.completed}`,
+        );
         return this.buildResponse(existingSession);
       }
+      
+      this.logger.log(`ℹ️ Nenhuma sessão ativa encontrada`);
+
+      // 🆕 CRÍTICO: Verificar se já existe sessão COMPLETA
+      this.logger.log(`🔍 Verificando sessão completa (completed=true)...`);
+      const completedSession = await this.prisma.onboardingSession.findFirst({
+        where: { platformId: phoneNumber, completed: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (completedSession) {
+        this.logger.warn(
+          `❌ BLOQUEADO: Usuário já completou onboarding:\n` +
+            `  - id: ${completedSession.id}\n` +
+            `  - platformId: ${completedSession.platformId}\n` +
+            `  - currentStep: ${completedSession.currentStep}\n` +
+            `  - completed: ${completedSession.completed}\n` +
+            `========================================`,
+        );
+        return {
+          completed: true,
+          currentStep: OnboardingStep.COMPLETED,
+          message: '✅ Seu cadastro já foi concluído anteriormente.',
+          data: completedSession.data as any,
+        };
+      }
+      
+      this.logger.log(`ℹ️ Nenhuma sessão completa encontrada - OK para criar nova`);
 
       // Preparar dados iniciais com platform
       const initialData: any = {};
@@ -47,27 +134,28 @@ export class OnboardingStateService {
         initialData.platform = platform;
       }
 
-      // Usar upsert para criar ou atualizar sessão
-      const session = await this.prisma.onboardingSession.upsert({
-        where: { platformId: phoneNumber },
-        create: {
+      // Criar nova sessão (não usar upsert para evitar resetar sessões completas)
+      this.logger.log(`📝 Criando nova sessão de onboarding...`);
+      const session = await this.prisma.onboardingSession.create({
+        data: {
           platformId: phoneNumber, // Telegram chatId ou WhatsApp number
           phoneNumber: null, // Será preenchido quando coletar o telefone
           currentStep: OnboardingStep.COLLECT_NAME,
           data: initialData,
           expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
-        },
-        update: {
-          currentStep: OnboardingStep.COLLECT_NAME,
-          data: initialData,
-          attempts: 0,
           completed: false,
-          expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
-          updatedAt: new Date(),
+          attempts: 0,
         },
       });
 
-      this.logger.log(`✅ Onboarding iniciado: ${phoneNumber} (${platform || 'unknown'})`);
+      this.logger.log(
+        `✅ Nova sessão criada:\n` +
+          `  - id: ${session.id}\n` +
+          `  - platformId: ${session.platformId}\n` +
+          `  - currentStep: ${session.currentStep}\n` +
+          `  - completed: ${session.completed}\n` +
+          `========================================`,
+      );
 
       return {
         completed: false,
@@ -90,12 +178,57 @@ export class OnboardingStateService {
     metadata?: any,
   ): Promise<OnboardingResponse> {
     try {
+      this.logger.log(
+        `\n========================================\n` +
+          `💬 [ONBOARDING] PROCESS MESSAGE\n` +
+          `========================================\n` +
+          `platformId: ${phoneNumber}\n` +
+          `message: ${message.substring(0, 50)}...\n` +
+          `========================================`,
+      );
+      
+      this.logger.log(`🔍 Buscando sessão ativa...`);
       const session = await this.getActiveSession(phoneNumber);
 
       if (!session) {
-        // Iniciar novo onboarding
+        this.logger.log(`ℹ️ Nenhuma sessão ativa encontrada`);
+        
+        // 🆕 Verificar se usuário já completou onboarding
+        this.logger.log(`🔍 Verificando se já completou onboarding...`);
+        const completedSession = await this.prisma.onboardingSession.findFirst({
+          where: { platformId: phoneNumber, completed: true },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (completedSession) {
+          this.logger.warn(
+            `❌ BLOQUEADO: Usuário já completou onboarding:\n` +
+              `  - id: ${completedSession.id}\n` +
+              `  - platformId: ${completedSession.platformId}\n` +
+              `  - currentStep: ${completedSession.currentStep}\n` +
+              `  - completed: ${completedSession.completed}\n` +
+              `========================================`,
+          );
+          return {
+            completed: true,
+            currentStep: OnboardingStep.COMPLETED,
+            message: '✅ Seu cadastro já foi concluído.',
+            data: completedSession.data as any,
+          };
+        }
+        
+        this.logger.log(`ℹ️ Nenhuma sessão completa encontrada - iniciando novo onboarding`);
+
+        // Usuário novo sem sessão - iniciar novo onboarding
         return this.startOnboarding(phoneNumber);
       }
+      
+      this.logger.log(
+        `✅ Sessão ativa encontrada:\n` +
+          `  - id: ${session.id}\n` +
+          `  - currentStep: ${session.currentStep}\n` +
+          `  - completed: ${session.completed}`,
+      );
 
       // Verificar expiração
       if (this.isExpired(session)) {
@@ -561,7 +694,13 @@ export class OnboardingStateService {
    */
   async completeOnboarding(platformId: string): Promise<void> {
     try {
-      this.logger.log(`🔄 Iniciando completeOnboarding para: ${platformId}`);
+      this.logger.log(
+        `\n========================================\n` +
+          `✅ [ONBOARDING] COMPLETE ONBOARDING\n` +
+          `========================================\n` +
+          `platformId: ${platformId}\n` +
+          `========================================`,
+      );
 
       const result = await this.prisma.onboardingSession.updateMany({
         where: { platformId },
@@ -572,18 +711,26 @@ export class OnboardingStateService {
       });
 
       this.logger.log(
-        `✅ Onboarding completo: ${platformId} (${result.count} registro(s) atualizado(s))`,
+        `✅ Sessões atualizadas: ${result.count} registro(s)`,
       );
 
       // Verificar se realmente foi atualizado
       const updated = await this.prisma.onboardingSession.findFirst({
         where: { platformId },
-        select: { id: true, completed: true, currentStep: true },
+        orderBy: { createdAt: 'desc' },
       });
-      this.logger.log(`🔍 Verificação: ${JSON.stringify(updated)}`);
+      
+      this.logger.log(
+        `🔍 Verificação da última sessão:\n` +
+          `  - id: ${updated?.id}\n` +
+          `  - platformId: ${updated?.platformId}\n` +
+          `  - currentStep: ${updated?.currentStep}\n` +
+          `  - completed: ${updated?.completed}\n` +
+          `========================================`,
+      );
     } catch (error) {
-      this.logger.error('Erro ao completar onboarding:', error);
-      throw error; // Propagar erro para debug
+      this.logger.error(`❌ Erro ao completar onboarding: ${error.message}`);
+      throw error;
     }
   }
 

@@ -205,6 +205,9 @@ export class OnboardingService {
           // Marcar onboarding como completo
           await this.onboardingState.completeOnboarding(phoneNumber);
 
+          // ✅ NOVO: Reativar usuário se ele estava inativo
+          await this.reactivateUserIfNeeded(phoneNumber);
+
           // Registrar em audit log
           await this.logOnboardingComplete(phoneNumber);
 
@@ -520,7 +523,15 @@ export class OnboardingService {
    */
   async isInOnboarding(phoneNumber: string): Promise<boolean> {
     const session = await this.onboardingState.getActiveSession(phoneNumber);
-    return session !== null && !session.completed;
+    const result = session !== null && !session.completed;
+
+    this.logger.log(
+      `🔍 [ONBOARDING] isInOnboarding(${phoneNumber}): ${result}\n` +
+        `  - session found: ${session !== null}\n` +
+        `  - completed: ${session?.completed}`,
+    );
+
+    return result;
   }
 
   /**
@@ -551,6 +562,22 @@ export class OnboardingService {
   }
 
   /**
+   * Reativa usuário inativo iniciando onboarding em REQUEST_VERIFICATION_CODE
+   */
+  async reactivateUser(userId: string, platform?: 'telegram' | 'whatsapp'): Promise<void> {
+    const response = await this.onboardingState.reactivateUser(userId, platform);
+
+    // Enviar mensagem inicial
+    const eventName = platform === 'telegram' ? 'telegram.reply' : 'session.reply';
+    this.eventEmitter.emit(eventName, {
+      platformId: userId,
+      message: response.message,
+      context: 'ONBOARDING',
+      platform: platform === 'telegram' ? MessagingPlatform.TELEGRAM : MessagingPlatform.WHATSAPP,
+    });
+  }
+
+  /**
    * Processa etapa do onboarding e retorna mensagem de resposta
    */
   async processOnboardingStep(userId: string, message: string, metadata?: any): Promise<string> {
@@ -576,6 +603,70 @@ export class OnboardingService {
       this.logger.log(`Onboarding cancelado: ${platformId}`);
     } catch (error) {
       this.logger.error('Erro ao cancelar onboarding:', error);
+    }
+  }
+
+  /**
+   * Reativa usuário se ele estava inativo após completar onboarding
+   */
+  private async reactivateUserIfNeeded(platformId: string): Promise<void> {
+    try {
+      const user = await this.userCache.getUser(platformId);
+
+      if (user && !user.isActive) {
+        this.logger.log(`🔄 Reativando usuário inativo: ${platformId} (${user.name})`);
+
+        // Atualizar no cache local usando gastoCertoId
+        await this.prisma.userCache.update({
+          where: { gastoCertoId: user.gastoCertoId },
+          data: {
+            isActive: true,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        // Limpar cache Redis para forçar recarregamento
+        await this.userCache.invalidateUser(platformId);
+
+        this.logger.log(`✅ Usuário ${user.name} (${platformId}) reativado com sucesso`);
+      }
+    } catch (error) {
+      this.logger.error(`Erro ao reativar usuário ${platformId}:`, error);
+      // Não lançar erro - não queremos bloquear o fluxo de onboarding
+    }
+  }
+
+  /**
+   * Finaliza onboarding para usuário que já está ativo
+   * Usado quando usuário é ativado manualmente mas tem sessão de onboarding pendente
+   */
+  async completeOnboardingForActiveUser(platformId: string): Promise<void> {
+    try {
+      const user = await this.userCache.getUser(platformId);
+
+      if (!user) {
+        this.logger.warn(`Usuário ${platformId} não encontrado no cache`);
+        return;
+      }
+
+      if (!user.isActive) {
+        this.logger.warn(
+          `Usuário ${platformId} não está ativo, não pode finalizar onboarding automaticamente`,
+        );
+        return;
+      }
+
+      // Finalizar qualquer sessão de onboarding pendente
+      await this.onboardingState.completeOnboarding(platformId);
+
+      // 🆕 LIMPAR CACHE para forçar recarregamento com estado atualizado
+      await this.userCache.invalidateUser(platformId);
+
+      this.logger.log(
+        `✅ Onboarding finalizado automaticamente para usuário ATIVO: ${user.name} (${platformId})`,
+      );
+    } catch (error) {
+      this.logger.error(`Erro ao finalizar onboarding para usuário ativo ${platformId}:`, error);
     }
   }
 }

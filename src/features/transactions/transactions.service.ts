@@ -65,13 +65,15 @@ export class TransactionsService {
     platform: 'whatsapp' | 'telegram',
     context: 'INTENT_RESPONSE' | 'CONFIRMATION_REQUEST' | 'TRANSACTION_RESULT' | 'ERROR',
     metadata?: any,
+    platformId?: string,
   ): void {
+    const targetId = platformId || phoneNumber;
     const eventName = platform === 'telegram' ? 'telegram.reply' : 'whatsapp.reply';
 
     this.logger.debug(`📤 Emitindo evento ${eventName} para ${phoneNumber}`);
 
     this.eventEmitter.emit(eventName, {
-      platformId: phoneNumber,
+      platformId: targetId,
       message,
       context,
       metadata,
@@ -88,6 +90,7 @@ export class TransactionsService {
     text: string,
     messageId: string,
     platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       this.logger.log(
@@ -148,7 +151,7 @@ export class TransactionsService {
         if (result) {
           this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
             success: result.success,
-          });
+          }, platformId);
 
           return {
             success: result.success,
@@ -193,7 +196,7 @@ export class TransactionsService {
           this.emitReply(phoneNumber, blockMessage, platform, 'CONFIRMATION_REQUEST', {
             hasPending: true,
             confirmationId: hasPending.id,
-          });
+          }, platformId);
 
           return {
             success: false,
@@ -213,7 +216,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, responseMessage, platform, 'INTENT_RESPONSE', {
           intent: intentResult.intent,
           confidence: intentResult.confidence,
-        });
+        }, platformId);
 
         return {
           success: true,
@@ -243,7 +246,7 @@ export class TransactionsService {
 
           this.emitReply(phoneNumber, accountValidation.message || '', platform, 'ERROR', {
             reason: 'no_active_account',
-          });
+          }, platformId);
 
           return {
             success: false,
@@ -265,7 +268,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, confirmResult.message, platform, 'TRANSACTION_RESULT', {
           success: confirmResult.success,
-        });
+        }, platformId);
 
         return {
           success: confirmResult.success,
@@ -291,7 +294,7 @@ export class TransactionsService {
 
           this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
             success: result.success,
-          });
+          }, platformId);
 
           return {
             success: result.success,
@@ -308,7 +311,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -324,7 +327,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -340,7 +343,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -356,7 +359,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, listResult.message, platform, 'TRANSACTION_RESULT', {
           success: listResult.success,
-        });
+        }, platformId);
 
         return {
           success: listResult.success,
@@ -374,7 +377,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -393,7 +396,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'TRANSACTION_RESULT', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -409,7 +412,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -426,7 +429,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -442,7 +445,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -466,7 +469,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -489,7 +492,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -508,7 +511,7 @@ export class TransactionsService {
 
         this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
           success: result.success,
-        });
+        }, platformId);
 
         return {
           success: result.success,
@@ -533,7 +536,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, result.message, platform, context, {
           success: result.success,
           confirmationId: result.confirmationId,
-        });
+        }, platformId);
       }
 
       return { ...result, platform };
@@ -557,6 +560,7 @@ export class TransactionsService {
     mimeType: string,
     messageId: string,
     platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber}`);
@@ -585,7 +589,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, blockMessage, platform, 'CONFIRMATION_REQUEST', {
           hasPending: true,
           confirmationId: hasPending.id,
-        });
+        }, platformId);
 
         return {
           success: false,
@@ -604,7 +608,7 @@ export class TransactionsService {
       this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
         processing: true,
         type: 'image',
-      });
+      }, platformId);
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processImageTransaction(
@@ -622,7 +626,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, result.message, platform, context, {
           success: result.success,
           confirmationId: result.confirmationId,
-        });
+        }, platformId);
       }
 
       return { ...result, platform };
@@ -646,6 +650,7 @@ export class TransactionsService {
     mimeType: string,
     messageId: string,
     platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber}`);
@@ -674,7 +679,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, blockMessage, platform, 'CONFIRMATION_REQUEST', {
           hasPending: true,
           confirmationId: hasPending.id,
-        });
+        }, platformId);
 
         return {
           success: false,
@@ -693,7 +698,7 @@ export class TransactionsService {
       this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
         processing: true,
         type: 'audio',
-      });
+      }, platformId);
 
       // DELEGAR para serviço especializado de REGISTRO
       const result = await this.registrationService.processAudioTransaction(
@@ -711,7 +716,7 @@ export class TransactionsService {
         this.emitReply(phoneNumber, result.message, platform, context, {
           success: result.success,
           confirmationId: result.confirmationId,
-        });
+        }, platformId);
       }
 
       return { ...result, platform };
