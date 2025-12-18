@@ -66,6 +66,54 @@ export class UserCacheService {
   }
 
   /**
+   * Helper: Retorna a chave universal do cache Redis
+   * Cache usa gastoCertoId como chave única, independente da plataforma
+   */
+  private getCacheKey(gastoCertoId: string): string {
+    return `user:${gastoCertoId}`;
+  }
+
+  /**
+   * Busca usuário por gastoCertoId (chave primária real)
+   * Método preferido para uso interno
+   */
+  async getUserByGastoCertoId(gastoCertoId: string): Promise<UserCache | null> {
+    try {
+      // 1. Tentar buscar no Redis primeiro
+      const cacheKey = this.getCacheKey(gastoCertoId);
+      const cachedUser = await this.getUserFromRedisByKey(cacheKey);
+      if (cachedUser) {
+        this.logger.debug(
+          `Cache HIT - Redis (gastoCertoId): ${gastoCertoId} | activeAccountId: ${cachedUser.activeAccountId}`,
+        );
+        return cachedUser;
+      }
+
+      // 2. Buscar no banco de dados
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId },
+      });
+
+      if (!user) {
+        this.logger.debug(`Usuário não encontrado no banco: ${gastoCertoId}`);
+        return null;
+      }
+
+      // 3. Atualizar Redis com chave universal (gastoCertoId)
+      await this.setUserInRedisByKey(cacheKey, user);
+
+      this.logger.debug(
+        `Cache HIT - Database: ${user.gastoCertoId} | activeAccountId: ${user.activeAccountId}`,
+      );
+
+      return user;
+    } catch (error) {
+      this.logger.error(`Erro ao buscar usuário por gastoCertoId ${gastoCertoId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Busca usuário no cache (Redis → Database → API)
    */
   async getUser(phoneNumber: string): Promise<UserCache | null> {
@@ -73,14 +121,18 @@ export class UserCacheService {
       // 1. Tentar buscar no Redis
       const cachedUser = await this.getUserFromRedis(phoneNumber);
       if (cachedUser) {
-        this.logger.debug(`Cache HIT - Redis: ${phoneNumber} | activeAccountId: ${cachedUser.activeAccountId}`);
+        this.logger.debug(
+          `Cache HIT - Redis: ${phoneNumber} | activeAccountId: ${cachedUser.activeAccountId}`,
+        );
         return cachedUser;
       }
 
       // 2. Tentar buscar no banco de dados local
       const dbUser = await this.getUserFromDatabase(phoneNumber);
       if (dbUser) {
-        this.logger.debug(`Cache HIT - Database: ${phoneNumber} | activeAccountId: ${dbUser.activeAccountId}`);
+        this.logger.debug(
+          `Cache HIT - Database: ${phoneNumber} | activeAccountId: ${dbUser.activeAccountId}`,
+        );
         // Atualizar Redis
         await this.setUserInRedis(phoneNumber, dbUser);
         return dbUser;
@@ -127,7 +179,7 @@ export class UserCacheService {
 
       if (existing) {
         this.logger.warn(`⚠️ Cache já existe para gastoCertoId ${apiUser.id}. Atualizando...`);
-        
+
         // Manter conta ativa existente (não sobrescrever escolha do usuário)
         const finalActiveAccountId = existing.activeAccountId || activeAccountId;
         if (existing.activeAccountId) {
@@ -143,7 +195,7 @@ export class UserCacheService {
             );
           }
         }
-        
+
         // Atualizar cache existente
         return await this.prisma.userCache.update({
           where: { gastoCertoId: apiUser.id },
@@ -538,9 +590,37 @@ export class UserCacheService {
    */
   private async setUserInRedis(phoneNumber: string, user: UserCache): Promise<void> {
     try {
-      await this.redisService.getClient().setex(`user:${phoneNumber}`, this.CACHE_TTL, JSON.stringify(user));
+      await this.redisService
+        .getClient()
+        .setex(`user:${phoneNumber}`, this.CACHE_TTL, JSON.stringify(user));
     } catch (error) {
       this.logger.error('Erro ao salvar no Redis:', error);
+    }
+  }
+
+  /**
+   * Busca usuário no Redis usando chave customizada
+   */
+  private async getUserFromRedisByKey(cacheKey: string): Promise<UserCache | null> {
+    try {
+      const cached = await this.redisService.getClient().get(cacheKey);
+      if (!cached) return null;
+
+      return JSON.parse(cached) as UserCache;
+    } catch (error) {
+      this.logger.error(`Erro ao buscar no Redis (${cacheKey}):`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Salva usuário no Redis usando chave customizada
+   */
+  private async setUserInRedisByKey(cacheKey: string, user: UserCache): Promise<void> {
+    try {
+      await this.redisService.getClient().setex(cacheKey, this.CACHE_TTL, JSON.stringify(user));
+    } catch (error) {
+      this.logger.error(`Erro ao salvar no Redis (${cacheKey}):`, error);
     }
   }
 
@@ -834,7 +914,8 @@ export class UserCacheService {
       });
 
       // Invalidar cache Redis (todos os identificadores)
-      if (updated.phoneNumber) await this.redisService.getClient().del(`user:${updated.phoneNumber}`);
+      if (updated.phoneNumber)
+        await this.redisService.getClient().del(`user:${updated.phoneNumber}`);
       if (updated.telegramId) await this.redisService.getClient().del(`user:${updated.telegramId}`);
       if (updated.whatsappId) await this.redisService.getClient().del(`user:${updated.whatsappId}`);
 
@@ -927,12 +1008,15 @@ export class UserCacheService {
             });
 
             // Invalidar cache Redis e atualizar com dados novos
-            await this.redisService.getClient().del(`user:${user.phoneNumber}`);
+            // Deletar chaves antigas (por plataforma) se existirem + nova chave universal
+            if (user.phoneNumber)
+              await this.redisService.getClient().del(`user:${user.phoneNumber}`);
             if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
             if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
 
-            // Recolocar no Redis com dados atualizados
-            await this.setUserInRedis(user.phoneNumber, updatedUser);
+            // Salvar no Redis usando chave universal (gastoCertoId)
+            const cacheKey = this.getCacheKey(updatedUser.gastoCertoId);
+            await this.setUserInRedisByKey(cacheKey, updatedUser);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
@@ -977,8 +1061,12 @@ export class UserCacheService {
         return null;
       }
 
-      this.logger.log(`🔍 [DEBUG] getActiveAccount - user.activeAccountId: ${user.activeAccountId}`);
-      this.logger.log(`🔍 [DEBUG] getActiveAccount - user.accounts.length: ${((user.accounts as any[]) || []).length}`);
+      this.logger.log(
+        `🔍 [DEBUG] getActiveAccount - user.activeAccountId: ${user.activeAccountId}`,
+      );
+      this.logger.log(
+        `🔍 [DEBUG] getActiveAccount - user.accounts.length: ${((user.accounts as any[]) || []).length}`,
+      );
 
       let accounts = (user.accounts as any[]) || [];
 
@@ -1035,12 +1123,15 @@ export class UserCacheService {
             });
 
             // Invalidar cache Redis e atualizar com dados novos
-            await this.redisService.getClient().del(`user:${user.phoneNumber}`);
+            // Deletar chaves antigas (por plataforma) se existirem + nova chave universal
+            if (user.phoneNumber)
+              await this.redisService.getClient().del(`user:${user.phoneNumber}`);
             if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
             if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
 
-            // Recolocar no Redis com dados atualizados
-            await this.setUserInRedis(user.phoneNumber, updatedUser);
+            // Salvar no Redis usando chave universal (gastoCertoId)
+            const cacheKey = this.getCacheKey(updatedUser.gastoCertoId);
+            await this.setUserInRedisByKey(cacheKey, updatedUser);
 
             this.logger.log(
               `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
@@ -1076,6 +1167,42 @@ export class UserCacheService {
       return activeAccount;
     } catch (error) {
       this.logger.error(`Erro ao obter conta ativa do usuário ${phoneNumber}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Obtém a conta ativa do usuário usando gastoCertoId diretamente
+   * Método preferido para uso interno nos services
+   */
+  async getActiveAccountByUserId(
+    gastoCertoId: string,
+  ): Promise<{ id: string; name: string; type: string; isPrimary?: boolean } | null> {
+    try {
+      const user = await this.getUserByGastoCertoId(gastoCertoId);
+      if (!user) {
+        this.logger.debug(`Usuário não encontrado: ${gastoCertoId}`);
+        return null;
+      }
+
+      if (!user.activeAccountId) {
+        this.logger.debug(`Nenhuma conta ativa para usuário ${gastoCertoId}`);
+        return null;
+      }
+
+      const accounts = (user.accounts as any[]) || [];
+      const activeAccount = accounts.find((acc) => acc.id === user.activeAccountId);
+
+      if (!activeAccount) {
+        this.logger.warn(
+          `Conta ativa ${user.activeAccountId} não encontrada para usuário ${gastoCertoId}`,
+        );
+        return null;
+      }
+
+      return activeAccount;
+    } catch (error) {
+      this.logger.error(`Erro ao obter conta ativa do usuário ${gastoCertoId}:`, error);
       return null;
     }
   }

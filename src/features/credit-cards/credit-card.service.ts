@@ -38,10 +38,10 @@ export class CreditCardService {
     message: string;
   }> {
     try {
-      this.logger.log(`💳 Listando cartões de crédito para ${user.phoneNumber}`);
+      this.logger.log(`💳 Listando cartões de crédito para usuário ${user.gastoCertoId}`);
 
-      // Obter conta ativa (validação já foi feita no TransactionsService)
-      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      // Obter conta ativa usando gastoCertoId (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
       if (!activeAccount) {
         this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
@@ -119,10 +119,10 @@ export class CreditCardService {
     message: string;
   }> {
     try {
-      this.logger.log(`📋 Listando faturas para ${user.phoneNumber}`);
+      this.logger.log(`📋 Listando faturas para usuário ${user.gastoCertoId}`);
 
-      // Obter conta ativa (validação já foi feita no TransactionsService)
-      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      // Obter conta ativa usando gastoCertoId (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
       if (!activeAccount) {
         this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
@@ -233,8 +233,8 @@ export class CreditCardService {
 
       const invoice = result.item;
 
-      // Obter conta ativa (validação já foi feita no TransactionsService)
-      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      // Obter conta ativa usando gastoCertoId (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
       if (!activeAccount) {
         this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
@@ -328,8 +328,8 @@ export class CreditCardService {
 
       const invoice = result.item;
 
-      // Obter conta ativa (validação já foi feita no TransactionsService)
-      const activeAccount = await this.userCache.getActiveAccount(user.phoneNumber);
+      // Obter conta ativa usando gastoCertoId (validação já foi feita no TransactionsService)
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
       if (!activeAccount) {
         this.logger.error(`❌ ERRO CRÍTICO: Conta ativa não encontrada após validação!`);
         return {
