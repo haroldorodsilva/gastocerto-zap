@@ -12,6 +12,7 @@ import {
   MessageResult,
   UserInfo,
 } from '@common/interfaces/messaging-provider.interface';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 
 @Injectable()
 export class TelegramProvider implements IMessagingProvider {
@@ -21,6 +22,8 @@ export class TelegramProvider implements IMessagingProvider {
   private bot: TelegramBot | null = null;
   private callbacks: MessagingCallbacks = {};
   private connected = false;
+
+  constructor(private readonly userRateLimiter: UserRateLimiterService) {}
 
   async initialize(
     config: MessagingConnectionConfig,
@@ -303,10 +306,34 @@ export class TelegramProvider implements IMessagingProvider {
 
   private async handleIncomingMessage(msg: TelegramBot.Message, type: MessageType): Promise<void> {
     try {
+      const chatId = msg.chat.id.toString();
+
+      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
+      // Usar chatId como identificador para Telegram
+      const rateLimitCheck = await this.userRateLimiter.checkLimit(chatId);
+
+      if (!rateLimitCheck.allowed) {
+        this.logger.warn(
+          `🚫 [Telegram] Rate limit exceeded for chat ${chatId}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
+        );
+
+        // Enviar mensagem de rate limit ao usuário
+        const limitMessage = this.userRateLimiter.getRateLimitMessage(
+          rateLimitCheck.reason!,
+          rateLimitCheck.retryAfter!,
+        );
+
+        await this.sendTextMessage(chatId, limitMessage);
+        return; // ❌ Bloqueia processamento
+      }
+
+      // ✅ Registrar uso da mensagem
+      await this.userRateLimiter.recordUsage(chatId);
+
       const incomingMessage: IncomingMessage = {
         id: msg.message_id.toString(),
-        chatId: msg.chat.id.toString(),
-        userId: msg.from?.id.toString() || msg.chat.id.toString(),
+        chatId,
+        userId: msg.from?.id.toString() || chatId,
         platform: MessagingPlatform.TELEGRAM,
         timestamp: new Date(msg.date * 1000),
         type,

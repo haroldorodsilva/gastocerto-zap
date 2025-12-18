@@ -9,6 +9,7 @@ import {
   IncomingMessage,
 } from '@common/interfaces/messaging-provider.interface';
 import { TelegramProvider } from './telegram/telegram.provider';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { SessionStatus } from '@prisma/client';
 
 interface PlatformSession {
@@ -28,6 +29,7 @@ export class MultiPlatformSessionService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: ConfigService,
+    private readonly userRateLimiter: UserRateLimiterService,
   ) {}
 
   async onModuleInit() {
@@ -103,7 +105,7 @@ export class MultiPlatformSessionService implements OnModuleInit {
       }
 
       // ✅ FIX: Criar uma NOVA instância de TelegramProvider para cada sessão
-      const telegramProvider = new TelegramProvider();
+      const telegramProvider = new TelegramProvider(this.userRateLimiter);
 
       const config: MessagingConnectionConfig = {
         platform: MessagingPlatform.TELEGRAM,

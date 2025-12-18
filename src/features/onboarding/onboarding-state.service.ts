@@ -244,39 +244,26 @@ export class OnboardingStateService {
       };
     }
 
-    // Salvar email e avançar para solicitação de telefone (Telegram) ou verificação de usuário (WhatsApp)
+    // Salvar email e avançar para solicitação de telefone (TODAS PLATAFORMAS)
     const data = (session.data as OnboardingData) || {};
     data.email = validation.normalizedEmail!;
 
-    // Para Telegram, solicitar telefone antes de verificar usuário
-    const nextStep =
-      data.platform === 'telegram'
-        ? OnboardingStep.REQUEST_PHONE
-        : OnboardingStep.CHECK_EXISTING_USER;
-
+    // 🆕 TODOS usuários passam por REQUEST_PHONE (WhatsApp e Telegram)
+    // Isso garante consistência entre plataformas
     const updated = await this.updateSessionById(session.id, {
-      currentStep: nextStep,
+      currentStep: OnboardingStep.REQUEST_PHONE,
       data: data as any,
     });
 
-    if (nextStep === OnboardingStep.REQUEST_PHONE) {
-      return {
-        completed: false,
-        currentStep: OnboardingStep.REQUEST_PHONE,
-        message:
-          '📞 *Quase lá!*\n\n' +
-          'Para finalizarmos, preciso do seu número de telefone.\n\n' +
-          '🔒 *Seu telefone estará seguro!*\n' +
-          'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
-          'ℹ️ Se preferir *pular esta etapa*, digite "pular".',
-        data,
-      };
-    }
-
     return {
       completed: false,
-      currentStep: OnboardingStep.CHECK_EXISTING_USER,
-      message: '⏳ Verificando seu cadastro...',
+      currentStep: OnboardingStep.REQUEST_PHONE,
+      message:
+        '📞 *Quase lá!*\n\n' +
+        'Para finalizarmos, preciso do seu número de telefone.\n\n' +
+        '🔒 *Seu telefone estará seguro!*\n' +
+        'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
+        'ℹ️ Se preferir *pular esta etapa*, digite "pular".',
       data,
     };
   }

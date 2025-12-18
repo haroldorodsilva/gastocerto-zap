@@ -31,6 +31,7 @@ export class WhatsAppMessageHandler {
     private readonly contextService: MessageContextService,
     private readonly onboardingService: OnboardingService,
     private readonly userCacheService: UserCacheService,
+    private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
@@ -60,6 +61,27 @@ export class WhatsAppMessageHandler {
 
       const phoneNumber = filteredMessage.phoneNumber;
       this.logger.log(`✅ [WhatsApp] Processing message from ${phoneNumber}`);
+
+      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
+      const rateLimitCheck = await this.userRateLimiter.checkLimit(phoneNumber);
+
+      if (!rateLimitCheck.allowed) {
+        this.logger.warn(
+          `🚫 [WhatsApp] Rate limit exceeded for ${phoneNumber}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
+        );
+
+        // Enviar mensagem de rate limit ao usuário
+        const limitMessage = this.userRateLimiter.getRateLimitMessage(
+          rateLimitCheck.reason!,
+          rateLimitCheck.retryAfter!,
+        );
+
+        this.sendMessage(phoneNumber, limitMessage);
+        return; // ❌ Bloqueia processamento
+      }
+
+      // ✅ Registrar uso da mensagem
+      await this.userRateLimiter.recordUsage(phoneNumber);
 
       // Buscar usuário para obter userId (não bloqueante)
       const user = await this.userCacheService.getUser(phoneNumber);

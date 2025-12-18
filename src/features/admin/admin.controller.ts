@@ -591,6 +591,8 @@ export class AdminController {
             gastoCertoId: true,
             hasActiveSubscription: true,
             activeAccountId: true,
+            isBlocked: true,
+            isActive: true,
             lastSyncAt: true,
             createdAt: true,
             updatedAt: true,
@@ -877,13 +879,15 @@ export class AdminController {
   }
 
   /**
-   * Bloqueia usuário (desativa bot para esse número)
+   * Bloqueia/desbloqueia usuário
    * POST /admin/users/block
    */
   @Post('users/block')
   @HttpCode(HttpStatus.OK)
-  async blockUser(@Body() dto: { userId: string; reason?: string }) {
-    this.logger.warn(`Bloqueando usuário: ${dto.userId} (motivo: ${dto.reason || 'N/A'})`);
+  async blockUser(@Body() dto: { userId: string; isBlocked: boolean; reason?: string }) {
+    this.logger.warn(
+      `Alterando bloqueio do usuário: ${dto.userId} -> isBlocked: ${dto.isBlocked} (motivo: ${dto.reason || 'N/A'})`,
+    );
 
     // Buscar usuário pelo gastoCertoId
     const user = await this.prisma.userCache.findFirst({
@@ -894,41 +898,53 @@ export class AdminController {
       throw new BadRequestException(`Usuário não encontrado: ${dto.userId}`);
     }
 
-    // Buscar sessão ativa do usuário
-    const session = await this.prisma.whatsAppSession.findFirst({
-      where: { phoneNumber: user.phoneNumber },
-      orderBy: { updatedAt: 'desc' },
-    });
-
-    if (!session) {
-      throw new BadRequestException(`Sessão não encontrada para o usuário: ${dto.userId}`);
-    }
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
+    // Atualizar status de bloqueio no userCache
+    await this.prisma.userCache.update({
+      where: { id: user.id },
       data: {
-        isActive: false,
-        status: 'DISCONNECTED',
+        isBlocked: dto.isBlocked,
         updatedAt: new Date(),
       },
     });
 
-    await this.sessionManager.stopSession(session.sessionId);
+    // Se estiver bloqueando, também desativar a sessão WhatsApp
+    if (dto.isBlocked) {
+      // Buscar sessão ativa do usuário
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { phoneNumber: user.phoneNumber },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (session) {
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            isActive: false,
+            status: 'DISCONNECTED',
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.sessionManager.stopSession(session.sessionId);
+      }
+    }
 
     return {
       success: true,
-      message: `Usuário ${dto.userId} bloqueado com sucesso`,
+      message: `Usuário ${dto.userId} ${dto.isBlocked ? 'bloqueado' : 'desbloqueado'} com sucesso`,
     };
   }
 
   /**
-   * Ativa/desbloqueia usuário
+   * Ativa/desativa usuário
    * POST /admin/users/activate
    */
   @Post('users/activate')
   @HttpCode(HttpStatus.OK)
-  async activateUser(@Body() dto: { userId: string }) {
-    this.logger.log(`Ativando usuário: ${dto.userId}`);
+  async activateUser(@Body() dto: { userId: string; isActive: boolean }) {
+    this.logger.log(
+      `Alterando status ativo do usuário: ${dto.userId} -> isActive: ${dto.isActive}`,
+    );
 
     // Buscar usuário pelo gastoCertoId
     const user = await this.prisma.userCache.findFirst({
@@ -939,30 +955,59 @@ export class AdminController {
       throw new BadRequestException(`Usuário não encontrado: ${dto.userId}`);
     }
 
-    // Buscar sessão ativa do usuário
-    const session = await this.prisma.whatsAppSession.findFirst({
-      where: { phoneNumber: user.phoneNumber },
-      orderBy: { updatedAt: 'desc' },
-    });
-
-    if (!session) {
-      throw new BadRequestException(`Sessão não encontrada para o usuário: ${dto.userId}`);
-    }
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
+    // Atualizar status ativo no userCache
+    await this.prisma.userCache.update({
+      where: { id: user.id },
       data: {
-        isActive: true,
-        status: 'DISCONNECTED',
+        isActive: dto.isActive,
         updatedAt: new Date(),
       },
     });
 
-    await this.sessionManager.startSession(session.sessionId);
+    // Se estiver ativando, também ativar a sessão WhatsApp
+    if (dto.isActive) {
+      // Buscar sessão ativa do usuário
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { phoneNumber: user.phoneNumber },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (session) {
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            isActive: true,
+            status: 'DISCONNECTED',
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.sessionManager.startSession(session.sessionId);
+      }
+    } else {
+      // Se estiver desativando, parar a sessão WhatsApp
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { phoneNumber: user.phoneNumber },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (session) {
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            isActive: false,
+            status: 'DISCONNECTED',
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.sessionManager.stopSession(session.sessionId);
+      }
+    }
 
     return {
       success: true,
-      message: `Usuário ${dto.userId} ativado com sucesso`,
+      message: `Usuário ${dto.userId} ${dto.isActive ? 'ativado' : 'desativado'} com sucesso`,
     };
   }
 
