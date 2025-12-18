@@ -40,7 +40,7 @@ export class OpenAIProvider implements IAIProvider {
       // Tentar buscar do banco primeiro
       const { PrismaService } = await import('../../../core/database/prisma.service');
       const prisma = new PrismaService();
-      
+
       const providerConfig = await prisma.aIProviderConfig.findUnique({
         where: { provider: 'openai' },
       });
@@ -58,7 +58,7 @@ export class OpenAIProvider implements IAIProvider {
         this.model = this.configService.get<string>('ai.openai.model', 'gpt-4o-mini');
         this.visionModel = this.configService.get<string>('ai.openai.visionModel', 'gpt-4o');
         this.whisperModel = this.configService.get<string>('ai.openai.whisperModel', 'whisper-1');
-        
+
         if (this.apiKey) {
           this.logger.warn('⚠️  OpenAI usando ENV (configure no banco para produção)');
         } else {

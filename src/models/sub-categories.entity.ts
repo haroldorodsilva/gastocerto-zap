@@ -1,5 +1,5 @@
-import { BaseEntity } from "./base.entity";
-import { Categories } from "./categories.entity";
+import { BaseEntity } from './base.entity';
+import { Categories } from './categories.entity';
 
 export class SubCategories extends BaseEntity {
   name: string;

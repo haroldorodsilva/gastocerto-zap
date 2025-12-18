@@ -1,5 +1,5 @@
-import { TransactionFrequency, TransactionType } from "../types/transaction.types";
-import { BaseEntity } from "./base.entity";
+import { TransactionFrequency, TransactionType } from '../types/transaction.types';
+import { BaseEntity } from './base.entity';
 
 export class TransactionFixed extends BaseEntity {
   dueDate: Date;

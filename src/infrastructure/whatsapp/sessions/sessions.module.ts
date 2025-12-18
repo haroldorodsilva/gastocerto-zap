@@ -11,32 +11,17 @@ import { UsersModule } from '../../../features/users/users.module';
 
 /**
  * Módulo Sessions
- * 
+ *
  * Módulo principal que coordena os submódulos de WhatsApp e Telegram.
  * Mantém controladores e serviços genéricos (external, multi-platform).
  * SessionsController removido - gerenciamento agora é feito pelos controllers específicos.
- * 
+ *
  * NOTA: MultiPlatformSessionService agora vem do MultiPlatformSessionModule @Global
  */
 @Module({
-  imports: [
-    ConfigModule,
-    MultiPlatformSessionModule,
-    WhatsAppModule,
-    TelegramModule,
-    UsersModule,
-  ],
+  imports: [ConfigModule, MultiPlatformSessionModule, WhatsAppModule, TelegramModule, UsersModule],
   controllers: [ExternalController],
-  providers: [
-    PrismaService,
-    SessionsService,
-    SessionManagerService,
-  ],
-  exports: [
-    SessionsService,
-    SessionManagerService,
-    WhatsAppModule,
-    TelegramModule,
-  ],
+  providers: [PrismaService, SessionsService, SessionManagerService],
+  exports: [SessionsService, SessionManagerService, WhatsAppModule, TelegramModule],
 })
 export class SessionsModule {}

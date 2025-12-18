@@ -47,7 +47,7 @@ export class GoogleGeminiProvider implements IAIProvider {
       // Tentar buscar do banco primeiro
       const { PrismaService } = await import('../../../core/database/prisma.service');
       const prisma = new PrismaService();
-      
+
       const providerConfig = await prisma.aIProviderConfig.findUnique({
         where: { provider: 'google_gemini' },
       });
@@ -61,7 +61,7 @@ export class GoogleGeminiProvider implements IAIProvider {
         // Fallback para ENV (apenas dev)
         this.apiKey = this.configService.get<string>('ai.google.apiKey', '');
         this.model = this.configService.get<string>('ai.google.model', 'gemini-1.5-flash');
-        
+
         if (this.apiKey) {
           this.logger.warn('⚠️  Google Gemini usando ENV (configure no banco para produção)');
         } else {
@@ -300,5 +300,4 @@ export class GoogleGeminiProvider implements IAIProvider {
       throw error;
     }
   }
-
 }

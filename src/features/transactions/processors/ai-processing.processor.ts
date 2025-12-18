@@ -21,9 +21,7 @@ export class AIProcessingProcessor {
   async handleAIProcessing(job: Job<AIProcessingJob>) {
     const { phoneNumber, messageId, messageType, content, mimeType } = job.data;
 
-    this.logger.log(
-      `🤖 Processando ${messageType} de ${phoneNumber} (Job ${job.id})`,
-    );
+    this.logger.log(`🤖 Processando ${messageType} de ${phoneNumber} (Job ${job.id})`);
 
     try {
       let result;
@@ -59,9 +57,7 @@ export class AIProcessingProcessor {
           throw new Error(`Tipo de mensagem não suportado: ${messageType}`);
       }
 
-      this.logger.log(
-        `✅ AI processing completo para ${phoneNumber}: ${result.message}`,
-      );
+      this.logger.log(`✅ AI processing completo para ${phoneNumber}: ${result.message}`);
 
       return result;
     } catch (error: any) {

@@ -487,10 +487,7 @@ export class SecurityService {
     const minuteKey = `rate_limit:minute:${phoneNumber}`;
     const hourKey = `rate_limit:hour:${phoneNumber}`;
 
-    await Promise.all([
-      this.cacheManager.del(minuteKey),
-      this.cacheManager.del(hourKey),
-    ]);
+    await Promise.all([this.cacheManager.del(minuteKey), this.cacheManager.del(hourKey)]);
 
     this.logger.log(`✅ User ${phoneNumber} unblocked`);
   }
@@ -510,7 +507,7 @@ export class SecurityService {
   ) {
     // Buscar o primeiro registro de AISettings (configuração global)
     const currentSettings = await this.prisma.aISettings.findFirst();
-    
+
     if (!currentSettings) {
       throw new Error('AI Settings not found');
     }

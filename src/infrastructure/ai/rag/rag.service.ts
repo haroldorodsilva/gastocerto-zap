@@ -223,7 +223,7 @@ export class RAGService {
   }
 
   /**
-   * Busca categorias similares usando BM25
+   * Busca categorias similares usando BM25 + Sinônimos Personalizados
    */
   async findSimilarCategories(
     text: string,
@@ -257,6 +257,15 @@ export class RAGService {
     const normalizedQuery = this.normalize(text);
     const queryTokens = this.tokenize(normalizedQuery);
 
+    // 🆕 BUSCAR SINÔNIMOS PERSONALIZADOS DO USUÁRIO
+    const userSynonyms = await this.getUserSynonyms(userId, normalizedQuery);
+
+    if (userSynonyms.length > 0) {
+      this.logger.log(
+        `🎯 Encontrados ${userSynonyms.length} sinônimos personalizados para "${text}"`,
+      );
+    }
+
     this.logger.debug(`🔍 Buscando por: "${text}" → tokens: [${queryTokens.join(', ')}]`);
 
     // Calcular score para cada categoria
@@ -284,7 +293,21 @@ export class RAGService {
       // Calcular similaridade BM25
       let score = this.calculateBM25Score(queryTokens, categoryTokens);
 
-      // Aplicar boosts
+      // 🆕 BOOST PARA SINÔNIMOS PERSONALIZADOS (prioritário - maior confiança)
+      const userSynonymMatch = userSynonyms.find(
+        (syn) => syn.categoryId === category.id && (!syn.subCategoryId || syn.subCategoryId === category.subCategory?.id),
+      );
+
+      if (userSynonymMatch) {
+        // Boost MUITO alto para sinônimos personalizados (3.0x base + confiança)
+        const userSynonymBoost = 3.0 * userSynonymMatch.confidence;
+        score += userSynonymBoost;
+        this.logger.log(
+          `🎯 MATCH SINÔNIMO PERSONALIZADO: "${userSynonymMatch.keyword}" → "${category.name}"${category.subCategory ? ' → ' + category.subCategory.name : ''} (boost +${userSynonymBoost.toFixed(2)})`,
+        );
+      }
+
+      // Aplicar boosts padrão
       if (normalizedQuery === normalizedCategory) {
         score *= finalConfig.boostExactMatch;
         this.logger.debug(
@@ -468,9 +491,7 @@ export class RAGService {
    */
   private cosineSimilarity(vecA: number[], vecB: number[]): number {
     if (vecA.length !== vecB.length) {
-      throw new Error(
-        `Vetores com dimensões diferentes: ${vecA.length} vs ${vecB.length}`,
-      );
+      throw new Error(`Vetores com dimensões diferentes: ${vecA.length} vs ${vecB.length}`);
     }
 
     let dotProduct = 0;
@@ -601,6 +622,21 @@ export class RAGService {
   }
 
   /**
+   * Deleta logs de busca RAG por IDs
+   */
+  async deleteSearchLogs(ids: string[]): Promise<{ deletedCount: number }> {
+    const result = await this.prisma.rAGSearchLog.deleteMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+    });
+
+    return { deletedCount: result.count };
+  }
+
+  /**
    * Normaliza texto: lowercase, remove acentos, trim
    */
   private normalize(text: string): string {
@@ -705,5 +741,173 @@ export class RAGService {
     }
 
     return matched;
+  }
+
+  /**
+   * 🆕 Busca sinônimos personalizados do usuário
+   * Retorna lista de keywords que batem com a query normalizada
+   */
+  private async getUserSynonyms(
+    userId: string,
+    normalizedQuery: string,
+  ): Promise<
+    Array<{
+      keyword: string;
+      categoryId: string;
+      categoryName: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+      confidence: number;
+    }>
+  > {
+    try {
+      // Tokenizar query para buscar matches parciais
+      const queryTokens = this.tokenize(normalizedQuery);
+
+      // Buscar sinônimos que contenham algum token da query
+      const synonyms = await this.prisma.userSynonym.findMany({
+        where: {
+          userId,
+          OR: queryTokens.map((token) => ({
+            keyword: {
+              contains: token,
+            },
+          })),
+        },
+        orderBy: {
+          confidence: 'desc', // Priorizar sinônimos com maior confiança
+        },
+      });
+
+      // Atualizar usageCount e lastUsedAt para os sinônimos encontrados
+      if (synonyms.length > 0) {
+        await this.prisma.userSynonym.updateMany({
+          where: {
+            id: {
+              in: synonyms.map((s) => s.id),
+            },
+          },
+          data: {
+            usageCount: {
+              increment: 1,
+            },
+            lastUsedAt: new Date(),
+          },
+        });
+      }
+
+      return synonyms.map((s) => ({
+        keyword: s.keyword,
+        categoryId: s.categoryId,
+        categoryName: s.categoryName,
+        subCategoryId: s.subCategoryId || undefined,
+        subCategoryName: s.subCategoryName || undefined,
+        confidence: s.confidence,
+      }));
+    } catch (error) {
+      this.logger.error('Erro ao buscar sinônimos personalizados:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 🆕 Adiciona novo sinônimo personalizado para o usuário
+   */
+  async addUserSynonym(params: {
+    userId: string;
+    keyword: string;
+    categoryId: string;
+    categoryName: string;
+    subCategoryId?: string;
+    subCategoryName?: string;
+    confidence?: number;
+    source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED';
+  }): Promise<void> {
+    try {
+      const normalizedKeyword = this.normalize(params.keyword);
+
+      await this.prisma.userSynonym.upsert({
+        where: {
+          userId_keyword: {
+            userId: params.userId,
+            keyword: normalizedKeyword,
+          },
+        },
+        create: {
+          userId: params.userId,
+          keyword: normalizedKeyword,
+          categoryId: params.categoryId,
+          categoryName: params.categoryName,
+          subCategoryId: params.subCategoryId,
+          subCategoryName: params.subCategoryName,
+          confidence: params.confidence ?? 1.0,
+          source: params.source ?? 'USER_CONFIRMED',
+        },
+        update: {
+          categoryId: params.categoryId,
+          categoryName: params.categoryName,
+          subCategoryId: params.subCategoryId,
+          subCategoryName: params.subCategoryName,
+          confidence: params.confidence ?? 1.0,
+          source: params.source ?? 'USER_CONFIRMED',
+          updatedAt: new Date(),
+        },
+      });
+
+      this.logger.log(
+        `✅ Sinônimo adicionado: "${params.keyword}" → ${params.categoryName}${params.subCategoryName ? ' → ' + params.subCategoryName : ''}`,
+      );
+    } catch (error) {
+      this.logger.error('Erro ao adicionar sinônimo personalizado:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 🆕 Lista todos sinônimos de um usuário
+   */
+  async listUserSynonyms(userId: string): Promise<
+    Array<{
+      id: string;
+      keyword: string;
+      categoryName: string;
+      subCategoryName?: string;
+      confidence: number;
+      usageCount: number;
+      source: string;
+    }>
+  > {
+    const synonyms = await this.prisma.userSynonym.findMany({
+      where: { userId },
+      orderBy: [{ usageCount: 'desc' }, { confidence: 'desc' }],
+    });
+
+    return synonyms.map((s) => ({
+      id: s.id,
+      keyword: s.keyword,
+      categoryName: s.categoryName,
+      subCategoryName: s.subCategoryName || undefined,
+      confidence: s.confidence,
+      usageCount: s.usageCount,
+      source: s.source,
+    }));
+  }
+
+  /**
+   * 🆕 Remove sinônimo personalizado
+   */
+  async removeUserSynonym(userId: string, keyword: string): Promise<void> {
+    const normalizedKeyword = this.normalize(keyword);
+
+    await this.prisma.userSynonym.delete({
+      where: {
+        userId_keyword: {
+          userId,
+          keyword: normalizedKeyword,
+        },
+      },
+    });
+
+    this.logger.log(`🗑️ Sinônimo removido: "${keyword}" para usuário ${userId}`);
   }
 }

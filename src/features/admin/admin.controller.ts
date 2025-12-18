@@ -1018,9 +1018,9 @@ export class AdminController {
 
   /**
    * Consultar logs de busca RAG (analytics)
-   * GET /admin/rag-search-logs?userId=xxx&failedOnly=true&limit=100
+   * GET /admin/rag/search-logs?userId=xxx&failedOnly=true&limit=100
    */
-  @Get('rag-search-logs')
+  @Get('rag/search-logs')
   async getRagSearchLogs(
     @Query('userId') userId?: string,
     @Query('failedOnly') failedOnly?: string,
@@ -1076,6 +1076,40 @@ export class AdminController {
       return {
         success: false,
         message: 'Erro ao buscar logs RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Deleta logs de busca RAG
+   * DELETE /admin/rag/search-logs
+   */
+  @Delete('rag/search-logs')
+  @HttpCode(HttpStatus.OK)
+  async deleteRagSearchLogs(@Body() dto: { ids: string[] }) {
+    this.logger.log(`🗑️ Admin solicitou exclusão de ${dto.ids?.length || 0} logs RAG`);
+
+    try {
+      if (!dto.ids || !Array.isArray(dto.ids) || dto.ids.length === 0) {
+        throw new BadRequestException('IDs são obrigatórios e devem ser um array não vazio');
+      }
+
+      const result = await this.ragService.deleteSearchLogs(dto.ids);
+
+      return {
+        success: true,
+        message: `${result.deletedCount} logs deletados com sucesso`,
+        deletedCount: result.deletedCount,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao deletar logs RAG:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao deletar logs RAG',
         error: error.message,
         timestamp: new Date().toISOString(),
       };

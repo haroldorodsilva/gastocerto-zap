@@ -26,10 +26,7 @@ export class IntentAnalyzerService {
       minScore: 0.7,
     },
     query_balance: {
-      patterns: [
-        /quanto|saldo|tenho|disponível|restante/i,
-        /balanço|finanças|dinheiro/i,
-      ],
+      patterns: [/quanto|saldo|tenho|disponível|restante/i, /balanço|finanças|dinheiro/i],
       keywords: ['saldo', 'quanto', 'tenho', 'balanço'],
       minScore: 0.6,
     },
@@ -43,41 +40,27 @@ export class IntentAnalyzerService {
       minScore: 0.6,
     },
     process_payment: {
-      patterns: [
-        /pagar|pagamento|quitar|saldar/i,
-        /boleto|fatura|conta|débito/i,
-      ],
+      patterns: [/pagar|pagamento|quitar|saldar/i, /boleto|fatura|conta|débito/i],
       keywords: ['pagar', 'pagamento', 'boleto', 'fatura'],
       minScore: 0.7,
     },
     query_summary: {
-      patterns: [
-        /resumo|relatório|total|consolidado/i,
-        /mês|semana|período/i,
-      ],
+      patterns: [/resumo|relatório|total|consolidado/i, /mês|semana|período/i],
       keywords: ['resumo', 'relatório', 'total', 'consolidado'],
       minScore: 0.6,
     },
     confirm_action: {
-      patterns: [
-        /^(sim|confirmar|confirmo|ok|okay|certo|exato|correto|isso mesmo)$/i,
-        /^s$/i,
-      ],
+      patterns: [/^(sim|confirmar|confirmo|ok|okay|certo|exato|correto|isso mesmo)$/i, /^s$/i],
       keywords: ['sim', 'confirmar', 'ok', 'certo'],
       minScore: 0.9,
     },
     cancel_action: {
-      patterns: [
-        /^(não|nao|cancelar|cancelo|voltar|desistir)$/i,
-        /^n$/i,
-      ],
+      patterns: [/^(não|nao|cancelar|cancelo|voltar|desistir)$/i, /^n$/i],
       keywords: ['não', 'nao', 'cancelar', 'voltar'],
       minScore: 0.9,
     },
     help: {
-      patterns: [
-        /ajuda|help|socorro|como|comandos|opções|menu/i,
-      ],
+      patterns: [/ajuda|help|socorro|como|comandos|opções|menu/i],
       keywords: ['ajuda', 'help', 'como', 'menu'],
       minScore: 0.8,
     },
@@ -159,10 +142,7 @@ export class IntentAnalyzerService {
   /**
    * Extrai entidades da mensagem
    */
-  private extractEntities(
-    message: string,
-    intent: string,
-  ): Record<string, any> {
+  private extractEntities(message: string, intent: string): Record<string, any> {
     const entities: Record<string, any> = {};
 
     // Extrair valores monetários
@@ -189,9 +169,7 @@ export class IntentAnalyzerService {
     }
 
     // Extrair tipo (despesa/receita)
-    if (
-      /gastei|comprei|paguei|despesa/i.test(message)
-    ) {
+    if (/gastei|comprei|paguei|despesa/i.test(message)) {
       entities.type = 'expense';
     } else if (/recebi|ganhei|receita/i.test(message)) {
       entities.type = 'income';
@@ -228,24 +206,10 @@ export class IntentAnalyzerService {
         'Comprei R$ 150 de roupas',
         'Recebi 500 de freelance',
       ],
-      query_balance: [
-        'Quanto eu tenho?',
-        'Qual meu saldo?',
-        'Quanto tenho disponível?',
-      ],
-      list_transactions: [
-        'Lista minhas transações',
-        'Mostrar meus gastos',
-        'Ver histórico',
-      ],
-      process_payment: [
-        'Pagar boleto de R$ 200',
-        'Quitar fatura',
-      ],
-      query_summary: [
-        'Resumo do mês',
-        'Total de gastos',
-      ],
+      query_balance: ['Quanto eu tenho?', 'Qual meu saldo?', 'Quanto tenho disponível?'],
+      list_transactions: ['Lista minhas transações', 'Mostrar meus gastos', 'Ver histórico'],
+      process_payment: ['Pagar boleto de R$ 200', 'Quitar fatura'],
+      query_summary: ['Resumo do mês', 'Total de gastos'],
       confirm_action: ['Sim', 'Confirmar', 'Ok'],
       cancel_action: ['Não', 'Cancelar'],
       help: ['Ajuda', 'Como funciona?', 'Menu'],

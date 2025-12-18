@@ -30,7 +30,7 @@ import { DiscordNotificationService } from '@common/services/discord-notificatio
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => {
         const redisUrl = configService.get<string>('REDIS_URL');
-        
+
         if (redisUrl) {
           // Usar URL completa (para Upstash, Redis Cloud, etc)
           return {
@@ -39,7 +39,7 @@ import { DiscordNotificationService } from '@common/services/discord-notificatio
             }),
           };
         }
-        
+
         // Fallback para host/port separados
         const redisConfig = configService.get('redis');
         return {

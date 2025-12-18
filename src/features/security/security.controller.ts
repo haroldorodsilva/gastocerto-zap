@@ -23,10 +23,7 @@ export class SecurityController {
    * Dashboard de segurança
    */
   @Get('stats')
-  async getStats(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
+  async getStats(@Query('startDate') startDate?: string, @Query('endDate') endDate?: string) {
     const start = startDate ? new Date(startDate) : undefined;
     const end = endDate ? new Date(endDate) : undefined;
 
@@ -160,10 +157,7 @@ export class SecurityController {
       securityLogEvents?: boolean;
     },
   ) {
-    const settings = await this.securityService.updateSecuritySettings(
-      userId,
-      body,
-    );
+    const settings = await this.securityService.updateSecuritySettings(userId, body);
 
     return {
       success: true,
@@ -178,13 +172,8 @@ export class SecurityController {
    */
   @Post('test')
   @HttpCode(HttpStatus.OK)
-  async testValidation(
-    @Body() body: { message: string; userId: string },
-  ) {
-    const result = await this.securityService.validateUserMessage(
-      body.userId,
-      body.message,
-    );
+  async testValidation(@Body() body: { message: string; userId: string }) {
+    const result = await this.securityService.validateUserMessage(body.userId, body.message);
 
     return {
       success: true,

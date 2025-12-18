@@ -59,21 +59,12 @@ export class IntentAnalyzerService {
     // 1. Verificar saudações
     if (this.isGreeting(normalizedText)) {
       this.logger.log(`✅ Intent: GREETING (confidence: 0.95)`);
+      const greetingResponse = this.getContextualGreeting(normalizedText);
       return {
         intent: MessageIntent.GREETING,
         confidence: 0.95,
         shouldProcess: false,
-        suggestedResponse:
-          '👋 Olá! Sou o GastoCerto, seu assistente financeiro.\n\n' +
-          '💡 *Como posso ajudar?*\n\n' +
-          '💸 Para registrar gastos:\n' +
-          '   • "Gastei 50 no mercado"\n' +
-          '   • "Paguei 30 reais de uber"\n\n' +
-          '💰 Para registrar receitas:\n' +
-          '   • "Recebi 1000 de salário"\n' +
-          '   • "Ganhei 200 de freelance"\n\n' +
-          '📷 Também aceito fotos de notas fiscais e áudios!\n\n' +
-          'Digite "ajuda" caso precise de mais informações!',
+        suggestedResponse: greetingResponse,
       };
     }
 
@@ -429,9 +420,74 @@ export class IntentAnalyzerService {
       'eai',
       'tudo bem',
       'como vai',
+      'como você está',
+      'tudo bom',
+      'beleza',
       'fala aí',
+      'fala',
     ];
     return greetings.some((g) => text === g || text.startsWith(g + ' '));
+  }
+
+  /**
+   * Retorna saudação contextual baseada no horário e tipo de saudação
+   */
+  private getContextualGreeting(text: string): string {
+    const hour = new Date().getHours();
+    let timeGreeting = '👋 Olá';
+
+    // Detectar período do dia
+    if (text.includes('bom dia') || (hour >= 5 && hour < 12)) {
+      timeGreeting = '☀️ Bom dia';
+    } else if (text.includes('boa tarde') || (hour >= 12 && hour < 18)) {
+      timeGreeting = '🌤️ Boa tarde';
+    } else if (text.includes('boa noite') || hour >= 18 || hour < 5) {
+      timeGreeting = '🌙 Boa noite';
+    }
+
+    // Detectar "tudo bem" / "como vai"
+    const isAskingHowAreYou =
+      text.includes('tudo bem') ||
+      text.includes('como vai') ||
+      text.includes('como você está') ||
+      text.includes('tudo bom') ||
+      text.includes('beleza');
+
+    let greeting = `${timeGreeting}! `;
+
+    if (isAskingHowAreYou) {
+      greeting += 'Tudo ótimo por aqui! 😊\n\n';
+    }
+
+    greeting += 'Sou o *GastoCerto*, seu assistente financeiro pessoal.\n\n';
+
+    // Mensagem principal
+    greeting +=
+      '💡 *O que posso fazer por você hoje?*\n\n' +
+      '━━━━━━━━━━━━━━━━━━━\n\n' +
+      '💸 *Registrar gastos:*\n' +
+      '   • "Gastei 50 no mercado"\n' +
+      '   • "Paguei 30 de uber"\n' +
+      '   • "Comprei café de 5,50"\n\n' +
+      '💰 *Registrar receitas:*\n' +
+      '   • "Recebi 1000 de salário"\n' +
+      '   • "Ganhei 200 de freelance"\n\n' +
+      '📊 *Consultar finanças:*\n' +
+      '   • "Meu saldo"\n' +
+      '   • "Minhas transações"\n' +
+      '   • "Minhas faturas"\n\n' +
+      '💳 *Cartões e faturas:*\n' +
+      '   • "Meus cartões"\n' +
+      '   • "Ver fatura 1"\n' +
+      '   • "Pagar fatura 2"\n\n' +
+      '📷 *Outras formas:*\n' +
+      '   • Envie foto de nota fiscal\n' +
+      '   • Grave um áudio descrevendo\n\n' +
+      '━━━━━━━━━━━━━━━━━━━\n\n' +
+      '✨ Use linguagem natural! Estou aqui para facilitar sua vida financeira.\n\n' +
+      '❓ Digite *"ajuda"* para ver todos os comandos disponíveis.';
+
+    return greeting;
   }
 
   /**

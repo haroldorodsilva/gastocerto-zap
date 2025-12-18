@@ -1,6 +1,6 @@
-import { BankType } from "../types/bank.types";
-import { BaseEntity } from "./base.entity";
-import { Accounts } from "./accounts.entity";
+import { BankType } from '../types/bank.types';
+import { BaseEntity } from './base.entity';
+import { Accounts } from './accounts.entity';
 
 export class Banks extends BaseEntity {
   name: string;

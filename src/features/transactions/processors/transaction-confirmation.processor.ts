@@ -12,36 +12,23 @@ export interface ConfirmationJob {
 export class TransactionConfirmationProcessor {
   private readonly logger = new Logger(TransactionConfirmationProcessor.name);
 
-  constructor(
-    private readonly confirmationService: TransactionConfirmationService,
-  ) {}
+  constructor(private readonly confirmationService: TransactionConfirmationService) {}
 
   @Process()
   async handleConfirmation(job: Job<ConfirmationJob>) {
     const { phoneNumber, response } = job.data;
 
-    this.logger.log(
-      `✅ Processando confirmação de ${phoneNumber}: "${response}" (Job ${job.id})`,
-    );
+    this.logger.log(`✅ Processando confirmação de ${phoneNumber}: "${response}" (Job ${job.id})`);
 
     try {
-      const result = await this.confirmationService.processResponse(
-        phoneNumber,
-        response,
-      );
+      const result = await this.confirmationService.processResponse(phoneNumber, response);
 
       if (result.action === 'confirmed') {
-        this.logger.log(
-          `✅ Transação confirmada por ${phoneNumber}`,
-        );
+        this.logger.log(`✅ Transação confirmada por ${phoneNumber}`);
       } else if (result.action === 'rejected') {
-        this.logger.log(
-          `❌ Transação rejeitada por ${phoneNumber}`,
-        );
+        this.logger.log(`❌ Transação rejeitada por ${phoneNumber}`);
       } else {
-        this.logger.log(
-          `⚠️ Resposta inválida de ${phoneNumber}: "${response}"`,
-        );
+        this.logger.log(`⚠️ Resposta inválida de ${phoneNumber}: "${response}"`);
       }
 
       return result;

@@ -84,7 +84,9 @@ export class TelegramProvider implements IMessagingProvider {
           throw new Error('Bot not initialized');
         }
 
-        this.logger.debug(`📤 Tentativa ${attempt}/${maxRetries} - Enviando mensagem para ${chatId}`);
+        this.logger.debug(
+          `📤 Tentativa ${attempt}/${maxRetries} - Enviando mensagem para ${chatId}`,
+        );
 
         const result = await this.bot.sendMessage(chatId, text, {
           parse_mode: 'Markdown',

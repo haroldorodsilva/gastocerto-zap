@@ -170,7 +170,7 @@ export class DatabaseAuthStateManager {
       }
 
       const storedData = session.creds as any;
-      
+
       // Verifica se tem credenciais
       if (!storedData.creds) {
         this.logger.warn(`❌ No creds found for session ${sessionId}`);
@@ -179,8 +179,14 @@ export class DatabaseAuthStateManager {
 
       // Valida campos críticos que o Baileys precisa
       const creds = storedData.creds;
-      const requiredFields = ['noiseKey', 'signedIdentityKey', 'signedPreKey', 'registrationId', 'advSecretKey'];
-      
+      const requiredFields = [
+        'noiseKey',
+        'signedIdentityKey',
+        'signedPreKey',
+        'registrationId',
+        'advSecretKey',
+      ];
+
       for (const field of requiredFields) {
         if (!creds[field]) {
           this.logger.warn(`❌ Missing required field '${field}' for session ${sessionId}`);

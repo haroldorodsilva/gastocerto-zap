@@ -1,5 +1,5 @@
-import { BaseEntity } from "./base.entity";
-import { UserAccount } from "./user-account.entity";
+import { BaseEntity } from './base.entity';
+import { UserAccount } from './user-account.entity';
 
 export class Accounts extends BaseEntity {
   name: string;

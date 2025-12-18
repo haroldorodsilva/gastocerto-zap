@@ -1,8 +1,8 @@
-import { BaseEntity } from "./base.entity";
-import { CreditCardInvoiceRelations } from "./credit-card-invoices.entity";
-import { BanksRelations } from "./banks.entity";
+import { BaseEntity } from './base.entity';
+import { CreditCardInvoiceRelations } from './credit-card-invoices.entity';
+import { BanksRelations } from './banks.entity';
 
-export type InvoiceAdjustmentType = "REFUND" | "ADVANCE";
+export type InvoiceAdjustmentType = 'REFUND' | 'ADVANCE';
 
 export class InvoiceAdjustment extends BaseEntity {
   creditCardInvoiceId: string;

@@ -51,17 +51,17 @@ export class TelegramMessageHandler {
     try {
       // Usar chatId como identificador do usuário (equivalente ao phoneNumber no WhatsApp)
       const userId = message.chatId;
-      
+
       // Buscar usuário cadastrado para obter gastoCertoId e phoneNumber
       let gastoCertoId: string | undefined;
       let phoneNumber: string | undefined;
-      
+
       try {
         // Buscar usuário pelo telegramId no banco
         const userCache = await this.userCacheService['prisma'].userCache.findFirst({
           where: { telegramId: userId },
         });
-        
+
         if (userCache) {
           gastoCertoId = userCache.gastoCertoId;
           phoneNumber = userCache.phoneNumber;

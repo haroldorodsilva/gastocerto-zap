@@ -85,11 +85,11 @@ export class ExternalController {
   /**
    * Sincroniza categorias do usuário no RAG
    * POST /external/sync-categories
-   * 
+   *
    * Chamado pela gastocerto-api quando:
    * - Usuário cria/edita/remove categoria
    * - Usuário muda conta padrão
-   * 
+   *
    * Body:
    * {
    *   "phoneNumber": "5511999999999",
@@ -104,16 +104,16 @@ export class ExternalController {
     try {
       // Sincronizar categorias no RAG
       await this.userCacheService.syncUserCategoriesToRAG(dto.phoneNumber);
-      
+
       this.logger.log(`✅ Categorias sincronizadas com sucesso: ${dto.phoneNumber}`);
-      
+
       return {
         success: true,
         message: 'Categorias sincronizadas com sucesso',
       };
     } catch (error) {
       this.logger.error(`Erro ao sincronizar categorias para ${dto.phoneNumber}:`, error);
-      
+
       return {
         success: false,
         message: error.message || 'Erro ao sincronizar categorias',

@@ -17,12 +17,7 @@ export interface ListContextItem {
  */
 interface UserListContext {
   phoneNumber: string;
-  listType:
-    | 'pending_payments'
-    | 'transactions'
-    | 'confirmations'
-    | 'credit_cards'
-    | 'invoices';
+  listType: 'pending_payments' | 'transactions' | 'confirmations' | 'credit_cards' | 'invoices';
   items: ListContextItem[];
   createdAt: Date;
   expiresAt: Date;

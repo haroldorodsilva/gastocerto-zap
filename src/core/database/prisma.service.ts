@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 
 /**
  * PrismaService - Serviço singleton para gerenciar conexão com o banco de dados.
- * 
+ *
  * ⚠️ IMPORTANTE: Este serviço é @Global (via PrismaModule) e deve ser instanciado
  * apenas UMA VEZ em toda a aplicação. Não adicione PrismaService nos providers
  * de outros módulos - o PrismaModule já exporta e disponibiliza globalmente.

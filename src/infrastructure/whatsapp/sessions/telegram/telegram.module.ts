@@ -8,25 +8,18 @@ import { PrismaService } from '@core/database/prisma.service';
 
 /**
  * Módulo Telegram
- * 
+ *
  * Gerencia todas as funcionalidades do Telegram:
  * - Sessões e conexões
  * - Envio de mensagens
  * - Gerenciamento de estado
- * 
+ *
  * NOTA: MultiPlatformSessionService está disponível via @Global() MultiPlatformSessionModule
  */
 @Module({
   imports: [ConfigModule, EventEmitterModule],
   controllers: [TelegramController],
-  providers: [
-    PrismaService,
-    TelegramSessionsService,
-    TelegramProvider,
-  ],
-  exports: [
-    TelegramSessionsService,
-    TelegramProvider,
-  ],
+  providers: [PrismaService, TelegramSessionsService, TelegramProvider],
+  exports: [TelegramSessionsService, TelegramProvider],
 })
 export class TelegramModule {}

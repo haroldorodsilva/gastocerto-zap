@@ -4,7 +4,7 @@ import { UsersModule } from '@features/users/users.module';
 
 /**
  * AccountsModule
- * 
+ *
  * Módulo responsável pelo gerenciamento de contas do usuário.
  * Centraliza operações de:
  * - Listagem de contas

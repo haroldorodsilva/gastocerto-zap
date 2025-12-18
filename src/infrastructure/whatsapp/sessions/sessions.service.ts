@@ -15,8 +15,9 @@ export class SessionsService {
   async createSession(data: CreateSessionDto): Promise<WhatsAppSession> {
     try {
       // Gerar sessionId se não foi fornecido
-      const sessionId = data.sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      
+      const sessionId =
+        data.sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
       // phoneNumber será preenchido após escanear QR code
       const phoneNumber = data.phoneNumber || `pending-${sessionId}`;
 
@@ -193,7 +194,9 @@ export class SessionsService {
       },
     });
 
-    this.logger.log(`🔄 Credenciais resetadas para sessão ${session.sessionId} - Requer novo QR code`);
+    this.logger.log(
+      `🔄 Credenciais resetadas para sessão ${session.sessionId} - Requer novo QR code`,
+    );
 
     return this.getSessionById(id);
   }

@@ -22,11 +22,7 @@ export interface IWhatsAppProvider {
   /**
    * Envia mensagem com imagem
    */
-  sendImageMessage(
-    jid: string,
-    image: Buffer,
-    options?: SendMediaOptions,
-  ): Promise<MessageResult>;
+  sendImageMessage(jid: string, image: Buffer, options?: SendMediaOptions): Promise<MessageResult>;
 
   /**
    * Envia mensagem de áudio

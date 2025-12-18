@@ -10,7 +10,11 @@ import { PrismaService } from '@core/database/prisma.service';
 @Module({
   imports: [
     UsersModule,
-    forwardRef(() => import('../../infrastructure/whatsapp/messages/messages.module').then(m => m.MessagesModule)),
+    forwardRef(() =>
+      import('../../infrastructure/whatsapp/messages/messages.module').then(
+        (m) => m.MessagesModule,
+      ),
+    ),
   ],
   providers: [
     OnboardingService,

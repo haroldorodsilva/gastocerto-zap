@@ -111,7 +111,9 @@ export class AIUsageTrackerService {
       return 0;
     }
 
-    const modelCosts = providerCosts[model as keyof typeof providerCosts] as { input: number; output: number } | undefined;
+    const modelCosts = providerCosts[model as keyof typeof providerCosts] as
+      | { input: number; output: number }
+      | undefined;
     if (!modelCosts) {
       this.logger.warn(`Unknown model for cost calculation: ${provider}/${model}`);
       return 0;

@@ -225,12 +225,12 @@ export class TransactionsService {
       // 2.5. VALIDAÇÃO CENTRALIZADA DE CONTA ATIVA
       // Operações que NÃO precisam de conta ativa (podem ser executadas sem)
       const operationsWithoutAccountRequired = [
-        'LIST_ACCOUNTS',          // Listar contas disponíveis
-        'SHOW_ACTIVE_ACCOUNT',    // Mostrar qual conta está ativa
-        'SWITCH_ACCOUNT',         // Trocar de conta
-        'CONFIRMATION_RESPONSE',  // Confirmar transação
-        'HELP',                   // Ajuda
-        'GREETING',               // Saudações
+        'LIST_ACCOUNTS', // Listar contas disponíveis
+        'SHOW_ACTIVE_ACCOUNT', // Mostrar qual conta está ativa
+        'SWITCH_ACCOUNT', // Trocar de conta
+        'CONFIRMATION_RESPONSE', // Confirmar transação
+        'HELP', // Ajuda
+        'GREETING', // Saudações
       ];
 
       if (!operationsWithoutAccountRequired.includes(intentResult.intent)) {
@@ -951,9 +951,17 @@ export class TransactionsService {
         // Determinar ação
         let action = 'pay'; // Padrão: pagar
 
-        if (normalized.includes('ver') || normalized.includes('mostrar') || normalized.includes('detalhes')) {
+        if (
+          normalized.includes('ver') ||
+          normalized.includes('mostrar') ||
+          normalized.includes('detalhes')
+        ) {
           action = 'view';
-        } else if (normalized.includes('pagar') || normalized.includes('paga') || normalized.includes('quitar')) {
+        } else if (
+          normalized.includes('pagar') ||
+          normalized.includes('paga') ||
+          normalized.includes('quitar')
+        ) {
           action = 'pay';
         }
 

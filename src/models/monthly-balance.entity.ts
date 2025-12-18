@@ -1,4 +1,4 @@
-import { Accounts } from "./accounts.entity";
+import { Accounts } from './accounts.entity';
 
 export class MonthlyBalance {
   id: string;

@@ -6,6 +6,7 @@ import { MessageFilterService } from './message-filter.service';
 import { MessageContextService } from './message-context.service';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { UserCacheService } from '@features/users/user-cache.service';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 import { IFilteredMessage } from '@common/interfaces/message.interface';

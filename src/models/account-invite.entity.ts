@@ -4,7 +4,7 @@ export class AccountInvite {
   inviterUserId: string;
   invitedUserId?: string | null;
   invitedEmail?: string | null;
-  role: "USER" | "ADMIN";
+  role: 'USER' | 'ADMIN';
   hash: string;
   expiresAt: Date;
   acceptedAt?: Date | null;

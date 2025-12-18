@@ -1,5 +1,5 @@
-import { CategoryType } from "../types/category.types";
-import { BaseEntity } from "./base.entity";
+import { CategoryType } from '../types/category.types';
+import { BaseEntity } from './base.entity';
 
 export class BudgetTemplate extends BaseEntity {
   accountId: string;

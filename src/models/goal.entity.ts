@@ -1,7 +1,7 @@
-import { BaseEntity } from "./base.entity";
-import { GoalRecurringType, GoalStatus, GoalType } from "../types/goal.types";
-import { Categories } from "./categories.entity";
-import { SubCategories } from "./sub-categories.entity";
+import { BaseEntity } from './base.entity';
+import { GoalRecurringType, GoalStatus, GoalType } from '../types/goal.types';
+import { Categories } from './categories.entity';
+import { SubCategories } from './sub-categories.entity';
 
 export class Goal extends BaseEntity {
   accountId: string;

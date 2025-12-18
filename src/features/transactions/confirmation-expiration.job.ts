@@ -50,10 +50,7 @@ export class ConfirmationExpirationJob {
         platform,
       });
     } catch (error) {
-      this.logger.error(
-        `❌ Erro ao emitir reply para ${confirmation.phoneNumber}:`,
-        error,
-      );
+      this.logger.error(`❌ Erro ao emitir reply para ${confirmation.phoneNumber}:`, error);
     }
   }
 

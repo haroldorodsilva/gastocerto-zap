@@ -350,7 +350,8 @@ export class AIProviderFactory {
     // Converter string para AIProviderType se necessário
     let providerType: AIProviderType;
     if (typeof type === 'string') {
-      providerType = AIProviderType[type.toUpperCase().replace('-', '_') as keyof typeof AIProviderType];
+      providerType =
+        AIProviderType[type.toUpperCase().replace('-', '_') as keyof typeof AIProviderType];
       if (!providerType) {
         this.logger.warn(`Provider tipo "${type}" não reconhecido, usando OPENAI como fallback`);
         providerType = AIProviderType.OPENAI;

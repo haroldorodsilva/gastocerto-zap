@@ -272,14 +272,18 @@ export class CreditCardService {
         message += `📋 *Transações (${details.transactions.length}):*\n\n`;
 
         details.transactions.forEach((t: TransactionsRelations, index: number) => {
-          const label = t.description || t.category.name || 'Sem descrição';
+          // Título: descrição OU subcategoria OU categoria
+          const title = t.description || t.subCategory?.name || t.category?.name || 'Sem descrição';
           const amountInReais = Math.abs(t.amount) / 100;
 
-          message += `${index + 1}. ${label}\n`;
-          message += `   🔴 *R$ ${amountInReais.toFixed(2)}*\n`;
-          message += `   📂 ${t.category.name || 'Sem categoria'}`;
+          // Linha discriminação: categoria → subcategoria (se tiver)
+          const categoryLine = t.subCategory
+            ? `${t.category?.name || 'Sem categoria'} → ${t.subCategory.name}`
+            : t.category?.name || 'Sem categoria';
 
-          message += '\n';
+          message += `${index + 1}. ${title}\n`;
+          message += `   🔴 *R$ ${amountInReais.toFixed(2)}*\n`;
+          message += `   📂 ${categoryLine}\n`;
           message += `   📅 ${DateUtil.formatBR(t.dueDate)}\n\n`;
         });
       } else {

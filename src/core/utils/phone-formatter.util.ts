@@ -29,9 +29,7 @@ export class PhoneFormatterUtil {
     const normalized = this.normalize(phone);
 
     // Remover código do país se presente (55)
-    const withoutCountryCode = normalized.startsWith('55')
-      ? normalized.substring(2)
-      : normalized;
+    const withoutCountryCode = normalized.startsWith('55') ? normalized.substring(2) : normalized;
 
     // Validar tamanho (deve ter 10 ou 11 dígitos)
     if (withoutCountryCode.length !== 10 && withoutCountryCode.length !== 11) {
@@ -131,9 +129,7 @@ export class PhoneFormatterUtil {
 
     if (validateBrazilian) {
       // Remover código do país se presente
-      const withoutCountry = normalized.startsWith('55')
-        ? normalized.substring(2)
-        : normalized;
+      const withoutCountry = normalized.startsWith('55') ? normalized.substring(2) : normalized;
 
       // Número brasileiro deve ter 10 ou 11 dígitos (com DDD)
       return withoutCountry.length === 10 || withoutCountry.length === 11;

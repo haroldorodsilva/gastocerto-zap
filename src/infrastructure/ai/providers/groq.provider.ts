@@ -54,7 +54,7 @@ export class GroqProvider implements IAIProvider {
       // Tentar buscar do banco primeiro
       const { PrismaService } = await import('../../../core/database/prisma.service');
       const prisma = new PrismaService();
-      
+
       const providerConfig = await prisma.aIProviderConfig.findUnique({
         where: { provider: 'groq' },
       });
@@ -69,7 +69,7 @@ export class GroqProvider implements IAIProvider {
         // Fallback para ENV (apenas dev)
         this.apiKey = this.configService.get<string>('ai.groq.apiKey', '');
         this.model = this.configService.get<string>('ai.groq.model', 'llama-3.1-70b-versatile');
-        
+
         if (this.apiKey) {
           this.logger.warn('⚠️  Groq usando ENV (configure no banco para produção)');
           this.logger.log(`🎤 Whisper GRÁTIS disponível!`);

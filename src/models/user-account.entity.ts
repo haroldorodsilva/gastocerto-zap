@@ -1,6 +1,6 @@
-import { UserAccountRoles } from "../types/roles.type";
-import { Accounts } from "./accounts.entity";
-import { User } from "./user.entity";
+import { UserAccountRoles } from '../types/roles.type';
+import { Accounts } from './accounts.entity';
+import { User } from './user.entity';
 
 export class UserAccount {
   id: string;

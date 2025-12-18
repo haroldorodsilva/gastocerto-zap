@@ -11,17 +11,13 @@ export interface RegistrationJob {
 export class TransactionRegistrationProcessor {
   private readonly logger = new Logger(TransactionRegistrationProcessor.name);
 
-  constructor(
-    private readonly confirmationService: TransactionConfirmationService,
-  ) {}
+  constructor(private readonly confirmationService: TransactionConfirmationService) {}
 
   @Process()
   async handleRegistration(job: Job<RegistrationJob>) {
     const { confirmationId } = job.data;
 
-    this.logger.log(
-      `💾 Processando registro de transação ${confirmationId} (Job ${job.id})`,
-    );
+    this.logger.log(`💾 Processando registro de transação ${confirmationId} (Job ${job.id})`);
 
     try {
       // Buscar confirmação
@@ -37,9 +33,7 @@ export class TransactionRegistrationProcessor {
         'sim',
       );
 
-      this.logger.log(
-        `✅ Transação ${confirmationId} processada com sucesso`,
-      );
+      this.logger.log(`✅ Transação ${confirmationId} processada com sucesso`);
 
       return result;
     } catch (error: any) {

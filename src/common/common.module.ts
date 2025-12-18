@@ -1,15 +1,19 @@
 import { Module, Global } from '@nestjs/common';
 import { ServiceAuthService } from './services/service-auth.service';
 import { JwtValidationService } from './services/jwt-validation.service';
+import { UserRateLimiterService } from './services/user-rate-limiter.service';
+import { RedisService } from './services/redis.service';
 import { ServiceAuthGuard } from './guards/service-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { DualAuthGuard } from './guards/dual-auth.guard';
 
 /**
  * CommonModule
- * Módulo global com serviços compartilhados de autenticação
+ * Módulo global com serviços compartilhados
  * - ServiceAuthService: HMAC para service-to-service
  * - JwtValidationService: Valida JWT do admin via gastocerto-api
+ * - UserRateLimiterService: Rate limiting para proteção contra spam
+ * - RedisService: Cliente Redis para cache e rate limiting
  * - Guards: ServiceAuth, JwtAuth, DualAuth
  */
 @Global()
@@ -17,6 +21,8 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
   providers: [
     ServiceAuthService,
     JwtValidationService,
+    UserRateLimiterService,
+    RedisService,
     ServiceAuthGuard,
     JwtAuthGuard,
     DualAuthGuard,
@@ -24,6 +30,8 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
   exports: [
     ServiceAuthService,
     JwtValidationService,
+    UserRateLimiterService,
+    RedisService,
     ServiceAuthGuard,
     JwtAuthGuard,
     DualAuthGuard,

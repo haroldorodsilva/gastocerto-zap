@@ -223,6 +223,38 @@ model RAGSearchLog {
   @@map("rag_search_logs")
 }
 
+// Sinônimos personalizados por usuário para RAG
+// Permite que o sistema aprenda termos específicos de cada usuário
+// Ex: "pro labore" → Categoria "Receitas → Salário", "inss" → "Impostos → INSS"
+model UserSynonym {
+  id          String   @id @default(uuid())
+  userId      String // gastoCertoId do UserCache
+  keyword     String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook")
+  categoryId  String // ID da categoria mapeada na API externa
+  categoryName String // Nome da categoria (cache para exibição)
+  subCategoryId String? // ID da subcategoria (se houver)
+  subCategoryName String? // Nome da subcategoria (cache para exibição)
+  confidence  Float    @default(1.0) // Confiança do mapeamento (0-1): USER_CONFIRMED=1.0, AI_SUGGESTED=0.7, AUTO_LEARNED=0.5
+  source      SynonymSource @default(USER_CONFIRMED) // Origem do sinônimo
+  usageCount  Int      @default(0) // Quantas vezes foi usado (para analytics)
+  lastUsedAt  DateTime? // Última vez que foi usado
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, keyword]) // Um usuário não pode ter keywords duplicadas
+  @@index([userId]) // Buscar todos sinônimos de um usuário
+  @@index([userId, keyword]) // Buscar sinônimo específico rapidamente
+  @@index([usageCount]) // Analytics: sinônimos mais usados
+  @@map("user_synonyms")
+}
+
+enum SynonymSource {
+  USER_CONFIRMED  // Usuário confirmou explicitamente: "Sim, 'pro labore' é Receitas → Salário"
+  AI_SUGGESTED    // IA sugeriu e usuário aceitou
+  AUTO_LEARNED    // Sistema aprendeu automaticamente (padrão detectado)
+  IMPORTED        // Importado de outro usuário ou base de conhecimento
+}
+
 enum AIOperationType {
   TRANSACTION_EXTRACTION // Extrair dados de transação
   AUDIO_TRANSCRIPTION // Transcrever áudio

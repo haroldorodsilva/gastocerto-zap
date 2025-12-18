@@ -1,6 +1,6 @@
-import { UserRoles } from "../types/roles.type";
-import { BaseEntity } from "./base.entity";
-import { UserAccount } from "./user-account.entity";
+import { UserRoles } from '../types/roles.type';
+import { BaseEntity } from './base.entity';
+import { UserAccount } from './user-account.entity';
 
 export class User extends BaseEntity {
   name: string;

@@ -51,7 +51,10 @@ export class CryptoUtil {
    * @param key - Chave de encriptação (32 bytes)
    * @returns Objeto com iv, encryptedData e authTag
    */
-  static encrypt(data: string, key: string): { iv: string; encryptedData: string; authTag: string } {
+  static encrypt(
+    data: string,
+    key: string,
+  ): { iv: string; encryptedData: string; authTag: string } {
     // Garantir que a chave tenha 32 bytes
     const keyBuffer = crypto.createHash('sha256').update(key).digest();
 
@@ -81,11 +84,7 @@ export class CryptoUtil {
   static decrypt(encryptedData: string, iv: string, authTag: string, key: string): string {
     const keyBuffer = crypto.createHash('sha256').update(key).digest();
 
-    const decipher = crypto.createDecipheriv(
-      'aes-256-gcm',
-      keyBuffer,
-      Buffer.from(iv, 'hex'),
-    );
+    const decipher = crypto.createDecipheriv('aes-256-gcm', keyBuffer, Buffer.from(iv, 'hex'));
 
     decipher.setAuthTag(Buffer.from(authTag, 'hex'));
 
