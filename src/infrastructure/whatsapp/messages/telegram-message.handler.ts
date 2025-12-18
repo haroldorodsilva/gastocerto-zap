@@ -87,7 +87,16 @@ export class TelegramMessageHandler {
           (gastoCertoId ? ` | userId: ${gastoCertoId}` : ''),
       );
 
-      // 1. Buscar dados completos do usuário PRIMEIRO (com isBlocked e isActive)
+      // 1. PRIMEIRO: Verificar se está em processo de onboarding (ANTES de verificar usuário)
+      // Isso evita o loop de verificação de usuário não existente
+      const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
+      if (isOnboarding) {
+        this.logger.log(`[Telegram] 📝 User ${userId} is in onboarding - processing message`);
+        await this.handleOnboardingMessage(sessionId, message);
+        return;
+      }
+
+      // 2. Buscar dados completos do usuário (com isBlocked e isActive)
       // 🔧 CRÍTICO: Usar getUserByTelegram para Telegram (busca por chatId/telegramId)
       this.logger.log(`🔍 Buscando usuário Telegram por chatId: ${userId}`);
       const user = await this.userCacheService.getUserByTelegram(userId);
@@ -105,14 +114,14 @@ export class TelegramMessageHandler {
         }),
       );
 
-      // 2. Se usuário não existe, iniciar onboarding
+      // 3. Se usuário não existe, iniciar onboarding
       if (!user) {
         this.logger.log(`[Telegram] New user detected: ${userId}, starting onboarding`);
         await this.startOnboarding(sessionId, message);
         return;
       }
 
-      // 3. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
+      // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
       if (user.isBlocked) {
         this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED - Rejecting message`);
         this.eventEmitter.emit('telegram.reply', {
@@ -128,26 +137,7 @@ export class TelegramMessageHandler {
         return;
       }
 
-      // 4. Verificar se está em processo de onboarding (ANTES de verificar isActive)
-      const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
-      if (isOnboarding) {
-        // Se usuário está ativo mas tem onboarding pendente, finalizar silenciosamente
-        if (user.isActive) {
-          this.logger.log(
-            `[Telegram] ✅ User ${userId} is ACTIVE with pending onboarding - completing silently`,
-          );
-          await this.onboardingService.completeOnboardingForActiveUser(userId);
-        } else {
-          // Se usuário está inativo e em onboarding, processar mensagem de reativação
-          this.logger.log(
-            `[Telegram] 🔄 User ${userId} is INACTIVE in onboarding - processing reactivation message`,
-          );
-          await this.handleOnboardingMessage(sessionId, message);
-          return;
-        }
-      }
-
-      // 5. Verificar se usuário está inativo → Iniciar reativação (apenas se NÃO está em onboarding)
+      // 5. Verificar se usuário está inativo → Iniciar reativação
       if (!user.isActive) {
         this.logger.log(`[Telegram] 🔄 User ${userId} is INACTIVE - Starting reactivation process`);
         await this.onboardingService.reactivateUser(userId, 'telegram');

@@ -135,7 +135,16 @@ export class WhatsAppMessageHandler {
         `🔄 [WhatsApp] Processing queued message from ${phoneNumber} (${message.type})`,
       );
 
-      // 1. Buscar usuário no cache/API PRIMEIRO (com isBlocked e isActive)
+      // 1. PRIMEIRO: Verificar se está em processo de onboarding (ANTES de verificar usuário)
+      // Isso evita o loop de verificação de usuário não existente
+      const isOnboarding = await this.onboardingService.isUserOnboarding(phoneNumber);
+      if (isOnboarding) {
+        this.logger.log(`[WhatsApp] 📝 User ${phoneNumber} is in onboarding - processing message`);
+        await this.handleOnboardingMessage(message);
+        return;
+      }
+
+      // 2. Buscar usuário no cache/API (com isBlocked e isActive)
       const user = await this.userCacheService.getUser(phoneNumber);
 
       // 🐛 DEBUG: Logar status do usuário
@@ -150,14 +159,14 @@ export class WhatsAppMessageHandler {
         }),
       );
 
-      // 2. Se usuário não existe, iniciar onboarding
+      // 3. Se usuário não existe, iniciar onboarding
       if (!user) {
         this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
         await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
         return;
       }
 
-      // 3. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
+      // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
       if (user.isBlocked) {
         this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is BLOCKED - Rejecting message`);
         this.sendMessage(
@@ -170,26 +179,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 4. Verificar se está em processo de onboarding (ANTES de verificar isActive)
-      const isOnboarding = await this.onboardingService.isUserOnboarding(phoneNumber);
-      if (isOnboarding) {
-        // Se usuário está ativo mas tem onboarding pendente, finalizar silenciosamente
-        if (user.isActive) {
-          this.logger.log(
-            `[WhatsApp] ✅ User ${phoneNumber} is ACTIVE with pending onboarding - completing silently`,
-          );
-          await this.onboardingService.completeOnboardingForActiveUser(phoneNumber);
-        } else {
-          // Se usuário está inativo e em onboarding, processar mensagem de reativação
-          this.logger.log(
-            `[WhatsApp] 🔄 User ${phoneNumber} is INACTIVE in onboarding - processing reactivation message`,
-          );
-          await this.handleOnboardingMessage(message);
-          return;
-        }
-      }
-
-      // 5. Verificar se usuário está inativo → Iniciar reativação (apenas se NÃO está em onboarding)
+      // 5. Verificar se usuário está inativo → Iniciar reativação
       if (!user.isActive) {
         this.logger.log(
           `[WhatsApp] 🔄 User ${phoneNumber} is INACTIVE - Starting reactivation process`,
