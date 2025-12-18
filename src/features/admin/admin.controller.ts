@@ -1018,32 +1018,40 @@ export class AdminController {
 
   /**
    * Consultar logs de busca RAG (analytics)
-   * GET /admin/rag/search-logs?userId=xxx&failedOnly=true&limit=100
+   * GET /admin/rag/search-logs?userId=xxx&failedOnly=true&limit=20&offset=0
    */
   @Get('rag/search-logs')
   async getRagSearchLogs(
     @Query('userId') userId?: string,
     @Query('failedOnly') failedOnly?: string,
     @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     this.logger.log('📊 Admin solicitou logs de busca RAG');
 
     try {
       const failedFilter = failedOnly === 'true';
-      const limitNum = parseInt(limit || '100');
+      const limitNum = Math.min(parseInt(limit || '20'), 100); // Máximo 100 por página
+      const offsetNum = parseInt(offset || '0');
 
-      // Buscar logs via RAGService
-      const logs = await this.ragService.getSearchAttempts(userId || null, failedFilter);
+      // Buscar logs via RAGService com paginação
+      const result = await this.ragService.getSearchAttempts(
+        userId || null,
+        failedFilter,
+        limitNum,
+        offsetNum,
+      );
 
       // Calcular estatísticas
-      const totalAttempts = logs.length;
-      const successfulAttempts = logs.filter((log) => log.success).length;
-      const failedAttempts = totalAttempts - successfulAttempts;
+      const successfulAttempts = result.logs.filter((log) => log.success).length;
+      const failedAttempts = result.logs.length - successfulAttempts;
       const successRate =
-        totalAttempts > 0 ? ((successfulAttempts / totalAttempts) * 100).toFixed(2) : '0.00';
+        result.logs.length > 0
+          ? ((successfulAttempts / result.logs.length) * 100).toFixed(2)
+          : '0.00';
 
-      // Top queries que falharam
-      const failedQueries = logs
+      // Top queries que falharam (apenas na página atual)
+      const failedQueries = result.logs
         .filter((log) => !log.success)
         .reduce(
           (acc, log) => {
@@ -1060,9 +1068,18 @@ export class AdminController {
 
       return {
         success: true,
-        data: logs.slice(0, limitNum),
+        data: result.logs,
+        pagination: {
+          total: result.total,
+          limit: result.limit,
+          offset: result.offset,
+          hasMore: result.offset + result.limit < result.total,
+          pages: Math.ceil(result.total / result.limit),
+          currentPage: Math.floor(result.offset / result.limit) + 1,
+        },
         stats: {
-          totalAttempts,
+          totalRecords: result.total,
+          currentPageAttempts: result.logs.length,
           successfulAttempts,
           failedAttempts,
           successRate: `${successRate}%`,

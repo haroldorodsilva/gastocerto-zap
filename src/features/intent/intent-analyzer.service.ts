@@ -408,6 +408,7 @@ export class IntentAnalyzerService {
    */
   private isGreeting(text: string): boolean {
     const greetings = [
+      '/start',
       'oi',
       'olá',
       'ola',

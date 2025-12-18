@@ -295,7 +295,9 @@ export class RAGService {
 
       // 🆕 BOOST PARA SINÔNIMOS PERSONALIZADOS (prioritário - maior confiança)
       const userSynonymMatch = userSynonyms.find(
-        (syn) => syn.categoryId === category.id && (!syn.subCategoryId || syn.subCategoryId === category.subCategory?.id),
+        (syn) =>
+          syn.categoryId === category.id &&
+          (!syn.subCategoryId || syn.subCategoryId === category.subCategory?.id),
       );
 
       if (userSynonymMatch) {
@@ -579,17 +581,27 @@ export class RAGService {
   async getSearchAttempts(
     userId?: string,
     failedOnly: boolean = false,
-  ): Promise<
-    Array<{
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<{
+    logs: Array<{
       id: string;
       userId: string;
       query: string;
+      queryNormalized: string;
+      matches: any;
       bestMatch: string | null;
       bestScore: number | null;
+      threshold: number;
       success: boolean;
+      ragMode: string;
+      responseTime: number;
       createdAt: Date;
-    }>
-  > {
+    }>;
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
     const where: any = {};
 
     if (userId) {
@@ -600,25 +612,41 @@ export class RAGService {
       where.success = false;
     }
 
+    // Buscar total de registros
+    const total = await this.prisma.rAGSearchLog.count({ where });
+
+    // Buscar logs com paginação
     const logs = await this.prisma.rAGSearchLog.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: 100, // Últimas 100 tentativas
+      take: limit,
+      skip: offset,
       select: {
         id: true,
         userId: true,
         query: true,
+        queryNormalized: true,
+        matches: true,
         bestMatch: true,
         bestScore: true,
+        threshold: true,
         success: true,
+        ragMode: true,
+        responseTime: true,
         createdAt: true,
       },
     });
 
-    return logs.map((log) => ({
-      ...log,
-      bestScore: log.bestScore ? Number(log.bestScore) : null,
-    }));
+    return {
+      logs: logs.map((log) => ({
+        ...log,
+        bestScore: log.bestScore ? Number(log.bestScore) : null,
+        threshold: log.threshold ? Number(log.threshold) : 0,
+      })),
+      total,
+      limit,
+      offset,
+    };
   }
 
   /**
