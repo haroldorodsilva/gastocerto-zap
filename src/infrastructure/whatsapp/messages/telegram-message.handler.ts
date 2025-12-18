@@ -98,6 +98,18 @@ export class TelegramMessageHandler {
       // 2. Buscar dados completos do usuário (com isBlocked e isActive)
       const user = await this.userCacheService.getUser(userId);
 
+      // 🐛 DEBUG: Logar status do usuário
+      this.logger.log(
+        `[Telegram] 🔍 User status for ${userId}:`,
+        JSON.stringify({
+          found: !!user,
+          isBlocked: user?.isBlocked,
+          isActive: user?.isActive,
+          hasActiveSubscription: user?.hasActiveSubscription,
+          gastoCertoId: user?.gastoCertoId,
+        }),
+      );
+
       if (!user) {
         // Usuário não encontrado - pode ser novo, encaminhar para onboarding
         this.logger.log(`[Telegram] New user detected: ${userId}, starting onboarding`);
@@ -107,7 +119,7 @@ export class TelegramMessageHandler {
 
       // 3. Verificar se usuário está bloqueado
       if (user.isBlocked) {
-        this.logger.warn(`[Telegram] User ${userId} is blocked`);
+        this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED - Rejecting message`);
         this.eventEmitter.emit('telegram.reply', {
           platformId: userId,
           message:
@@ -123,7 +135,7 @@ export class TelegramMessageHandler {
 
       // 4. Verificar se usuário está ativo
       if (!user.isActive) {
-        this.logger.warn(`[Telegram] User ${userId} is inactive`);
+        this.logger.warn(`[Telegram] ❌ User ${userId} is INACTIVE - Rejecting message`);
         this.eventEmitter.emit('telegram.reply', {
           platformId: userId,
           message:

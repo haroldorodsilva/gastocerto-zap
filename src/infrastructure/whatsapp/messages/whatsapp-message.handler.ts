@@ -147,6 +147,18 @@ export class WhatsAppMessageHandler {
       // 2. Buscar usuário no cache/API
       const user = await this.userCacheService.getUser(phoneNumber);
 
+      // 🐛 DEBUG: Logar status do usuário
+      this.logger.log(
+        `[WhatsApp] 🔍 User status for ${phoneNumber}:`,
+        JSON.stringify({
+          found: !!user,
+          isBlocked: user?.isBlocked,
+          isActive: user?.isActive,
+          hasActiveSubscription: user?.hasActiveSubscription,
+          gastoCertoId: user?.gastoCertoId,
+        }),
+      );
+
       if (!user) {
         // Usuário não encontrado - pode ser novo, encaminhar para onboarding
         this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
@@ -156,7 +168,7 @@ export class WhatsAppMessageHandler {
 
       // 3. Verificar se usuário está bloqueado
       if (user.isBlocked) {
-        this.logger.warn(`[WhatsApp] User ${phoneNumber} is blocked`);
+        this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is BLOCKED - Rejecting message`);
         this.sendMessage(
           phoneNumber,
           '🚫 *Acesso Bloqueado*\n\n' +
@@ -169,7 +181,7 @@ export class WhatsAppMessageHandler {
 
       // 4. Verificar se usuário está ativo
       if (!user.isActive) {
-        this.logger.warn(`[WhatsApp] User ${phoneNumber} is inactive`);
+        this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is INACTIVE - Rejecting message`);
         this.sendMessage(
           phoneNumber,
           '⚠️ *Conta Desativada*\n\n' +
