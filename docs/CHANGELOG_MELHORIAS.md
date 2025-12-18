@@ -402,3 +402,71 @@ O sistema agora possui:
 - 📊 Performance escalável documentada
 
 **Próximo passo**: Implementar Phase 2 (Interface de gestão) e melhorias críticas do PLANO_MELHORIAS.md.
+
+---
+
+## 📚 Documentação Adicional Criada
+
+### 2025-12-18 - Arquitetura Multi-Provider & Humanização
+
+Criado documento completo respondendo questões críticas:
+
+1. **Erro 515 do WhatsApp (Baileys)**
+   - Análise do problema
+   - Solução atual (logging detalhado)
+   - Recomendações para evitar
+
+2. **Migração para WhatsApp Business API / Twilio**
+   - ✅ Arquitetura atual já preparada (Strategy Pattern)
+   - ✅ 80% do código NÃO precisa mudar
+   - ✅ Apenas criar novos providers
+   - Exemplos de código prontos para implementação
+
+3. **Melhorias de Humanização**
+   - Sistema de timing para delays variáveis
+   - Indicadores de "digitando..." (WhatsApp + Telegram)
+   - Cálculo de delay baseado em tamanho da mensagem
+   - Variação aleatória (±20%) para naturalidade
+   - Exemplos de código prontos
+
+4. **Workflow de Deploy**
+   - ⚠️ NUNCA fazer push direto para `main`
+   - ✅ SEMPRE testar em `staging` antes
+   - Checklist completo de testes
+   - Configuração de proteção de branches
+
+**Arquivo**: [`docs/ARQUITETURA_MULTI_PROVIDER.md`](./ARQUITETURA_MULTI_PROVIDER.md)
+
+### Destaques da Documentação
+
+#### Strategy Pattern (Pronto para Novos Providers)
+```
+IMessagingProvider (interface genérica)
+    ├── TelegramProvider ✅ (implementado)
+    ├── BaileysWhatsAppProvider ✅ (implementado)
+    ├── WhatsAppBusinessProvider ⏳ (documentado)
+    └── TwilioProvider ⏳ (documentado)
+```
+
+#### Sistema de Timing Humanizado
+```typescript
+// Delays baseados no tamanho da mensagem:
+// - Mensagem curta (10 chars): ~1.5s ± 20%
+// - Mensagem média (100 chars): ~6s ± 20%
+// - Mensagem longa (300 chars): limitado a 5s (max)
+```
+
+#### Workflow Seguro
+```bash
+# ✅ CORRETO
+git add .
+git commit -m "feat: nova funcionalidade"
+git push origin staging
+# Testar manualmente em staging
+git checkout main
+git merge staging
+git push origin main
+
+# ❌ NUNCA FAZER
+git push origin main
+```
