@@ -16,6 +16,7 @@ import {
   CreateGastoCertoTransactionDto,
 } from '../../dto/transaction.dto';
 import { DateUtil } from '../../../../utils/date.util';
+import { TemporalParserService } from '@common/services/temporal-parser.service';
 
 /**
  * TransactionRegistrationService
@@ -44,6 +45,7 @@ export class TransactionRegistrationService {
     private readonly accountManagement: AccountManagementService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly temporalParser: TemporalParserService,
     @Optional() private readonly ragService?: RAGService,
   ) {
     // Valores temporários até carregar do banco
@@ -187,8 +189,8 @@ export class TransactionRegistrationService {
       // 🐛 DEBUG: Mostrar status do RAG
       this.logger.debug(
         `🔍 [RAG DEBUG] ragEnabled=${ragEnabled} | ` +
-        `aiSettings.ragEnabled=${aiSettings.ragEnabled} | ` +
-        `this.ragService=${!!this.ragService}`,
+          `aiSettings.ragEnabled=${aiSettings.ragEnabled} | ` +
+          `this.ragService=${!!this.ragService}`,
       );
 
       // Indexar categorias no RAG
@@ -256,6 +258,9 @@ export class TransactionRegistrationService {
             // NOVO: Busca vetorial com embeddings de IA
             this.logger.log(`🤖 Usando busca vetorial com IA (${aiSettings.ragAiProvider})...`);
 
+            // 🆕 Detectar tipo de transação da mensagem antes do RAG
+            const detectedType = await this.detectTransactionType(text);
+
             // Obter AI provider configurado para RAG
             const ragProvider = await this.aiFactory.getProvider(
               aiSettings.ragAiProvider || 'openai',
@@ -265,15 +270,19 @@ export class TransactionRegistrationService {
               text,
               user.gastoCertoId,
               ragProvider,
-              { minScore: 0.4, maxResults: 3 },
+              { minScore: 0.4, maxResults: 3, transactionType: detectedType },
             );
           } else {
             // Original: Busca BM25 (sem IA)
             this.logger.log(`📊 Usando busca BM25 (sem IA)...`);
 
+            // 🆕 Detectar tipo de transação da mensagem antes do RAG
+            const detectedType = await this.detectTransactionType(text);
+
             ragMatches = await this.ragService.findSimilarCategories(text, user.gastoCertoId, {
               minScore: 0.4,
               maxResults: 3,
+              transactionType: detectedType, // 🔥 Filtrar por tipo!
             });
           }
 
@@ -282,10 +291,10 @@ export class TransactionRegistrationService {
             this.logger.log(
               `✅ RAG encontrou match direto: "${bestMatch.categoryName}" ` +
                 `${bestMatch.subCategoryName ? `> ${bestMatch.subCategoryName}` : ''} ` +
-                `(score: ${(bestMatch.score * 100).toFixed(1)}%) - Pulando IA!`,
+                `(score: ${(bestMatch.score * 100).toFixed(1)}%)`,
             );
 
-            // Extrair dados básicos do texto (amount, type) sem IA
+            // Usar extractBasicData + TemporalParser (sem chamar IA)
             extractedData = this.extractBasicData(text);
             extractedData.category = bestMatch.categoryName;
             extractedData.subCategory = bestMatch.subCategoryName || null;
@@ -314,10 +323,17 @@ export class TransactionRegistrationService {
             const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido para 0.60
             this.logger.log(`🔍 FASE 3: Revalidando categoria da IA com RAG...`);
 
+            // 🆕 Detectar tipo antes de revalidar com RAG
+            const detectedType = await this.detectTransactionType(text);
+
             const ragMatches = await this.ragService.findSimilarCategories(
               text,
               user.gastoCertoId,
-              { minScore: 0.5, maxResults: 1 },
+              {
+                minScore: 0.5,
+                maxResults: 1,
+                transactionType: detectedType, // 🔥 Filtrar por tipo!
+              },
             );
 
             if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
@@ -357,7 +373,7 @@ export class TransactionRegistrationService {
         // 🚨 RAG está desabilitado - avisar
         this.logger.warn(
           `⚠️ RAG DESABILITADO - Tabela rag_search_logs não será preenchida | ` +
-          `Para habilitar: UPDATE "AISettings" SET "ragEnabled" = true;`,
+            `Para habilitar: UPDATE "AISettings" SET "ragEnabled" = true;`,
         );
       }
 
@@ -693,19 +709,22 @@ export class TransactionRegistrationService {
 
       if (user && accountId) {
         try {
-          this.logger.debug(`📊 [DEBUG] Dados extraídos ANTES de resolver IDs: category="${data.category}", subCategory="${data.subCategory}"`);
-          
+          this.logger.debug(
+            `📊 [DEBUG] Dados extraídos ANTES de resolver IDs: category="${data.category}", subCategory="${data.subCategory}"`,
+          );
+
           const resolved = await this.resolveCategoryAndSubcategory(
             user.gastoCertoId,
             accountId,
             data.category,
             data.subCategory,
+            data.type, // ⭐ Passar tipo da transação para filtrar categorias
           );
           categoryId = resolved.categoryId || undefined;
           subCategoryId = resolved.subCategoryId || undefined;
 
           this.logger.log(
-            `📂 IDs resolvidos: ` +
+            `📂 IDs resolvidos (tipo: ${data.type}): ` +
               `Categoria "${data.category}" → ${categoryId || 'não encontrada'} | ` +
               `Subcategoria "${data.subCategory || 'nenhuma'}" → ${subCategoryId || 'não encontrada'}`,
           );
@@ -1019,12 +1038,15 @@ export class TransactionRegistrationService {
         );
       } else {
         // Fallback: resolver categoria pelo nome (para confirmações antigas)
-        this.logger.log(`🔍 Confirmação sem categoryId, resolvendo pelo nome...`);
+        this.logger.log(
+          `🔍 Confirmação sem categoryId, resolvendo pelo nome (tipo: ${confirmation.type})...`,
+        );
         const resolved = await this.resolveCategoryAndSubcategory(
           user.gastoCertoId,
           accountId,
           confirmation.category,
           confirmation.extractedData?.subcategory || data?.subCategory,
+          confirmation.type, // ⭐ Passar tipo da transação para filtrar categorias
         );
         categoryId = resolved.categoryId;
         subCategoryId = resolved.subCategoryId;
@@ -1095,34 +1117,76 @@ export class TransactionRegistrationService {
    * Helper para resolver categoria e subcategoria da conta
    * Busca primeiro no cache local, depois na API se necessário
    * Retorna IDs a partir de nomes ou IDs
+   * IMPORTANTE: Filtra categorias pelo tipo da transação (INCOME/EXPENSES)
    */
   private async resolveCategoryAndSubcategory(
     userId: string,
     accountId: string,
     categoryNameOrId: string,
     subcategoryNameOrId?: string,
+    transactionType?: 'INCOME' | 'EXPENSES',
   ): Promise<{ categoryId: string | null; subCategoryId: string | null }> {
-    this.logger.debug(`🔍 [DEBUG] resolveCategoryAndSubcategory chamado com: category="${categoryNameOrId}", subCategory="${subcategoryNameOrId}"`);
-    
+    this.logger.debug(
+      `🔍 [DEBUG] resolveCategoryAndSubcategory chamado com: category="${categoryNameOrId}", subCategory="${subcategoryNameOrId}", type="${transactionType}"`,
+    );
+
     try {
-      // Buscar usuário no cache local
-      const user = await this.userCache.findByPlatformId(userId, 'whatsapp');
+      // Buscar usuário no cache pelo gastoCertoId (userId é o gastoCertoId)
+      const user = await this.userCache.getUserByGastoCertoId(userId);
 
       let categoriesData: any[] = [];
 
-      // 1. Tentar buscar categorias do cache local (user_cache.categories)
-      if (user && user.categories && Array.isArray(user.categories)) {
-        const cachedCategories = user.categories as any[];
+      // 1. PRIORIDADE: Tentar buscar do cache RAG (formato expandido com subcategorias)
+      if (this.ragService) {
+        try {
+          const ragCategories = await this.ragService.getCachedCategories(userId);
+          if (ragCategories && ragCategories.length > 0) {
+            // Filtrar por conta E tipo de transação
+            categoriesData = ragCategories.filter((cat: any) => {
+              const matchesAccount = cat.accountId === accountId;
+              const matchesType = !transactionType || cat.type === transactionType;
+              return matchesAccount && matchesType;
+            });
 
-        // Filtrar categorias da conta específica
-        categoriesData = cachedCategories.filter((cat: any) => cat.accountId === accountId);
-
-        if (categoriesData.length > 0) {
-          this.logger.log(`📦 Usando ${categoriesData.length} categoria(s) do cache local`);
+            if (categoriesData.length > 0) {
+              this.logger.log(
+                `📦 Usando ${categoriesData.length} categoria(s) do cache RAG (formato expandido, tipo: ${transactionType || 'TODOS'})`,
+              );
+            }
+          }
+        } catch (error) {
+          this.logger.warn(`⚠️ Erro ao buscar do cache RAG: ${error.message}`);
         }
       }
 
-      // 2. Se não houver categorias no cache, buscar na API
+      // 2. Fallback: Buscar do cache do usuário (formato API não expandido)
+      if (
+        categoriesData.length === 0 &&
+        user &&
+        user.categories &&
+        Array.isArray(user.categories)
+      ) {
+        const cachedCategories = user.categories as any[];
+
+        // Filtrar categorias da conta específica E tipo de transação
+        categoriesData = cachedCategories.filter((cat: any) => {
+          const matchesAccount = cat.accountId === accountId;
+          const matchesType = !transactionType || cat.type === transactionType;
+          return matchesAccount && matchesType;
+        });
+
+        if (categoriesData.length > 0) {
+          this.logger.log(
+            `📦 Usando ${categoriesData.length} categoria(s) do cache local do usuário (tipo: ${transactionType || 'TODOS'})`,
+          );
+        } else {
+          this.logger.warn(
+            `⚠️ Cache tem categorias mas nenhuma da conta ${accountId} e tipo ${transactionType}. Total no cache: ${cachedCategories.length}`,
+          );
+        }
+      }
+
+      // 3. Último recurso: Buscar na API
       if (categoriesData.length === 0) {
         this.logger.log(`🔍 Buscando categorias na API (cache vazio)`);
         categoriesData = await this.gastoCertoApi.getAccountCategories(userId, accountId);
@@ -1154,15 +1218,42 @@ export class TransactionRegistrationService {
       const categoryId = matchingCategory.id;
       this.logger.log(`📂 Categoria resolvida: ${categoryNameOrId} → ${categoryId}`);
 
+      // DEBUG: Log completo da estrutura da categoria encontrada
+      this.logger.debug(
+        `🔍 [DEBUG] Categoria encontrada - Estrutura completa: ${JSON.stringify(matchingCategory, null, 2).substring(0, 500)}`,
+      );
+
       // 4. Se não há subcategoria informada, retornar apenas categoria
       if (!subcategoryNameOrId) {
         return { categoryId, subCategoryId: null };
       }
 
-      // 5. Procurar subcategoria dentro da categoria
+      // 5. Procurar subcategoria - suportar DOIS formatos:
+      //    a) subCategories: [] (formato da API)
+      //    b) subCategory: { id, name } (formato do cache expandido do RAG)
       let subCategoryId: string | null = null;
 
+      // Formato do cache expandido (cada entrada tem UMA subcategoria)
+      if (matchingCategory.subCategory && typeof matchingCategory.subCategory === 'object') {
+        const subCat = matchingCategory.subCategory;
+        if (
+          subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
+          subCat.id === subcategoryNameOrId
+        ) {
+          subCategoryId = subCat.id;
+          this.logger.log(
+            `📂 Subcategoria resolvida (cache): ${subcategoryNameOrId} → ${subCategoryId}`,
+          );
+          return { categoryId, subCategoryId };
+        }
+      }
+
+      // Formato da API (categoria tem array de subcategorias)
       if (matchingCategory.subCategories && Array.isArray(matchingCategory.subCategories)) {
+        this.logger.debug(
+          `📋 Procurando em ${matchingCategory.subCategories.length} subcategorias da API...`,
+        );
+
         const matchingSubCategory = matchingCategory.subCategories.find(
           (subCat: any) =>
             subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
@@ -1171,15 +1262,57 @@ export class TransactionRegistrationService {
 
         if (matchingSubCategory) {
           subCategoryId = matchingSubCategory.id;
-          this.logger.log(`📂 Subcategoria resolvida: ${subcategoryNameOrId} → ${subCategoryId}`);
-        } else {
-          this.logger.warn(
-            `⚠️ Subcategoria "${subcategoryNameOrId}" não encontrada na categoria "${matchingCategory.name}"`,
+          this.logger.log(
+            `📂 Subcategoria resolvida (API): ${subcategoryNameOrId} → ${subCategoryId}`,
           );
+          return { categoryId, subCategoryId };
         }
       }
 
-      return { categoryId, subCategoryId };
+      // Se não encontrou, buscar em TODAS as categorias expandidas do cache
+      // (pode haver múltiplas entradas da mesma categoria, cada uma com uma subcategoria diferente)
+      const allMatchingCategories = categoriesData.filter(
+        (cat: any) =>
+          (cat.name.toLowerCase() === categoryNameOrId.toLowerCase() ||
+            cat.id === categoryNameOrId) &&
+          cat.subCategory &&
+          (cat.subCategory.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
+            cat.subCategory.id === subcategoryNameOrId),
+      );
+
+      if (allMatchingCategories.length > 0) {
+        subCategoryId = allMatchingCategories[0].subCategory.id;
+        this.logger.log(
+          `📂 Subcategoria resolvida (busca expandida): ${subcategoryNameOrId} → ${subCategoryId}`,
+        );
+        return { categoryId, subCategoryId };
+      }
+
+      // Não encontrou a subcategoria
+      this.logger.warn(
+        `⚠️ Subcategoria "${subcategoryNameOrId}" não encontrada na categoria "${matchingCategory.name}"`,
+      );
+
+      // DEBUG: Listar subcategorias disponíveis
+      if (matchingCategory.subCategories && Array.isArray(matchingCategory.subCategories)) {
+        const subCatNames = matchingCategory.subCategories.map((sc: any) => sc.name).join(', ');
+        this.logger.warn(`📋 Subcategorias disponíveis (API): ${subCatNames}`);
+      }
+
+      // DEBUG: Verificar todas as entradas da categoria no cache
+      const allCategoryEntries = categoriesData.filter(
+        (cat: any) =>
+          cat.name.toLowerCase() === categoryNameOrId.toLowerCase() || cat.id === categoryNameOrId,
+      );
+      if (allCategoryEntries.length > 1) {
+        const subCatNames = allCategoryEntries
+          .filter((e: any) => e.subCategory)
+          .map((e: any) => e.subCategory.name)
+          .join(', ');
+        this.logger.warn(`📋 Subcategorias disponíveis (cache): ${subCatNames}`);
+      }
+
+      return { categoryId, subCategoryId: null };
     } catch (error: any) {
       this.logger.error(`❌ Erro ao resolver categoria/subcategoria:`, error);
       return { categoryId: null, subCategoryId: null };
@@ -1353,22 +1486,26 @@ export class TransactionRegistrationService {
       }
     }
 
-    // 3. Detectar data (hoje por padrão)
+    // 3. Detectar data com TemporalParser (suporta expressões complexas)
     const today = new Date();
     let date: Date | string = today;
 
-    // Detectar "ontem"
-    if (normalized.includes('ontem')) {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      date = yesterday;
-    }
+    try {
+      // TemporalParser pode detectar:
+      // - "ontem", "anteontem", "hoje"
+      // - "dia 15", "dia 10 do mês que vem"
+      // - "próxima semana", "mês passado"
+      // - "início do mês", "fim da semana"
+      const parsedDate = this.temporalParser.parseAndCalculateDate(text, today);
+      date = parsedDate;
 
-    // Detectar "anteontem"
-    if (normalized.includes('anteontem') || normalized.includes('antes de ontem')) {
-      const dayBeforeYesterday = new Date(today);
-      dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
-      date = dayBeforeYesterday;
+      this.logger.debug(
+        `📅 TemporalParser detectou data: ${parsedDate.toISOString().split('T')[0]} para texto: "${text.substring(0, 50)}"`,
+      );
+    } catch (error) {
+      // Fallback: se TemporalParser falhar, usar data atual
+      this.logger.warn(`⚠️ TemporalParser falhou, usando data atual:`, error);
+      date = today;
     }
 
     // 4. Extrair descrição (remover valor e palavras-chave)
@@ -1397,5 +1534,63 @@ export class TransactionRegistrationService {
       confidence: 0.85, // Confiança moderada (RAG + regex)
       merchant: null,
     };
+  }
+
+  /**
+   * 🆕 Detecta o tipo de transação (INCOME ou EXPENSES) baseado em palavras-chave
+   */
+  private async detectTransactionType(text: string): Promise<'INCOME' | 'EXPENSES' | undefined> {
+    const normalizedText = text.toLowerCase();
+
+    // Palavras-chave de GASTO (EXPENSES)
+    const expenseKeywords = [
+      'gastei',
+      'paguei',
+      'comprei',
+      'gasto',
+      'pago',
+      'compra',
+      'despesa',
+      'débito',
+      'debito',
+      'saiu',
+      'saque',
+    ];
+
+    // Palavras-chave de RECEITA (INCOME)
+    const incomeKeywords = [
+      'recebi',
+      'recebido',
+      'receita',
+      'salário',
+      'salario',
+      'rendimento',
+      'pagamento',
+      'entrou',
+      'depósito',
+      'deposito',
+      'ganho',
+      'entrada',
+    ];
+
+    // Verificar EXPENSES primeiro (mais comum)
+    for (const keyword of expenseKeywords) {
+      if (normalizedText.includes(keyword)) {
+        this.logger.debug(`🔍 Tipo detectado: EXPENSES (palavra-chave: "${keyword}")`);
+        return 'EXPENSES';
+      }
+    }
+
+    // Verificar INCOME
+    for (const keyword of incomeKeywords) {
+      if (normalizedText.includes(keyword)) {
+        this.logger.debug(`🔍 Tipo detectado: INCOME (palavra-chave: "${keyword}")`);
+        return 'INCOME';
+      }
+    }
+
+    // Se não detectou, retorna undefined (não filtra)
+    this.logger.debug(`🔍 Tipo NÃO detectado - sem filtro de tipo`);
+    return undefined;
   }
 }

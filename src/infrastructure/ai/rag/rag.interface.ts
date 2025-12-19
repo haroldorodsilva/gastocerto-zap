@@ -17,6 +17,7 @@ export interface RAGConfig {
   maxResults: number; // Máximo de resultados (padrão: 3)
   boostExactMatch: number; // Boost para match exato (padrão: 2.0)
   boostStartsWith: number; // Boost para começa com (padrão: 1.5)
+  transactionType?: 'INCOME' | 'EXPENSES'; // 🆕 Filtrar apenas categorias deste tipo
 }
 
 export interface UserCategory {

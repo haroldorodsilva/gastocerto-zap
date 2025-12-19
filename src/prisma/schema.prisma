@@ -194,16 +194,17 @@ model AIUsageLog {
 
   // 🆕 Contexto RAG para análise e melhoria
   ragSearchLogId       String? // ID do RAGSearchLog relacionado (se veio do fluxo RAG)
+  ragSearchLog         RAGSearchLog? @relation(fields: [ragSearchLogId], references: [id], onDelete: SetNull)
   ragInitialFound      Boolean? // true se RAG encontrou algo no step 1 (mesmo abaixo do threshold)
-  ragInitialScore      Decimal? @db.Decimal(5, 4) // Score do RAG inicial (step 1)
+  ragInitialScore      Decimal?      @db.Decimal(5, 4) // Score do RAG inicial (step 1)
   ragInitialCategory   String? // Categoria que RAG sugeriu no step 1
   aiCategoryId         String? // ID da categoria que IA retornou
   aiCategoryName       String? // Nome da categoria que IA retornou
-  aiConfidence         Decimal? @db.Decimal(5, 4) // Confiança da IA
+  aiConfidence         Decimal?      @db.Decimal(5, 4) // Confiança da IA
   finalCategoryId      String? // ID da categoria final escolhida (após validação)
   finalCategoryName    String? // Nome da categoria final escolhida
-  wasRagFallback       Boolean  @default(false) // true se foi fallback de RAG que falhou
-  needsSynonymLearning Boolean  @default(false) // true se deve extrair sinônimos desta interação
+  wasRagFallback       Boolean       @default(false) // true se foi fallback de RAG que falhou
+  needsSynonymLearning Boolean       @default(false) // true se deve extrair sinônimos desta interação
 
   createdAt DateTime @default(now())
 
@@ -245,6 +246,9 @@ model RAGSearchLog {
   ragInitialScore   Decimal? @db.Decimal(5, 4) // Score do RAG no step 1 (mesmo que não passou threshold)
   ragFinalScore     Decimal? @db.Decimal(5, 4) // Score do RAG no step 3 (validação final, se houver)
   wasAiFallback     Boolean  @default(false) // true se precisou usar IA (step 2) porque RAG falhou
+
+  // Relacionamento com AIUsageLog
+  aiUsageLogs AIUsageLog[]
 
   createdAt DateTime @default(now())
 
@@ -288,6 +292,7 @@ enum SynonymSource {
   AI_SUGGESTED // IA sugeriu e usuário aceitou
   AUTO_LEARNED // Sistema aprendeu automaticamente (padrão detectado)
   IMPORTED // Importado de outro usuário ou base de conhecimento
+  ADMIN_APPROVED // Admin criou/aprovou manualmente
 }
 
 enum AIOperationType {

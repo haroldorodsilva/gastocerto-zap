@@ -21,6 +21,18 @@ export interface AIUsageData {
   success?: boolean;
   errorMessage?: string;
   metadata?: any;
+  // 🆕 Campos de contexto RAG
+  ragSearchLogId?: string;
+  ragInitialFound?: boolean;
+  ragInitialScore?: number;
+  ragInitialCategory?: string;
+  aiCategoryId?: string;
+  aiCategoryName?: string;
+  aiConfidence?: number;
+  finalCategoryId?: string;
+  finalCategoryName?: string;
+  wasRagFallback?: boolean;
+  needsSynonymLearning?: boolean;
 }
 
 /**
@@ -58,13 +70,13 @@ export class AIUsageLoggerService {
   /**
    * Registra uso de IA
    */
-  async logUsage(data: AIUsageData): Promise<void> {
+  async logUsage(data: AIUsageData): Promise<string> {
     try {
       // Calcular custo estimado
       const cost = this.calculateCost(data.model, data.inputTokens, data.outputTokens);
 
-      // Criar registro
-      await this.prisma.aIUsageLog.create({
+      // Criar registro com novos campos de tracking RAG
+      const log = await this.prisma.aIUsageLog.create({
         data: {
           userCacheId: data.userCacheId,
           phoneNumber: data.phoneNumber,
@@ -81,6 +93,18 @@ export class AIUsageLoggerService {
           success: data.success ?? true,
           errorMessage: data.errorMessage,
           metadata: data.metadata || {},
+          // 🆕 Campos de contexto RAG
+          ragSearchLogId: data.ragSearchLogId,
+          ragInitialFound: data.ragInitialFound,
+          ragInitialScore: data.ragInitialScore,
+          ragInitialCategory: data.ragInitialCategory,
+          aiCategoryId: data.aiCategoryId,
+          aiCategoryName: data.aiCategoryName,
+          aiConfidence: data.aiConfidence,
+          finalCategoryId: data.finalCategoryId,
+          finalCategoryName: data.finalCategoryName,
+          wasRagFallback: data.wasRagFallback ?? false,
+          needsSynonymLearning: data.needsSynonymLearning ?? false,
         },
       });
 
@@ -88,21 +112,49 @@ export class AIUsageLoggerService {
       const operationEmoji = this.getOperationEmoji(data.operation);
       const inputEmoji = this.getInputEmoji(data.inputType);
 
-      this.logger.log(
+      let logMessage =
         `\n💰 ========== AUDITORIA IA ==========\n` +
-          `${operationEmoji} Operação: ${data.operation}\n` +
-          `${inputEmoji} Input: ${data.inputType}\n` +
-          `🤖 Provider: ${data.provider}\n` +
-          `📦 Model: ${data.model}\n` +
-          `👤 Usuário: ${data.phoneNumber}${data.userCacheId ? ` (${data.userCacheId.substring(0, 8)}...)` : ''}\n` +
-          `📊 Tokens: ${data.inputTokens} in + ${data.outputTokens} out = ${data.totalTokens} total\n` +
-          `💵 Custo: $${cost.toFixed(6)} USD\n` +
-          `⏱️  Tempo: ${data.responseTime ? `${data.responseTime}ms` : 'N/A'}\n` +
-          `✅ Status: ${data.success ? 'Sucesso' : 'Erro'}\n` +
-          `====================================\n`,
-      );
+        `${operationEmoji} Operação: ${data.operation}\n` +
+        `${inputEmoji} Input: ${data.inputType}\n` +
+        `🤖 Provider: ${data.provider}\n` +
+        `📦 Model: ${data.model}\n` +
+        `👤 Usuário: ${data.phoneNumber}${data.userCacheId ? ` (${data.userCacheId.substring(0, 8)}...)` : ''}\n` +
+        `📊 Tokens: ${data.inputTokens} in + ${data.outputTokens} out = ${data.totalTokens} total\n` +
+        `💵 Custo: $${cost.toFixed(6)} USD\n` +
+        `⏱️  Tempo: ${data.responseTime ? `${data.responseTime}ms` : 'N/A'}\n`;
+
+      // 🆕 Adicionar informações de contexto RAG se disponíveis
+      if (data.ragSearchLogId) {
+        logMessage += `🔍 RAG Context:\n`;
+        logMessage += `   - RAG Log ID: ${data.ragSearchLogId.substring(0, 8)}...\n`;
+        logMessage += `   - RAG Found: ${data.ragInitialFound ? '✅' : '❌'}\n`;
+        if (data.ragInitialScore) {
+          logMessage += `   - RAG Score: ${(data.ragInitialScore * 100).toFixed(1)}%\n`;
+        }
+        if (data.ragInitialCategory) {
+          logMessage += `   - RAG Category: ${data.ragInitialCategory}\n`;
+        }
+        if (data.aiCategoryName) {
+          logMessage += `   - AI Category: ${data.aiCategoryName}\n`;
+        }
+        if (data.aiConfidence) {
+          logMessage += `   - AI Confidence: ${(data.aiConfidence * 100).toFixed(1)}%\n`;
+        }
+        if (data.finalCategoryName) {
+          logMessage += `   - Final Category: ${data.finalCategoryName}\n`;
+        }
+        logMessage += `   - Was RAG Fallback: ${data.wasRagFallback ? '🔄' : '🎯'}\n`;
+        logMessage += `   - Needs Learning: ${data.needsSynonymLearning ? '📚' : '✅'}\n`;
+      }
+
+      logMessage += `✅ Status: ${data.success ? 'Sucesso' : 'Erro'}\n` + `====================================\n`;
+
+      this.logger.log(logMessage);
+
+      return log.id;
     } catch (error) {
       this.logger.error('❌ Erro ao registrar uso de IA:', error);
+      return null;
     }
   }
 

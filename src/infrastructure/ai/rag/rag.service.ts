@@ -86,6 +86,19 @@ export class RAGService {
     ['ifood', ['delivery', 'entrega', 'comida', 'pedido', 'rappi']],
     ['delivery', ['entrega', 'pedido', 'ifood', 'rappi']],
 
+    // Investimentos e Financeiros
+    ['financiamento', ['financiamentos', 'parcela', 'prestacao', 'emprestimo', 'credito']],
+    ['financiamentos', ['financiamento', 'parcela', 'prestacao', 'emprestimo', 'credito']],
+    ['emprestimo', ['empréstimo', 'financiamento', 'financiamentos', 'credito', 'parcela']],
+    ['consorcio', ['consórcio', 'lance', 'contemplacao', 'cota']],
+    ['aplicacao', ['aplicação', 'investimento', 'investir', 'render', 'cdb']],
+    ['caixinha', ['poupanca', 'poupança', 'guardar', 'reserva']],
+
+    // Taxas e Documentos
+    ['ipva', ['imposto', 'carro', 'veiculo', 'veículo', 'licenciamento']],
+    ['licenciamento', ['documento', 'carro', 'veiculo', 'veículo', 'detran']],
+    ['documentacao', ['documentação', 'documento', 'documentos', 'papel', 'detran']],
+
     // Transporte
     ['gasolina', ['combustivel', 'posto', 'abastecimento', 'gas', 'alcool']],
     ['combustivel', ['gasolina', 'posto', 'abastecimento', 'gas', 'alcool', 'diesel']],
@@ -223,6 +236,28 @@ export class RAGService {
   }
 
   /**
+   * Retorna categorias do cache (formato expandido usado pelo RAG)
+   * Útil para resolver IDs de categoria/subcategoria após match do RAG
+   */
+  async getCachedCategories(userId: string): Promise<UserCategory[]> {
+    if (this.useRedisCache) {
+      const cacheKey = `rag:categories:${userId}`;
+      const cached = await this.cacheManager.get<string>(cacheKey);
+      if (cached) {
+        const categories = JSON.parse(cached);
+        this.logger.debug(`✅ Retornando ${categories.length} categorias do cache RAG`);
+        return categories;
+      }
+    } else {
+      const categories = this.categoryCache.get(userId) || [];
+      this.logger.debug(`⚠️ Retornando ${categories.length} categorias do Map`);
+      return categories;
+    }
+
+    return [];
+  }
+
+  /**
    * Busca categorias similares usando BM25 + Sinônimos Personalizados
    */
   async findSimilarCategories(
@@ -251,6 +286,22 @@ export class RAGService {
     if (categories.length === 0) {
       this.logger.warn(`⚠️ Nenhuma categoria indexada para usuário ${userId}`);
       return [];
+    }
+
+    // 🆕 FILTRAR POR TIPO DE TRANSAÇÃO (INCOME ou EXPENSES)
+    if (finalConfig.transactionType) {
+      const beforeFilter = categories.length;
+      categories = categories.filter((cat) => cat.type === finalConfig.transactionType);
+      this.logger.log(
+        `🔍 Filtrando por tipo ${finalConfig.transactionType}: ${beforeFilter} → ${categories.length} categorias`,
+      );
+
+      if (categories.length === 0) {
+        this.logger.warn(
+          `⚠️ Nenhuma categoria do tipo ${finalConfig.transactionType} encontrada para usuário ${userId}`,
+        );
+        return [];
+      }
     }
 
     // Normalizar texto de busca
@@ -549,28 +600,62 @@ export class RAGService {
     threshold: number,
     ragMode: string,
     responseTime: number,
-  ): Promise<void> {
+    options?: {
+      flowStep?: number;
+      totalSteps?: number;
+      aiProvider?: string;
+      aiModel?: string;
+      aiConfidence?: number;
+      aiCategoryId?: string;
+      aiCategoryName?: string;
+      finalCategoryId?: string;
+      finalCategoryName?: string;
+      wasAiFallback?: boolean;
+    },
+  ): Promise<string> {
     try {
-      // Salvar no banco de dados
-      await this.prisma.rAGSearchLog.create({
+      const bestMatch = matches.length > 0 ? matches[0] : null;
+
+      // Salvar no banco de dados com novos campos de tracking
+      const log = await this.prisma.rAGSearchLog.create({
         data: {
           userId,
           query,
           queryNormalized: this.normalize(query),
           matches: matches as any,
-          bestMatch: matches.length > 0 ? matches[0].categoryName : null,
-          bestScore: matches.length > 0 ? matches[0].score : null,
+          bestMatch: bestMatch?.categoryName || null,
+          bestScore: bestMatch?.score || null,
           threshold,
           success,
           ragMode,
           responseTime,
+          // 🆕 Novos campos de tracking
+          flowStep: options?.flowStep || 1,
+          totalSteps: options?.totalSteps || 1,
+          aiProvider: options?.aiProvider,
+          aiModel: options?.aiModel,
+          aiConfidence: options?.aiConfidence,
+          aiCategoryId: options?.aiCategoryId,
+          aiCategoryName: options?.aiCategoryName,
+          finalCategoryId: options?.finalCategoryId || bestMatch?.categoryId,
+          finalCategoryName: options?.finalCategoryName || bestMatch?.categoryName,
+          ragInitialScore: bestMatch?.score,
+          ragFinalScore: options?.finalCategoryId ? bestMatch?.score : null,
+          wasAiFallback: options?.wasAiFallback || false,
         },
       });
 
-      this.logger.debug(`📊 RAG log salvo: userId=${userId}, query="${query}", success=${success}`);
+      this.logger.debug(
+        `📊 RAG log salvo: userId=${userId}, query="${query}", success=${success}, ` +
+          `step=${options?.flowStep || 1}/${options?.totalSteps || 1}, ` +
+          `wasAiFallback=${options?.wasAiFallback || false}`,
+      );
+
+      return log.id;
     } catch (error) {
       // Não lançar erro - logging não deve quebrar fluxo
       this.logger.warn(`Erro ao salvar log RAG:`, error);
+      return null;
     }
   }
 
@@ -680,7 +765,20 @@ export class RAGService {
    * Tokeniza texto em palavras
    */
   private tokenize(text: string): string[] {
-    return text.split(/\s+/).filter((token) => token.length > 2); // Ignora tokens muito curtos
+    const tokens = text.split(/\s+/).filter((token) => token.length > 2); // Ignora tokens muito curtos
+
+    // Normalizar plurais simples para melhorar matching
+    return tokens.map((token) => {
+      // Remove plural simples: "financiamentos" → "financiamento"
+      if (token.endsWith('s') && token.length > 4) {
+        const singular = token.slice(0, -1);
+        // Evitar remover 's' de palavras como "mas", "tras", "pais"
+        if (!['ma', 'tra', 'pai', 'de', 've', 'me'].includes(singular)) {
+          return singular;
+        }
+      }
+      return token;
+    });
   }
 
   /**
@@ -849,7 +947,7 @@ export class RAGService {
     subCategoryId?: string;
     subCategoryName?: string;
     confidence?: number;
-    source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED';
+    source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED' | 'ADMIN_APPROVED';
   }): Promise<void> {
     try {
       const normalizedKeyword = this.normalize(params.keyword);
@@ -889,6 +987,52 @@ export class RAGService {
       this.logger.error('Erro ao adicionar sinônimo personalizado:', error);
       throw error;
     }
+  }
+
+  /**
+   * 🆕 Método público para registrar busca RAG com contexto completo
+   * Usado por serviços externos (AIService, CategoryResolutionService)
+   */
+  async logSearchWithContext(params: {
+    userId: string;
+    query: string;
+    matches: CategoryMatch[];
+    success: boolean;
+    threshold: number;
+    ragMode: string;
+    responseTime: number;
+    flowStep?: number;
+    totalSteps?: number;
+    aiProvider?: string;
+    aiModel?: string;
+    aiConfidence?: number;
+    aiCategoryId?: string;
+    aiCategoryName?: string;
+    finalCategoryId?: string;
+    finalCategoryName?: string;
+    wasAiFallback?: boolean;
+  }): Promise<string> {
+    return this.recordSearchAttempt(
+      params.userId,
+      params.query,
+      params.matches,
+      params.success,
+      params.threshold,
+      params.ragMode,
+      params.responseTime,
+      {
+        flowStep: params.flowStep,
+        totalSteps: params.totalSteps,
+        aiProvider: params.aiProvider,
+        aiModel: params.aiModel,
+        aiConfidence: params.aiConfidence,
+        aiCategoryId: params.aiCategoryId,
+        aiCategoryName: params.aiCategoryName,
+        finalCategoryId: params.finalCategoryId,
+        finalCategoryName: params.finalCategoryName,
+        wasAiFallback: params.wasAiFallback,
+      },
+    );
   }
 
   /**

@@ -130,7 +130,7 @@ export class UserCacheService {
         // 2. Tentar buscar no Redis usando gastoCertoId (chave universal)
         const cacheKey = this.getCacheKey(dbUser.gastoCertoId);
         const cachedUser = await this.getUserFromRedisByKey(cacheKey);
-        
+
         if (cachedUser) {
           this.logger.debug(
             `✅ Cache HIT - Redis (WhatsApp): ${phoneNumber} | isBlocked: ${cachedUser.isBlocked}, isActive: ${cachedUser.isActive}`,
@@ -182,7 +182,7 @@ export class UserCacheService {
         // 2. Tentar buscar no Redis usando gastoCertoId (chave universal)
         const cacheKey = this.getCacheKey(dbUser.gastoCertoId);
         const cachedUser = await this.getUserFromRedisByKey(cacheKey);
-        
+
         if (cachedUser) {
           this.logger.debug(
             `✅ Cache HIT - Redis (Telegram): ${chatId} | isBlocked: ${cachedUser.isBlocked}, isActive: ${cachedUser.isActive}`,
@@ -651,7 +651,7 @@ export class UserCacheService {
   async invalidateUser(identifier: string): Promise<void> {
     try {
       // Buscar usuário para obter gastoCertoId (chave universal)
-      let user = await this.prisma.userCache.findFirst({
+      const user = await this.prisma.userCache.findFirst({
         where: {
           OR: [
             { phoneNumber: identifier },
@@ -1064,8 +1064,8 @@ export class UserCacheService {
 
       let accounts = (user?.accounts as any[]) || [];
 
-      console.log('###'.repeat(20));
-      console.log(JSON.stringify(accounts, null, 2));
+      this.logger.debug(`📋 Contas no cache para ${phoneNumber}: ${accounts.length}`);
+      this.logger.debug(JSON.stringify(accounts, null, 2));
       // 🆕 Se não tem contas no cache, buscar na API
       if (accounts.length === 0) {
         this.logger.log(`📥 Nenhuma conta no cache para ${phoneNumber}. Buscando na API...`);
@@ -1331,6 +1331,35 @@ export class UserCacheService {
     } catch (error) {
       this.logger.error('❌ Erro ao limpar cache Redis:', error);
       throw error;
+    }
+  }
+
+  /**
+   * 🆕 Conta usuários ativos no cache Redis
+   * Usado para estatísticas no health check
+   */
+  async countActiveUsers(): Promise<number> {
+    try {
+      const keys = await this.redisService.getClient().keys('user:*');
+
+      // Contar apenas usuários ativos (isActive = true)
+      let activeCount = 0;
+
+      for (const key of keys) {
+        const cached = await this.redisService.getClient().get(key);
+        if (cached) {
+          const user = JSON.parse(cached);
+          if (user.isActive === true) {
+            activeCount++;
+          }
+        }
+      }
+
+      this.logger.debug(`📊 Usuários ativos no cache: ${activeCount} de ${keys.length} total`);
+      return activeCount;
+    } catch (error) {
+      this.logger.error('❌ Erro ao contar usuários ativos:', error);
+      return 0;
     }
   }
 }

@@ -38,11 +38,11 @@ export class IntentMatcher {
 
     // Reinicializa apenas se os intents mudarem
     if (this.initialized && this.trainedIntents === intentsHash) {
-      console.log('[IntentMatcher] Usando modelo já treinado');
+      // console.log('[IntentMatcher] Usando modelo já treinado');
       return;
     }
 
-    console.log('[IntentMatcher] Inicializando NLP Manager...');
+    // console.log('[IntentMatcher] Inicializando NLP Manager...');
     const dock = await dockStart({
       use: ['Basic', 'LangPt'],
       settings: {
@@ -65,11 +65,11 @@ export class IntentMatcher {
       }
     }
 
-    console.log(
-      `[IntentMatcher] Treinando modelo com ${totalPatterns} padrões de ${intents.length} intents...`,
-    );
+    // console.log(
+    //   `[IntentMatcher] Treinando modelo com ${totalPatterns} padrões de ${intents.length} intents...`,
+    // );
     await this.nlpManager.train();
-    console.log('[IntentMatcher] Treinamento concluído!');
+    // console.log('[IntentMatcher] Treinamento concluído!');
 
     this.initialized = true;
     this.trainedIntents = intentsHash;
@@ -83,13 +83,13 @@ export class IntentMatcher {
     await this.initialize(intents);
 
     // Processa a mensagem usando NLP
-    console.log(`[IntentMatcher] Processando: "${message}"`);
+    // console.log(`[IntentMatcher] Processando: "${message}"`);
     const response = await this.nlpManager.process('pt', message);
-    console.log(`[IntentMatcher] Resposta NLP:`, {
-      intent: response.intent,
-      score: response.score,
-      classifications: response.classifications?.slice(0, 3),
-    });
+    // console.log(`[IntentMatcher] Resposta NLP:`, {
+    //   intent: response.intent,
+    //   score: response.score,
+    //   classifications: response.classifications?.slice(0, 3),
+    // });
 
     // Encontra o intent pattern para pegar threshold customizado
     const intentPattern = intents.find((i) => i.intent === response.intent);

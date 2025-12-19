@@ -3,6 +3,7 @@ import { ServiceAuthService } from './services/service-auth.service';
 import { JwtValidationService } from './services/jwt-validation.service';
 import { UserRateLimiterService } from './services/user-rate-limiter.service';
 import { RedisService } from './services/redis.service';
+import { TemporalParserService } from './services/temporal-parser.service';
 import { ServiceAuthGuard } from './guards/service-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { DualAuthGuard } from './guards/dual-auth.guard';
@@ -14,6 +15,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
  * - JwtValidationService: Valida JWT do admin via gastocerto-api
  * - UserRateLimiterService: Rate limiting para proteção contra spam
  * - RedisService: Cliente Redis para cache e rate limiting
+ * - TemporalParserService: Parser NLP para expressões temporais
  * - Guards: ServiceAuth, JwtAuth, DualAuth
  */
 @Global()
@@ -23,6 +25,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
     JwtValidationService,
     UserRateLimiterService,
     RedisService,
+    TemporalParserService,
     ServiceAuthGuard,
     JwtAuthGuard,
     DualAuthGuard,
@@ -32,6 +35,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
     JwtValidationService,
     UserRateLimiterService,
     RedisService,
+    TemporalParserService,
     ServiceAuthGuard,
     JwtAuthGuard,
     DualAuthGuard,

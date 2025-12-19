@@ -284,7 +284,7 @@ export class GastoCertoApiService {
       return response.data.user;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao criar usuário: ${error.message}`, error.response?.data);
-      this.logger.error(`❌ Payload: ${payload}`);
+      this.logger.error(`❌ Payload: ${JSON.stringify(payload, null, 2)}`);
 
       if (error.response?.status === 409) {
         throw new HttpException('Usuário já existe', HttpStatus.CONFLICT);

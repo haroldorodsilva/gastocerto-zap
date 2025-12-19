@@ -910,7 +910,7 @@ export class AdminController {
     // 🆕 ATUALIZAR CACHE REDIS
     this.logger.log(`🔄 Atualizando cache Redis para ${user.phoneNumber}`);
     await this.cacheService.invalidateUser(user.phoneNumber);
-    
+
     // Invalidar também pelo telegramId se existir
     if (user.telegramId) {
       this.logger.log(`🔄 Invalidando cache Redis também pelo telegramId: ${user.telegramId}`);
@@ -999,7 +999,7 @@ isActive: ${dto.isActive}
     // 🆕 COMPLETAR ONBOARDING PENDENTE ao ativar usuário
     if (dto.isActive) {
       this.logger.log(`🔍 Buscando sessões de onboarding pendentes...`);
-      
+
       // Completar qualquer sessão de onboarding pendente
       const onboardingSession = await this.prisma.onboardingSession.findFirst({
         where: {
@@ -1016,7 +1016,7 @@ isActive: ${dto.isActive}
             `  - currentStep: ${onboardingSession.currentStep}\n` +
             `  - completed (antes): ${onboardingSession.completed}`,
         );
-        
+
         await this.prisma.onboardingSession.update({
           where: { id: onboardingSession.id },
           data: {
@@ -1025,7 +1025,7 @@ isActive: ${dto.isActive}
             updatedAt: new Date(),
           },
         });
-        
+
         this.logger.log(`✅ Sessão de onboarding finalizada (phoneNumber)`);
       } else {
         this.logger.log(`ℹ️ Nenhuma sessão de onboarding pendente encontrada (phoneNumber)`);
@@ -1034,7 +1034,7 @@ isActive: ${dto.isActive}
       // Buscar também por telegramId se for Telegram
       if (user.telegramId) {
         this.logger.log(`🔍 Buscando sessão de onboarding Telegram (ID: ${user.telegramId})...`);
-        
+
         const telegramOnboarding = await this.prisma.onboardingSession.findFirst({
           where: {
             platformId: user.telegramId,
@@ -1050,7 +1050,7 @@ isActive: ${dto.isActive}
               `  - currentStep: ${telegramOnboarding.currentStep}\n` +
               `  - completed (antes): ${telegramOnboarding.completed}`,
           );
-          
+
           await this.prisma.onboardingSession.update({
             where: { id: telegramOnboarding.id },
             data: {
@@ -1059,14 +1059,16 @@ isActive: ${dto.isActive}
               updatedAt: new Date(),
             },
           });
-          
+
           this.logger.log(`✅ Sessão de onboarding Telegram finalizada`);
         } else {
           this.logger.log(`ℹ️ Nenhuma sessão de onboarding Telegram pendente encontrada`);
         }
       }
-      
-      this.logger.log(`========================================\n✅ ONBOARDING FINALIZADO\n========================================`);
+
+      this.logger.log(
+        `========================================\n✅ ONBOARDING FINALIZADO\n========================================`,
+      );
     }
 
     // Se estiver ativando, também ativar a sessão WhatsApp
@@ -1149,11 +1151,40 @@ isActive: ${dto.isActive}
    */
   @Get('health')
   async healthCheck() {
-    const [totalSessions, activeSessions, connectedSessions, telegramSessions] = await Promise.all([
+    const [
+      totalSessions,
+      activeSessions,
+      connectedSessions,
+      telegramSessions,
+      totalUsersCount,
+      activeUsersCount,
+      onboardingCompletedCount,
+      onboardingPendingCount,
+      aiProvidersCount,
+    ] = await Promise.all([
       this.sessionsService.countSessions(),
       this.sessionsService.getActiveSessions(),
       this.sessionsService.getConnectedSessions(),
       this.telegramSessionsService.findAll(),
+      // Total de usuários no cache
+      this.prisma.userCache.count(),
+      // Contar usuários ativos (cache Redis)
+      this.cacheService.countActiveUsers(),
+      // Onboarding completo
+      this.prisma.onboardingSession.count({
+        where: { completed: true },
+      }),
+      // Onboarding pendente (não expirado)
+      this.prisma.onboardingSession.count({
+        where: {
+          completed: false,
+          expiresAt: { gt: new Date() },
+        },
+      }),
+      // Contar providers de IA ativos
+      this.prisma.aIProviderConfig.count({
+        where: { enabled: true },
+      }),
     ]);
 
     const activeProviders = this.sessionManager['sessions']?.size || 0;
@@ -1177,7 +1208,15 @@ isActive: ${dto.isActive}
       },
       telegram: telegramStats,
       providers: {
-        active: activeProviders,
+        active: aiProvidersCount,
+      },
+      users: {
+        total: totalUsersCount,
+        active: activeUsersCount,
+      },
+      onboarding: {
+        completed: onboardingCompletedCount,
+        pending: onboardingPendingCount,
       },
       service: {
         uptime: process.uptime(),
@@ -1187,7 +1226,7 @@ isActive: ${dto.isActive}
   }
 
   /**
-   * Consultar logs de busca RAG (analytics)
+   * Consultar logs de busca RAG (analytics) - ATUALIZADO
    * GET /admin/rag/search-logs?userId=xxx&failedOnly=true&limit=20&offset=0
    */
   @Get('rag/search-logs')
@@ -1212,13 +1251,37 @@ isActive: ${dto.isActive}
         offsetNum,
       );
 
-      // Calcular estatísticas
+      // Calcular estatísticas detalhadas
       const successfulAttempts = result.logs.filter((log) => log.success).length;
       const failedAttempts = result.logs.length - successfulAttempts;
       const successRate =
         result.logs.length > 0
           ? ((successfulAttempts / result.logs.length) * 100).toFixed(2)
           : '0.00';
+
+      // 🆕 Estatísticas de AI Fallback
+      const logsWithDetails = await this.prisma.rAGSearchLog.findMany({
+        where: {
+          id: { in: result.logs.map((l) => l.id) },
+        },
+        select: {
+          id: true,
+          query: true,
+          success: true,
+          wasAiFallback: true,
+          flowStep: true,
+          totalSteps: true,
+          aiProvider: true,
+          aiModel: true,
+          ragMode: true,
+          responseTime: true,
+          createdAt: true,
+        },
+      });
+
+      const aiFallbackCount = logsWithDetails.filter((log) => log.wasAiFallback).length;
+      const aiFallbackRate =
+        result.logs.length > 0 ? ((aiFallbackCount / result.logs.length) * 100).toFixed(2) : '0.00';
 
       // Top queries que falharam (apenas na página atual)
       const failedQueries = result.logs
@@ -1235,6 +1298,28 @@ isActive: ${dto.isActive}
         .sort(([, a], [, b]) => b - a)
         .slice(0, 10)
         .map(([query, count]) => ({ query, count }));
+
+      // 🆕 Estatísticas por provider de AI
+      const aiProviderStats = logsWithDetails
+        .filter((log) => log.aiProvider)
+        .reduce(
+          (acc, log) => {
+            const provider = log.aiProvider || 'unknown';
+            if (!acc[provider]) {
+              acc[provider] = { count: 0, models: new Set() };
+            }
+            acc[provider].count++;
+            if (log.aiModel) acc[provider].models.add(log.aiModel);
+            return acc;
+          },
+          {} as Record<string, { count: number; models: Set<string> }>,
+        );
+
+      const providerSummary = Object.entries(aiProviderStats).map(([provider, data]) => ({
+        provider,
+        count: data.count,
+        models: Array.from(data.models),
+      }));
 
       return {
         success: true,
@@ -1253,7 +1338,10 @@ isActive: ${dto.isActive}
           successfulAttempts,
           failedAttempts,
           successRate: `${successRate}%`,
+          aiFallbackCount,
+          aiFallbackRate: `${aiFallbackRate}%`,
           topFailedQueries,
+          aiProviders: providerSummary,
         },
         timestamp: new Date().toISOString(),
       };
@@ -1263,6 +1351,344 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao buscar logs RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Consultar detalhes de um log RAG específico
+   * GET /admin/rag/search-logs/:id
+   */
+  @Get('rag/search-logs/:id')
+  async getRagSearchLogDetail(@Param('id') id: string) {
+    this.logger.log(`📋 Admin solicitou detalhes do log RAG: ${id}`);
+
+    try {
+      const log = await this.prisma.rAGSearchLog.findUnique({
+        where: { id },
+        include: {
+          _count: {
+            select: {
+              aiUsageLogs: true,
+            },
+          },
+        },
+      });
+
+      if (!log) {
+        return {
+          success: false,
+          message: 'Log não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Buscar logs de AI relacionados
+      const aiLogs = await this.prisma.aIUsageLog.findMany({
+        where: { ragSearchLogId: id },
+        select: {
+          id: true,
+          provider: true,
+          model: true,
+          operation: true,
+          totalTokens: true,
+          estimatedCost: true,
+          aiCategoryName: true,
+          aiConfidence: true,
+          needsSynonymLearning: true,
+          createdAt: true,
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          ...log,
+          aiUsageLogs: aiLogs,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar detalhes do log RAG:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar detalhes do log RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Estatísticas gerais do RAG
+   * GET /admin/rag/stats?days=7
+   */
+  @Get('rag/stats')
+  async getRagStats(@Query('days') days?: string) {
+    this.logger.log('📊 Admin solicitou estatísticas gerais do RAG');
+
+    try {
+      const daysNum = parseInt(days || '7');
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - daysNum);
+
+      // Total de buscas
+      const totalSearches = await this.prisma.rAGSearchLog.count({
+        where: { createdAt: { gte: startDate } },
+      });
+
+      // Buscas bem-sucedidas
+      const successfulSearches = await this.prisma.rAGSearchLog.count({
+        where: {
+          createdAt: { gte: startDate },
+          success: true,
+        },
+      });
+
+      // Buscas com AI Fallback
+      const aiFallbackSearches = await this.prisma.rAGSearchLog.count({
+        where: {
+          createdAt: { gte: startDate },
+          wasAiFallback: true,
+        },
+      });
+
+      // Média de score RAG
+      const avgScore = await this.prisma.rAGSearchLog.aggregate({
+        where: { createdAt: { gte: startDate } },
+        _avg: { ragInitialScore: true },
+      });
+
+      // Tempo médio de resposta
+      const avgResponseTime = await this.prisma.rAGSearchLog.aggregate({
+        where: { createdAt: { gte: startDate } },
+        _avg: { responseTime: true },
+      });
+
+      // Top usuários usando RAG
+      const topUsers = await this.prisma.rAGSearchLog.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: startDate } },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 10,
+      });
+
+      // Queries que mais precisam de sinônimos
+      const needsSynonymLearning = await this.prisma.aIUsageLog.count({
+        where: {
+          createdAt: { gte: startDate },
+          needsSynonymLearning: true,
+        },
+      });
+
+      // Distribuição por flowStep
+      const flowStepDistribution = await this.prisma.rAGSearchLog.groupBy({
+        by: ['flowStep', 'totalSteps'],
+        where: { createdAt: { gte: startDate } },
+        _count: { id: true },
+      });
+
+      return {
+        success: true,
+        period: {
+          days: daysNum,
+          from: startDate.toISOString(),
+          to: new Date().toISOString(),
+        },
+        stats: {
+          totalSearches,
+          successfulSearches,
+          successRate:
+            totalSearches > 0
+              ? ((successfulSearches / totalSearches) * 100).toFixed(2) + '%'
+              : '0%',
+          aiFallbackSearches,
+          aiFallbackRate:
+            totalSearches > 0
+              ? ((aiFallbackSearches / totalSearches) * 100).toFixed(2) + '%'
+              : '0%',
+          avgRagScore: avgScore._avg.ragInitialScore
+            ? Number(avgScore._avg.ragInitialScore).toFixed(4)
+            : null,
+          avgResponseTime: avgResponseTime._avg.responseTime
+            ? Math.round(avgResponseTime._avg.responseTime) + 'ms'
+            : null,
+          needsSynonymLearning,
+          topUsers: topUsers.map((u) => ({
+            userId: u.userId,
+            searches: u._count.id,
+          })),
+          flowStepDistribution: flowStepDistribution.map((d) => ({
+            step: `${d.flowStep}/${d.totalSteps}`,
+            count: d._count.id,
+          })),
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar estatísticas RAG:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar estatísticas RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Listar sessões de onboarding ativas e recentes
+   * GET /admin/onboarding/sessions?status=active&limit=50
+   */
+  @Get('onboarding/sessions')
+  async getOnboardingSessions(
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+    @Query('platform') platform?: string,
+  ) {
+    this.logger.log('📋 Admin solicitou sessões de onboarding');
+
+    try {
+      const limitNum = Math.min(parseInt(limit || '50'), 200);
+      const now = new Date();
+
+      // Filtros dinâmicos
+      const where: any = {};
+
+      if (status === 'active') {
+        where.completed = false;
+        where.expiresAt = { gt: now };
+      } else if (status === 'expired') {
+        where.completed = false;
+        where.expiresAt = { lte: now };
+      } else if (status === 'completed') {
+        where.completed = true;
+      }
+
+      if (platform) {
+        // Filtrar por prefixo do platformId (telegram: chatId numérico, whatsapp: +55...)
+        if (platform === 'telegram') {
+          where.platformId = { not: { startsWith: '+' } };
+        } else if (platform === 'whatsapp') {
+          where.platformId = { startsWith: '+' };
+        }
+      }
+
+      const sessions = await this.prisma.onboardingSession.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        take: limitNum,
+      });
+
+      // Contar totais
+      const totalActive = await this.prisma.onboardingSession.count({
+        where: { completed: false, expiresAt: { gt: now } },
+      });
+
+      const totalExpired = await this.prisma.onboardingSession.count({
+        where: { completed: false, expiresAt: { lte: now } },
+      });
+
+      const totalCompleted = await this.prisma.onboardingSession.count({
+        where: { completed: true },
+      });
+
+      // Estatísticas por step
+      const stepDistribution = await this.prisma.onboardingSession.groupBy({
+        by: ['currentStep'],
+        where: { completed: false },
+        _count: { id: true },
+      });
+
+      return {
+        success: true,
+        data: sessions.map((session) => ({
+          id: session.id,
+          platformId: session.platformId,
+          phoneNumber: session.phoneNumber,
+          currentStep: session.currentStep,
+          attempts: session.attempts,
+          lastMessageAt: session.lastMessageAt,
+          expiresAt: session.expiresAt,
+          isExpired: session.expiresAt < now,
+          completed: session.completed,
+          data: session.data, // 🆕 Adicionar campo data (JSON) para mostrar dados coletados
+          minutesSinceLastMessage: Math.floor(
+            (now.getTime() - session.lastMessageAt.getTime()) / 60000,
+          ),
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        })),
+        stats: {
+          totalActive,
+          totalExpired,
+          totalCompleted,
+          totalAll: totalActive + totalExpired + totalCompleted,
+          stepDistribution: stepDistribution.map((s) => ({
+            step: s.currentStep,
+            count: s._count.id,
+          })),
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar sessões de onboarding:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar sessões de onboarding',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Detalhes de uma sessão de onboarding específica
+   * GET /admin/onboarding/sessions/:id
+   */
+  @Get('onboarding/sessions/:id')
+  async getOnboardingSessionDetail(@Param('id') id: string) {
+    this.logger.log(`📋 Admin solicitou detalhes da sessão: ${id}`);
+
+    try {
+      const session = await this.prisma.onboardingSession.findUnique({
+        where: { id },
+      });
+
+      if (!session) {
+        return {
+          success: false,
+          message: 'Sessão não encontrada',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      const now = new Date();
+
+      return {
+        success: true,
+        data: {
+          ...session,
+          isExpired: session.expiresAt < now,
+          minutesSinceLastMessage: Math.floor(
+            (now.getTime() - session.lastMessageAt.getTime()) / 60000,
+          ),
+          data: session.data, // JSON com dados coletados
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar detalhes da sessão:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar detalhes da sessão',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
@@ -1297,6 +1723,817 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao deletar logs RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  // ========================================
+  // 🎯 SINÔNIMOS - GERENCIAMENTO
+  // ========================================
+
+  /**
+   * Ver sugestões de sinônimos para aprender
+   * GET /admin/synonyms/learning-suggestions
+   *
+   * Analisa logs de AI onde RAG falhou mas AI teve sucesso,
+   * agrupa por keyword e sugere criação de sinônimos.
+   */
+  @Get('synonyms/learning-suggestions')
+  async getSynonymLearningSuggestions(
+    @Query('limit') limit?: string,
+    @Query('minOccurrences') minOccurrences?: string,
+    @Query('minAiConfidence') minAiConfidence?: string,
+  ) {
+    this.logger.log('📚 Admin solicitou sugestões de aprendizado de sinônimos');
+
+    try {
+      const limitNum = parseInt(limit) || 50;
+      const minOccur = parseInt(minOccurrences) || 3;
+      const minConf = parseFloat(minAiConfidence) || 0.7;
+
+      // Buscar logs de AI onde needsSynonymLearning = true
+      const aiLogsWithLearning = await this.prisma.aIUsageLog.findMany({
+        where: {
+          needsSynonymLearning: true,
+          aiConfidence: {
+            gte: minConf,
+          },
+        },
+        select: {
+          ragSearchLogId: true,
+          aiCategoryId: true,
+          aiCategoryName: true,
+          finalCategoryId: true,
+          finalCategoryName: true,
+          aiConfidence: true,
+          metadata: true, // Contém subCategoryId e subCategoryName
+          createdAt: true,
+          ragSearchLog: {
+            select: {
+              userId: true,
+              query: true,
+              queryNormalized: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: 1000, // Buscar bastante para agrupar
+      });
+
+      // Agrupar por keyword normalizada
+      const grouped = new Map<
+        string,
+        {
+          keyword: string;
+          users: Set<string>;
+          occurrences: number;
+          suggestedCategoryId?: string;
+          suggestedCategoryName: string;
+          suggestedSubCategoryName?: string;
+          totalAiConfidence: number;
+          lastUsedAt: Date;
+          exampleQueries: string[];
+        }
+      >();
+
+      for (const log of aiLogsWithLearning) {
+        if (!log.ragSearchLog) continue;
+
+        const keyword = log.ragSearchLog.queryNormalized;
+        const userId = log.ragSearchLog.userId;
+        const categoryName = log.aiCategoryName || log.finalCategoryName;
+
+        // Extrair subcategoria do metadata
+        const metadata = log.metadata as any;
+        const subCategoryId = metadata?.subCategoryId || log.finalCategoryId;
+        const subCategoryName = metadata?.subCategoryName || metadata?.subCategory?.name;
+
+        if (!keyword || !categoryName) continue;
+
+        if (!grouped.has(keyword)) {
+          grouped.set(keyword, {
+            keyword,
+            users: new Set([userId]),
+            occurrences: 1,
+            suggestedCategoryId: log.aiCategoryId || log.finalCategoryId,
+            suggestedCategoryName: categoryName,
+            suggestedSubCategoryName: subCategoryName,
+            totalAiConfidence: Number(log.aiConfidence),
+            lastUsedAt: log.createdAt,
+            exampleQueries: [log.ragSearchLog.query],
+          });
+        } else {
+          const entry = grouped.get(keyword);
+          entry.users.add(userId);
+          entry.occurrences++;
+          entry.totalAiConfidence += Number(log.aiConfidence);
+
+          if (log.createdAt > entry.lastUsedAt) {
+            entry.lastUsedAt = log.createdAt;
+          }
+
+          // Adicionar query de exemplo se não tiver ainda
+          if (
+            entry.exampleQueries.length < 3 &&
+            !entry.exampleQueries.includes(log.ragSearchLog.query)
+          ) {
+            entry.exampleQueries.push(log.ragSearchLog.query);
+          }
+        }
+      }
+
+      // Filtrar por mínimo de ocorrências e ordenar
+      const suggestions = Array.from(grouped.values())
+        .filter((entry) => entry.occurrences >= minOccur)
+        .map((entry) => ({
+          keyword: entry.keyword,
+          userCount: entry.users.size,
+          totalOccurrences: entry.occurrences,
+          suggestedCategoryId: entry.suggestedCategoryId,
+          suggestedCategoryName: entry.suggestedCategoryName,
+          suggestedSubCategoryName: entry.suggestedSubCategoryName,
+          avgAiConfidence: entry.totalAiConfidence / entry.occurrences,
+          lastUsedAt: entry.lastUsedAt,
+          exampleQueries: entry.exampleQueries,
+        }))
+        .sort((a, b) => b.totalOccurrences - a.totalOccurrences)
+        .slice(0, limitNum);
+
+      return {
+        success: true,
+        suggestions,
+        total: suggestions.length,
+        filters: {
+          minOccurrences: minOccur,
+          minAiConfidence: minConf,
+          limit: limitNum,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar sugestões de sinônimos:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar sugestões de sinônimos',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Criar novo sinônimo
+   * POST /admin/synonyms
+   */
+  @Post('synonyms')
+  @HttpCode(HttpStatus.CREATED)
+  async createSynonym(
+    @Body()
+    dto: {
+      userId: string;
+      keyword: string;
+      categoryId: string;
+      categoryName: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+      confidence?: number;
+      source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED' | 'ADMIN_APPROVED';
+    },
+  ) {
+    this.logger.log(`🎯 Admin criando sinônimo: "${dto.keyword}" → ${dto.categoryName}`);
+
+    try {
+      // Validações
+      if (!dto.userId || !dto.keyword || !dto.categoryId || !dto.categoryName) {
+        throw new BadRequestException(
+          'userId, keyword, categoryId e categoryName são obrigatórios',
+        );
+      }
+
+      await this.ragService.addUserSynonym({
+        userId: dto.userId,
+        keyword: dto.keyword,
+        categoryId: dto.categoryId,
+        categoryName: dto.categoryName,
+        subCategoryId: dto.subCategoryId,
+        subCategoryName: dto.subCategoryName,
+        confidence: dto.confidence ?? 1.0,
+        source: dto.source ?? 'ADMIN_APPROVED',
+      });
+
+      return {
+        success: true,
+        message: 'Sinônimo criado com sucesso',
+        data: {
+          keyword: dto.keyword,
+          categoryName: dto.categoryName,
+          subCategoryName: dto.subCategoryName,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao criar sinônimo:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao criar sinônimo',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Criar múltiplos sinônimos em batch
+   * POST /admin/synonyms/batch
+   */
+  @Post('synonyms/batch')
+  @HttpCode(HttpStatus.CREATED)
+  async createSynonymsBatch(
+    @Body()
+    dto: {
+      synonyms: Array<{
+        userId: string;
+        keyword: string;
+        categoryId: string;
+        categoryName: string;
+        subCategoryId?: string;
+        subCategoryName?: string;
+        confidence?: number;
+        source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED' | 'ADMIN_APPROVED';
+      }>;
+    },
+  ) {
+    this.logger.log(`🎯 Admin criando ${dto.synonyms?.length || 0} sinônimos em batch`);
+
+    try {
+      if (!dto.synonyms || !Array.isArray(dto.synonyms) || dto.synonyms.length === 0) {
+        throw new BadRequestException('Array de sinônimos é obrigatório');
+      }
+
+      const results = {
+        created: 0,
+        failed: 0,
+        errors: [] as Array<{ keyword: string; error: string }>,
+      };
+
+      for (const synonym of dto.synonyms) {
+        try {
+          await this.ragService.addUserSynonym({
+            userId: synonym.userId,
+            keyword: synonym.keyword,
+            categoryId: synonym.categoryId,
+            categoryName: synonym.categoryName,
+            subCategoryId: synonym.subCategoryId,
+            subCategoryName: synonym.subCategoryName,
+            confidence: synonym.confidence ?? 1.0,
+            source: synonym.source ?? 'ADMIN_APPROVED',
+          });
+          results.created++;
+        } catch (error: any) {
+          results.failed++;
+          results.errors.push({
+            keyword: synonym.keyword,
+            error: error.message,
+          });
+        }
+      }
+
+      return {
+        success: true,
+        message: `${results.created} sinônimos criados, ${results.failed} falharam`,
+        ...results,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao criar sinônimos em batch:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao criar sinônimos em batch',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Criar sinônimo global para todos usuários
+   * POST /admin/synonyms/global
+   */
+  @Post('synonyms/global')
+  @HttpCode(HttpStatus.CREATED)
+  async createGlobalSynonym(
+    @Body()
+    dto: {
+      keyword: string;
+      categoryId: string;
+      categoryName: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+      confidence?: number;
+    },
+  ) {
+    this.logger.log(`🌍 Admin criando sinônimo global: "${dto.keyword}" → ${dto.categoryName}`);
+
+    try {
+      // Validações
+      if (!dto.keyword || !dto.categoryId || !dto.categoryName) {
+        throw new BadRequestException('keyword, categoryId e categoryName são obrigatórios');
+      }
+
+      // Buscar todos usuários ativos com cache
+      const activeUsers = await this.prisma.userCache.findMany({
+        where: {
+          isActive: true,
+        },
+        select: {
+          gastoCertoId: true,
+        },
+      });
+
+      const results = {
+        created: 0,
+        failed: 0,
+        totalUsers: activeUsers.length,
+      };
+
+      // Criar sinônimo para cada usuário
+      for (const user of activeUsers) {
+        try {
+          await this.ragService.addUserSynonym({
+            userId: user.gastoCertoId,
+            keyword: dto.keyword,
+            categoryId: dto.categoryId,
+            categoryName: dto.categoryName,
+            subCategoryId: dto.subCategoryId,
+            subCategoryName: dto.subCategoryName,
+            confidence: dto.confidence ?? 1.0,
+            source: 'ADMIN_APPROVED',
+          });
+          results.created++;
+        } catch (error) {
+          results.failed++;
+          // Não logar cada erro individual para não poluir logs
+        }
+      }
+
+      return {
+        success: true,
+        message: `Sinônimo global criado para ${results.created} usuários`,
+        ...results,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao criar sinônimo global:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao criar sinônimo global',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Listar sinônimos de um usuário
+   * GET /admin/synonyms/user/:userId
+   */
+  @Get('synonyms/user/:userId')
+  async getUserSynonyms(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+    @Query('sortBy') sortBy?: string,
+  ) {
+    this.logger.log(`📋 Admin solicitou sinônimos do usuário: ${userId}`);
+
+    try {
+      const limitNum = parseInt(limit) || 50;
+      const sortField = sortBy || 'usageCount';
+
+      const synonyms = await this.prisma.userSynonym.findMany({
+        where: { userId },
+        orderBy:
+          sortField === 'usageCount'
+            ? { usageCount: 'desc' }
+            : sortField === 'createdAt'
+              ? { createdAt: 'desc' }
+              : { confidence: 'desc' },
+        take: limitNum,
+      });
+
+      return {
+        success: true,
+        data: synonyms,
+        total: synonyms.length,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao listar sinônimos do usuário:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao listar sinônimos do usuário',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Deletar sinônimo
+   * DELETE /admin/synonyms/:id
+   */
+  @Delete('synonyms/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteSynonym(@Param('id') id: string) {
+    this.logger.log(`🗑️ Admin deletando sinônimo: ${id}`);
+
+    try {
+      await this.prisma.userSynonym.delete({
+        where: { id },
+      });
+
+      return {
+        success: true,
+        message: 'Sinônimo deletado com sucesso',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao deletar sinônimo:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao deletar sinônimo',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Estatísticas gerais de sinônimos
+   * GET /admin/synonyms/stats
+   */
+  @Get('synonyms/stats')
+  async getSynonymsStats() {
+    this.logger.log('📊 Admin solicitou estatísticas de sinônimos');
+
+    try {
+      // Total de sinônimos
+      const totalSynonyms = await this.prisma.userSynonym.count();
+
+      // Por source
+      const bySource = await this.prisma.userSynonym.groupBy({
+        by: ['source'],
+        _count: {
+          id: true,
+        },
+      });
+
+      // Top keywords (mais usados)
+      const topKeywords = await this.prisma.userSynonym.findMany({
+        select: {
+          keyword: true,
+          usageCount: true,
+          categoryName: true,
+        },
+        orderBy: {
+          usageCount: 'desc',
+        },
+        take: 10,
+      });
+
+      // Top categorias (com mais sinônimos)
+      const categoryGroups = await this.prisma.userSynonym.groupBy({
+        by: ['categoryName'],
+        _count: {
+          id: true,
+        },
+        orderBy: {
+          _count: {
+            id: 'desc',
+          },
+        },
+        take: 10,
+      });
+
+      // Sinônimos recentes (últimos 7 dias)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const recentlyCreated = await this.prisma.userSynonym.count({
+        where: {
+          createdAt: {
+            gte: sevenDaysAgo,
+          },
+        },
+      });
+
+      // Oportunidades de aprendizado
+      const learningOpportunities = await this.prisma.aIUsageLog.count({
+        where: {
+          needsSynonymLearning: true,
+        },
+      });
+
+      return {
+        success: true,
+        stats: {
+          totalSynonyms,
+          bySource: Object.fromEntries(bySource.map((s) => [s.source, s._count.id])),
+          topKeywords: topKeywords.map((k) => ({
+            keyword: k.keyword,
+            totalUsage: k.usageCount,
+            categoryName: k.categoryName,
+          })),
+          topCategories: categoryGroups.map((c) => ({
+            categoryName: c.categoryName,
+            synonymCount: c._count.id,
+          })),
+          recentlyCreated,
+          learningOpportunities,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar estatísticas de sinônimos:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar estatísticas de sinônimos',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  // ========================================
+  // 👤 USUÁRIO - RESUMO COMPLETO
+  // ========================================
+
+  /**
+   * Resumo completo do usuário para dashboard
+   * GET /admin/users/:userId/summary
+   * 
+   * Retorna dados do usuário + últimos 50 registros de:
+   * - RAG logs
+   - AI usage logs
+   * - Sinônimos
+   * - Transações (confirmações)
+   * - Mensagens não reconhecidas
+   * - Sessões de onboarding
+   */
+  @Get('users/:userId/summary')
+  async getUserSummary(@Param('userId') userId: string) {
+    this.logger.log(`📊 Admin solicitou resumo completo do usuário: ${userId}`);
+
+    try {
+      // 1. Buscar dados do usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: userId },
+      });
+
+      if (!user) {
+        return {
+          success: false,
+          message: 'Usuário não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // 2. RAG Search Logs (últimos 50)
+      const ragLogs = await this.prisma.rAGSearchLog.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          query: true,
+          queryNormalized: true,
+          bestMatch: true,
+          bestScore: true,
+          success: true,
+          ragMode: true,
+          responseTime: true,
+          wasAiFallback: true,
+          flowStep: true,
+          totalSteps: true,
+          aiProvider: true,
+          aiModel: true,
+          finalCategoryName: true,
+          createdAt: true,
+        },
+      });
+
+      // 3. AI Usage Logs (últimos 50)
+      const aiLogs = await this.prisma.aIUsageLog.findMany({
+        where: { userCacheId: user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          provider: true,
+          model: true,
+          operation: true,
+          inputType: true,
+          totalTokens: true,
+          estimatedCost: true,
+          responseTime: true,
+          success: true,
+          aiCategoryName: true,
+          finalCategoryName: true,
+          aiConfidence: true,
+          wasRagFallback: true,
+          needsSynonymLearning: true,
+          createdAt: true,
+        },
+      });
+
+      // 4. Sinônimos do usuário (todos, limitado a 50)
+      const synonyms = await this.prisma.userSynonym.findMany({
+        where: { userId },
+        orderBy: { usageCount: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          keyword: true,
+          categoryName: true,
+          subCategoryName: true,
+          confidence: true,
+          source: true,
+          usageCount: true,
+          lastUsedAt: true,
+          createdAt: true,
+        },
+      });
+
+      // 5. Confirmações de transações (últimas 50)
+      const transactionConfirmations = await this.prisma.transactionConfirmation.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          description: true,
+          amount: true,
+          category: true,
+          categoryId: true,
+          subCategoryId: true,
+          subCategoryName: true,
+          type: true,
+          date: true,
+          status: true,
+          createdAt: true,
+          confirmedAt: true,
+        },
+      });
+
+      // 6. Mensagens não reconhecidas (últimas 50)
+      const unrecognizedMessages = await this.prisma.unrecognizedMessage.findMany({
+        where: { userCacheId: user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          messageText: true,
+          detectedIntent: true,
+          confidence: true,
+          wasProcessed: true,
+          addedToContext: true,
+          createdAt: true,
+        },
+      });
+
+      // 7. Sessões de onboarding (últimas 10)
+      const onboardingSessions = await this.prisma.onboardingSession.findMany({
+        where: { phoneNumber: user.phoneNumber },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: {
+          id: true,
+          platformId: true,
+          currentStep: true,
+          completed: true,
+          attempts: true,
+          lastMessageAt: true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      // 8. Calcular estatísticas
+      const stats = {
+        rag: {
+          total: ragLogs.length,
+          successful: ragLogs.filter((l) => l.success).length,
+          successRate:
+            ragLogs.length > 0
+              ? ((ragLogs.filter((l) => l.success).length / ragLogs.length) * 100).toFixed(2) + '%'
+              : '0%',
+          aiFallbackCount: ragLogs.filter((l) => l.wasAiFallback).length,
+          avgResponseTime:
+            ragLogs.length > 0
+              ? Math.round(
+                  ragLogs.reduce((sum, l) => sum + (l.responseTime || 0), 0) / ragLogs.length,
+                ) + 'ms'
+              : '0ms',
+        },
+        ai: {
+          total: aiLogs.length,
+          successful: aiLogs.filter((l) => l.success).length,
+          totalTokens: aiLogs.reduce((sum, l) => sum + l.totalTokens, 0),
+          totalCost: aiLogs.reduce((sum, l) => sum + Number(l.estimatedCost), 0).toFixed(6),
+          needsSynonymLearning: aiLogs.filter((l) => l.needsSynonymLearning).length,
+          avgResponseTime:
+            aiLogs.length > 0
+              ? Math.round(
+                  aiLogs.reduce((sum, l) => sum + (l.responseTime || 0), 0) / aiLogs.length,
+                ) + 'ms'
+              : '0ms',
+        },
+        synonyms: {
+          total: synonyms.length,
+          totalUsage: synonyms.reduce((sum, s) => sum + s.usageCount, 0),
+          bySource: synonyms.reduce(
+            (acc, s) => {
+              acc[s.source] = (acc[s.source] || 0) + 1;
+              return acc;
+            },
+            {} as Record<string, number>,
+          ),
+        },
+        transactions: {
+          total: transactionConfirmations.length,
+          confirmed: transactionConfirmations.filter((t) => t.status === 'CONFIRMED').length,
+          pending: transactionConfirmations.filter((t) => t.status === 'PENDING').length,
+          totalAmount: transactionConfirmations
+            .reduce((sum, t) => sum + Number(t.amount), 0)
+            .toFixed(2),
+        },
+        unrecognized: {
+          total: unrecognizedMessages.length,
+          notProcessed: unrecognizedMessages.filter((m) => !m.wasProcessed).length,
+        },
+        onboarding: {
+          total: onboardingSessions.length,
+          completed: onboardingSessions.filter((s) => s.completed).length,
+          inProgress: onboardingSessions.filter((s) => !s.completed).length,
+        },
+      };
+
+      return {
+        success: true,
+        user: {
+          id: user.id,
+          gastoCertoId: user.gastoCertoId,
+          phoneNumber: user.phoneNumber,
+          whatsappId: user.whatsappId,
+          telegramId: user.telegramId,
+          email: user.email,
+          name: user.name,
+          hasActiveSubscription: user.hasActiveSubscription,
+          isBlocked: user.isBlocked,
+          isActive: user.isActive,
+          activeAccountId: user.activeAccountId,
+          accounts: user.accounts,
+          lastSyncAt: user.lastSyncAt,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+        },
+        stats,
+        data: {
+          ragLogs: ragLogs.map((log) => ({
+            ...log,
+            bestScore: log.bestScore ? Number(log.bestScore) : null,
+          })),
+          aiLogs: aiLogs.map((log) => ({
+            ...log,
+            estimatedCost: Number(log.estimatedCost),
+            aiConfidence: log.aiConfidence ? Number(log.aiConfidence) : null,
+          })),
+          synonyms,
+          transactionConfirmations: transactionConfirmations.map((t) => ({
+            ...t,
+            amount: Number(t.amount),
+          })),
+          unrecognizedMessages,
+          onboardingSessions,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar resumo do usuário:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar resumo do usuário',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
