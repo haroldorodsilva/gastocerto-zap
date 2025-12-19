@@ -97,7 +97,7 @@ model UserCache {
   name                  String
   hasActiveSubscription Boolean @default(false)
   isBlocked             Boolean @default(false) // 🆕 Usuário bloqueado (não pode usar o sistema)
-  isActive              Boolean @default(true)  // 🆕 Usuário ativo (conta não desativada)
+  isActive              Boolean @default(true) // 🆕 Usuário ativo (conta não desativada)
 
   // 🆕 Gerenciamento de múltiplas contas
   activeAccountId String? // ID da conta ativa no momento (usado para todas operações)
@@ -191,13 +191,30 @@ model AIUsageLog {
   success       Boolean         @default(true)
   errorMessage  String?
   metadata      Json? // Dados adicionais (ex: confidence, categoria extraída)
-  createdAt     DateTime        @default(now())
+
+  // 🆕 Contexto RAG para análise e melhoria
+  ragSearchLogId       String? // ID do RAGSearchLog relacionado (se veio do fluxo RAG)
+  ragInitialFound      Boolean? // true se RAG encontrou algo no step 1 (mesmo abaixo do threshold)
+  ragInitialScore      Decimal? @db.Decimal(5, 4) // Score do RAG inicial (step 1)
+  ragInitialCategory   String? // Categoria que RAG sugeriu no step 1
+  aiCategoryId         String? // ID da categoria que IA retornou
+  aiCategoryName       String? // Nome da categoria que IA retornou
+  aiConfidence         Decimal? @db.Decimal(5, 4) // Confiança da IA
+  finalCategoryId      String? // ID da categoria final escolhida (após validação)
+  finalCategoryName    String? // Nome da categoria final escolhida
+  wasRagFallback       Boolean  @default(false) // true se foi fallback de RAG que falhou
+  needsSynonymLearning Boolean  @default(false) // true se deve extrair sinônimos desta interação
+
+  createdAt DateTime @default(now())
 
   @@index([userCacheId])
   @@index([phoneNumber])
   @@index([provider])
   @@index([operation])
   @@index([createdAt])
+  @@index([ragSearchLogId]) // Para vincular com RAG log
+  @@index([wasRagFallback]) // Para análise de fallbacks
+  @@index([needsSynonymLearning]) // Para processar aprendizado de sinônimos
   @@map("ai_usage_logs")
 }
 
@@ -214,12 +231,30 @@ model RAGSearchLog {
   success         Boolean // true se encontrou match >= threshold
   ragMode         String   @default("BM25") // "BM25" ou "AI" (embeddings)
   responseTime    Int? // Tempo de resposta em ms
-  createdAt       DateTime @default(now())
+
+  // 🆕 Rastreamento completo do fluxo RAG → IA → RAG
+  flowStep          Int      @default(1) // 1=RAG inicial, 2=IA fallback, 3=RAG validação final
+  totalSteps        Int      @default(1) // Total de steps executados (1, 2 ou 3)
+  aiProvider        String? // Provider de IA usado se ragMode="AI" ou flowStep=2 (ex: "openai", "groq")
+  aiModel           String? // Modelo usado (ex: "text-embedding-ada-002", "gpt-4o")
+  aiConfidence      Decimal? @db.Decimal(5, 4) // Confiança da IA (se usou IA no step 2)
+  aiCategoryId      String? // ID da categoria que a IA retornou (step 2)
+  aiCategoryName    String? // Nome da categoria que a IA retornou (step 2)
+  finalCategoryId   String? // ID da categoria final escolhida (após todos os steps)
+  finalCategoryName String? // Nome da categoria final escolhida
+  ragInitialScore   Decimal? @db.Decimal(5, 4) // Score do RAG no step 1 (mesmo que não passou threshold)
+  ragFinalScore     Decimal? @db.Decimal(5, 4) // Score do RAG no step 3 (validação final, se houver)
+  wasAiFallback     Boolean  @default(false) // true se precisou usar IA (step 2) porque RAG falhou
+
+  createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([success])
   @@index([createdAt])
   @@index([userId, success]) // Para queries falhas por usuário
+  @@index([wasAiFallback]) // Para análise de quando IA foi necessária
+  @@index([flowStep]) // Para análise por step
+  @@index([aiProvider]) // Para análise por provider de IA
   @@map("rag_search_logs")
 }
 
@@ -227,19 +262,19 @@ model RAGSearchLog {
 // Permite que o sistema aprenda termos específicos de cada usuário
 // Ex: "pro labore" → Categoria "Receitas → Salário", "inss" → "Impostos → INSS"
 model UserSynonym {
-  id          String   @id @default(uuid())
-  userId      String // gastoCertoId do UserCache
-  keyword     String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook")
-  categoryId  String // ID da categoria mapeada na API externa
-  categoryName String // Nome da categoria (cache para exibição)
-  subCategoryId String? // ID da subcategoria (se houver)
+  id              String        @id @default(uuid())
+  userId          String // gastoCertoId do UserCache
+  keyword         String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook")
+  categoryId      String // ID da categoria mapeada na API externa
+  categoryName    String // Nome da categoria (cache para exibição)
+  subCategoryId   String? // ID da subcategoria (se houver)
   subCategoryName String? // Nome da subcategoria (cache para exibição)
-  confidence  Float    @default(1.0) // Confiança do mapeamento (0-1): USER_CONFIRMED=1.0, AI_SUGGESTED=0.7, AUTO_LEARNED=0.5
-  source      SynonymSource @default(USER_CONFIRMED) // Origem do sinônimo
-  usageCount  Int      @default(0) // Quantas vezes foi usado (para analytics)
-  lastUsedAt  DateTime? // Última vez que foi usado
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  confidence      Float         @default(1.0) // Confiança do mapeamento (0-1): USER_CONFIRMED=1.0, AI_SUGGESTED=0.7, AUTO_LEARNED=0.5
+  source          SynonymSource @default(USER_CONFIRMED) // Origem do sinônimo
+  usageCount      Int           @default(0) // Quantas vezes foi usado (para analytics)
+  lastUsedAt      DateTime? // Última vez que foi usado
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@unique([userId, keyword]) // Um usuário não pode ter keywords duplicadas
   @@index([userId]) // Buscar todos sinônimos de um usuário
@@ -249,10 +284,10 @@ model UserSynonym {
 }
 
 enum SynonymSource {
-  USER_CONFIRMED  // Usuário confirmou explicitamente: "Sim, 'pro labore' é Receitas → Salário"
-  AI_SUGGESTED    // IA sugeriu e usuário aceitou
-  AUTO_LEARNED    // Sistema aprendeu automaticamente (padrão detectado)
-  IMPORTED        // Importado de outro usuário ou base de conhecimento
+  USER_CONFIRMED // Usuário confirmou explicitamente: "Sim, 'pro labore' é Receitas → Salário"
+  AI_SUGGESTED // IA sugeriu e usuário aceitou
+  AUTO_LEARNED // Sistema aprendeu automaticamente (padrão detectado)
+  IMPORTED // Importado de outro usuário ou base de conhecimento
 }
 
 enum AIOperationType {

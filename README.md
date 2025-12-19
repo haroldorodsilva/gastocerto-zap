@@ -17,6 +17,8 @@ GastoCerto-ZAP é um microserviço conversacional que permite gerenciar finança
 - 🔄 **Cache-First Strategy** (Redis + PostgreSQL)
 - 📊 **Processamento Assíncrono** (Bull Queues)
 - 🔐 **Autenticação Dupla** (JWT admin + HMAC service-to-service)
+- 🆕 **RAG Tracking & Analytics** (Rastreamento completo RAG → IA → RAG)
+- 🆕 **Aprendizado de Sinônimos** (4 estratégias: Auto, User, Admin, Hybrid)
 
 ---
 
@@ -37,6 +39,7 @@ GastoCerto-ZAP é um microserviço conversacional que permite gerenciar finança
 | **[IA Config](./docs/AI_CONFIG_GUIDE.md)** | Setup de providers (OpenAI, Gemini, Groq, DeepSeek) |
 | **[NLP & Intents](./docs/NLP_INTENT_MATCHING.md)** | Sistema de análise de intenções |
 | **[RAG (Opcional)](./docs/RAG_IMPLEMENTATION.md)** | Categorização semântica com pgvector |
+| **[RAG Tracking & Analytics](./docs/RAG_TRACKING_ANALYSIS.md)** | 🆕 Rastreamento completo RAG → IA → RAG e extração de sinônimos |
 | **[Admin API](./docs/ADMIN_API_DOCUMENTATION.md)** | Endpoints administrativos |
 
 ---
