@@ -111,22 +111,24 @@ export class OnboardingStateService {
 
       if (completedSession) {
         this.logger.warn(
-          `❌ BLOQUEADO: Usuário já completou onboarding:\n` +
+          `⚠️ ATENÇÃO: Usuário já completou onboarding mas não está no cache:\n` +
             `  - id: ${completedSession.id}\n` +
             `  - platformId: ${completedSession.platformId}\n` +
             `  - currentStep: ${completedSession.currentStep}\n` +
             `  - completed: ${completedSession.completed}\n` +
+            `  🔧 AÇÃO: Deletando sessão completa para permitir novo onboarding\n` +
             `========================================`,
         );
-        return {
-          completed: true,
-          currentStep: OnboardingStep.COMPLETED,
-          message: '✅ Seu cadastro já foi concluído anteriormente.',
-          data: completedSession.data as any,
-        };
+        
+        // Deletar a sessão completa para permitir novo onboarding
+        await this.prisma.onboardingSession.delete({
+          where: { id: completedSession.id },
+        });
+        
+        this.logger.log(`✅ Sessão completa deletada - prosseguindo com novo onboarding`);
+      } else {
+        this.logger.log(`ℹ️ Nenhuma sessão completa encontrada - OK para criar nova`);
       }
-      
-      this.logger.log(`ℹ️ Nenhuma sessão completa encontrada - OK para criar nova`);
 
       // Preparar dados iniciais com platform
       const initialData: any = {};

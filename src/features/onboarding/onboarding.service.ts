@@ -32,12 +32,26 @@ export class OnboardingService {
   async handleMessage(message: IFilteredMessage): Promise<void> {
     const { phoneNumber, text } = message;
 
+    this.logger.log(
+      `📥 [HANDLE MESSAGE] Received message:\n` +
+        `  - phoneNumber: ${phoneNumber}\n` +
+        `  - text: ${text?.substring(0, 50)}\n` +
+        `  - platform: ${message.platform}`,
+    );
+
     if (!text) {
-      this.logger.warn(`Message from ${phoneNumber} has no text content`);
+      this.logger.warn(`⚠️ [HANDLE MESSAGE] Message from ${phoneNumber} has no text content`);
       return;
     }
 
+    this.logger.log(`📤 [HANDLE MESSAGE] Calling processOnboardingMessage...`);
     const result = await this.processOnboardingMessage(phoneNumber, text);
+    this.logger.log(
+      `📤 [HANDLE MESSAGE] processOnboardingMessage result:\n` +
+        `  - shouldSendMessage: ${result.shouldSendMessage}\n` +
+        `  - currentStep: ${result.response.currentStep}\n` +
+        `  - hasMessage: ${!!result.response.message}`,
+    );
 
     if (result.shouldSendMessage && result.response.message) {
       // Detectar plataforma dinamicamente através do contexto
@@ -48,6 +62,7 @@ export class OnboardingService {
 
       this.logger.debug(`📤 Detectada plataforma ${platform} para ${phoneNumber}`);
 
+      this.logger.log(`📤 [HANDLE MESSAGE] Emitting ${eventName} event...`);
       // Enviar mensagem via MessageResponseService (genérico)
       this.eventEmitter.emit(eventName, {
         platformId: phoneNumber,
@@ -61,6 +76,10 @@ export class OnboardingService {
 
       this.logger.log(
         `📤 Onboarding reply emitted [${platform}] for ${phoneNumber}: ${result.response.message.substring(0, 50)}...`,
+      );
+    } else {
+      this.logger.log(
+        `📤 [HANDLE MESSAGE] NOT sending message (shouldSendMessage=${result.shouldSendMessage})`,
       );
     }
   }
@@ -522,12 +541,15 @@ export class OnboardingService {
    * Verifica se usuário está em processo de onboarding
    */
   async isInOnboarding(phoneNumber: string): Promise<boolean> {
+    this.logger.log(`🔍 [ONBOARDING CHECK] Checking isInOnboarding for: ${phoneNumber}`);
     const session = await this.onboardingState.getActiveSession(phoneNumber);
     const result = session !== null && !session.completed;
 
     this.logger.log(
-      `🔍 [ONBOARDING] isInOnboarding(${phoneNumber}): ${result}\n` +
+      `🔍 [ONBOARDING CHECK] isInOnboarding(${phoneNumber}): ${result}\n` +
         `  - session found: ${session !== null}\n` +
+        `  - session id: ${session?.id}\n` +
+        `  - currentStep: ${session?.currentStep}\n` +
         `  - completed: ${session?.completed}`,
     );
 
@@ -557,8 +579,18 @@ export class OnboardingService {
   /**
    * Inicia processo de onboarding
    */
-  async startOnboarding(userId: string, platform?: 'telegram' | 'whatsapp'): Promise<void> {
-    await this.onboardingState.startOnboarding(userId, platform);
+  async startOnboarding(
+    userId: string,
+    platform?: 'telegram' | 'whatsapp',
+  ): Promise<OnboardingResponse> {
+    this.logger.log(
+      `🚀 [START ONBOARDING] Starting onboarding for ${userId} on platform ${platform}`,
+    );
+    const response = await this.onboardingState.startOnboarding(userId, platform);
+    this.logger.log(
+      `✅ [START ONBOARDING] Onboarding response: completed=${response.completed}, step=${response.currentStep}`,
+    );
+    return response;
   }
 
   /**

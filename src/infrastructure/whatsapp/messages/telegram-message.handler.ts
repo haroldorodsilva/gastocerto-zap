@@ -89,12 +89,18 @@ export class TelegramMessageHandler {
 
       // 1. PRIMEIRO: Verificar se está em processo de onboarding (ANTES de verificar usuário)
       // Isso evita o loop de verificação de usuário não existente
+      this.logger.log(`[Telegram] 🔍 Checking if ${userId} is in onboarding...`);
       const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
+      this.logger.log(`[Telegram] 🔍 isOnboarding result: ${isOnboarding}`);
+      
       if (isOnboarding) {
-        this.logger.log(`[Telegram] 📝 User ${userId} is in onboarding - processing message`);
+        this.logger.log(`[Telegram] 📝 User ${userId} IS IN ONBOARDING - processing onboarding message`);
         await this.handleOnboardingMessage(sessionId, message);
+        this.logger.log(`[Telegram] ✅ Onboarding message processed for ${userId}`);
         return;
       }
+      
+      this.logger.log(`[Telegram] ℹ️ User ${userId} is NOT in onboarding - checking if user exists...`);
 
       // 2. Buscar dados completos do usuário (com isBlocked e isActive)
       // 🔧 CRÍTICO: Usar getUserByTelegram para Telegram (busca por chatId/telegramId)
@@ -116,10 +122,13 @@ export class TelegramMessageHandler {
 
       // 3. Se usuário não existe, iniciar onboarding
       if (!user) {
-        this.logger.log(`[Telegram] New user detected: ${userId}, starting onboarding`);
+        this.logger.log(`[Telegram] ⭐ NEW USER DETECTED: ${userId} - STARTING ONBOARDING`);
         await this.startOnboarding(sessionId, message);
+        this.logger.log(`[Telegram] ✅ Onboarding STARTED for new user ${userId}`);
         return;
       }
+      
+      this.logger.log(`[Telegram] ✅ User ${userId} FOUND in cache - proceeding with normal flow`);
 
       // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
       if (user.isBlocked) {
@@ -179,7 +188,19 @@ export class TelegramMessageHandler {
     const userId = message.chatId;
 
     // Iniciar sessão de onboarding com platform 'telegram'
-    await this.onboardingService.startOnboarding(userId, 'telegram');
+    const response = await this.onboardingService.startOnboarding(userId, 'telegram');
+
+    // 🔧 CRÍTICO: Verificar se usuário já completou onboarding
+    if (response.completed) {
+      this.logger.warn(`⚠️ User ${userId} already completed onboarding - sending completion message`);
+      this.eventEmitter.emit('telegram.reply', {
+        platformId: userId,
+        message: response.message || '✅ Seu cadastro já foi concluído anteriormente.',
+        context: 'INTENT_RESPONSE',
+        platform: MessagingPlatform.TELEGRAM,
+      });
+      return;
+    }
 
     // Enviar mensagem de boas-vindas via evento
     this.eventEmitter.emit('telegram.reply', {
@@ -204,11 +225,13 @@ export class TelegramMessageHandler {
     sessionId: string,
     message: IncomingMessage,
   ): Promise<void> {
-    this.logger.log('📝 Processing onboarding message');
+    this.logger.log('📝 [HANDLE ONBOARDING] Processing onboarding message');
     const userId = message.chatId;
+    this.logger.log(`📝 [HANDLE ONBOARDING] userId: ${userId}, messageType: ${message.type}, text: ${message.text?.substring(0, 50)}`);
 
     // Aceitar mensagens de texto ou contact (para compartilhamento de telefone)
     if (message.type !== MessageType.TEXT || !message.text) {
+      this.logger.log(`📝 [HANDLE ONBOARDING] Invalid message type, sending error`);
       this.eventEmitter.emit('telegram.reply', {
         platformId: userId,
         message: '❌ Por favor, envie uma mensagem de texto.',
@@ -218,6 +241,7 @@ export class TelegramMessageHandler {
       return;
     }
 
+    this.logger.log(`📝 [HANDLE ONBOARDING] Converting to IFilteredMessage...`);
     // Converter IncomingMessage para IFilteredMessage
     const filteredMessage: IFilteredMessage = {
       messageId: message.id,
@@ -229,8 +253,10 @@ export class TelegramMessageHandler {
       platform: 'telegram',
     };
 
+    this.logger.log(`📝 [HANDLE ONBOARDING] Calling onboardingService.handleMessage...`);
     // Usar handleMessage que emite eventos automaticamente
     await this.onboardingService.handleMessage(filteredMessage);
+    this.logger.log(`📝 [HANDLE ONBOARDING] ✅ onboardingService.handleMessage completed`);
   }
 
   /**

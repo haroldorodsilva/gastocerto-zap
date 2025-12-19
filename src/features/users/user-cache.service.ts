@@ -328,24 +328,65 @@ export class UserCacheService {
         normalizedPhone = this.normalizePhoneNumber(platformId);
       }
 
-      // ✅ NOVO: Verificar se usuário já existe
-      const existing = await this.prisma.userCache.findUnique({
-        where: { phoneNumber: normalizedPhone },
+      // ✅ CRÍTICO: Verificar se usuário já existe por gastoCertoId OU phoneNumber
+      const existingByGastoCertoId = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: apiUser.id },
       });
 
-      if (existing) {
+      const existingByPhone = normalizedPhone
+        ? await this.prisma.userCache.findUnique({
+            where: { phoneNumber: normalizedPhone },
+          })
+        : null;
+
+      // Se já existe, atualizar ao invés de criar
+      if (existingByGastoCertoId || existingByPhone) {
+        const existing = existingByGastoCertoId || existingByPhone;
         this.logger.warn(
-          `⚠️ Usuário já existe com phoneNumber ${normalizedPhone}. Vinculando plataforma...`,
+          `⚠️ Usuário já existe (gastoCertoId: ${existing?.gastoCertoId}, phone: ${existing?.phoneNumber}). Atualizando dados...`,
         );
 
-        // Vincular plataforma automaticamente
-        const linkResult = await this.linkPlatform(normalizedPhone, platformId, platform);
+        // Preparar dados de atualização
+        const accounts = (apiUser.accounts || []).map((acc) => ({
+          id: acc.id,
+          name: acc.name,
+          type: acc.role || 'PF',
+          isPrimary: acc.isPrimary,
+        }));
 
-        if (linkResult.success && linkResult.user) {
-          return linkResult.user;
+        const activeAccountId =
+          accounts.find((acc) => acc.isPrimary)?.id || accounts[0]?.id || null;
+
+        const updateData: any = {
+          phoneNumber: normalizedPhone || existing!.phoneNumber,
+          email: apiUser.email,
+          name: apiUser.name,
+          hasActiveSubscription: apiUser.hasActiveSubscription ?? false,
+          isBlocked: apiUser.isBlocked ?? false,
+          isActive: apiUser.isActive ?? true,
+          accounts: accounts as any,
+          activeAccountId,
+          categories: (apiUser.categories || []) as any,
+          preferences: (apiUser.preferences || {}) as any,
+          lastSyncAt: new Date(),
+        };
+
+        // Adicionar campo da plataforma se não existir
+        if (platform === 'telegram' && !existing!.telegramId) {
+          updateData.telegramId = platformId;
+        } else if (platform === 'whatsapp' && !existing!.whatsappId) {
+          updateData.whatsappId = platformId;
         }
 
-        throw new Error('Usuário já existe mas não foi possível vincular plataforma');
+        const userCache = await this.prisma.userCache.update({
+          where: { id: existing!.id },
+          data: updateData,
+        });
+
+        this.logger.log(
+          `✅ Cache atualizado - ${platform}: ${apiUser.name} | Phone: ${normalizedPhone} | PlatformId: ${platformId}`,
+        );
+        return userCache;
       }
 
       // Preparar contas do usuário

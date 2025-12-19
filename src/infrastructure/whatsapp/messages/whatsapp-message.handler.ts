@@ -162,7 +162,13 @@ export class WhatsAppMessageHandler {
       // 3. Se usuário não existe, iniciar onboarding
       if (!user) {
         this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
-        await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
+        const response = await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
+        
+        // 🔧 CRÍTICO: Se usuário já completou onboarding, enviar mensagem e retornar
+        if (response.completed) {
+          this.logger.warn(`⚠️ User ${phoneNumber} already completed onboarding`);
+          this.sendMessage(phoneNumber, response.message || '✅ Seu cadastro já foi concluído anteriormente.');
+        }
         return;
       }
 
