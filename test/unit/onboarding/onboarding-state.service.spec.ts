@@ -15,6 +15,8 @@ describe('OnboardingStateService - Bug platformId', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findFirst: jest.fn().mockResolvedValue({ id: 1, platformId: '707624962', completed: true }),
         upsert: jest.fn().mockResolvedValue({ id: 1, platformId: '707624962', phoneNumber: null }),
+        delete: jest.fn().mockResolvedValue({ id: 1 }),
+        create: jest.fn().mockResolvedValue({ id: 1, platformId: '707624962', phoneNumber: null }),
       },
     };
 
@@ -67,13 +69,13 @@ describe('OnboardingStateService - Bug platformId', () => {
     
     await service.startOnboarding('707624962', 'telegram');
     
-    // Get the first call to upsert
-    const calls = (prisma.onboardingSession.upsert as jest.Mock).mock.calls;
+    // Get the first call to create (not upsert anymore)
+    const calls = (prisma.onboardingSession.create as jest.Mock).mock.calls;
     expect(calls.length).toBeGreaterThan(0);
     
     const [params] = calls[0];
     
-    expect(params.create.platformId).toBe('707624962');
-    expect(params.create.phoneNumber).toBeNull();
+    expect(params.data.platformId).toBe('707624962');
+    expect(params.data.phoneNumber).toBeNull();
   });
 });

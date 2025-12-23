@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, forwardRef, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@core/database/prisma.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
@@ -17,6 +17,7 @@ import {
 } from '../../dto/transaction.dto';
 import { DateUtil } from '../../../../utils/date.util';
 import { TemporalParserService } from '@common/services/temporal-parser.service';
+import { MessageLearningService } from '../../message-learning.service';
 
 /**
  * TransactionRegistrationService
@@ -46,11 +47,21 @@ export class TransactionRegistrationService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly temporalParser: TemporalParserService,
+    @Optional()
+    @Inject(forwardRef(() => MessageLearningService))
+    private readonly messageLearningService?: MessageLearningService,
     @Optional() private readonly ragService?: RAGService,
   ) {
     // Valores temporários até carregar do banco
     this.autoRegisterThreshold = 0.9;
     this.minConfidenceThreshold = 0.5;
+
+    // ✅ LOG DE DEBUG DE INJEÇÃO
+    this.logger.log(
+      `🎓 [TransactionRegistrationService] Inicializado com: ` +
+        `messageLearningService=${!!messageLearningService}, ` +
+        `ragService=${!!ragService}`,
+    );
 
     // Carregar configurações do banco
     this.loadSettings();
@@ -407,6 +418,54 @@ export class TransactionRegistrationService {
           message: validationResult.message,
           requiresConfirmation: false,
         };
+      }
+
+      // 3.5. Resolver categoria/subcategoria ANTES do aprendizado (para ter IDs corretos)
+      const resolved = await this.resolveCategoryAndSubcategory(
+        user.gastoCertoId,
+        user.activeAccountId,
+        extractedData.category,
+        extractedData.subCategory,
+        extractedData.type,
+      );
+
+      // Enriquecer extractedData com IDs resolvidos
+      extractedData.categoryId = resolved.categoryId;
+      extractedData.subCategoryId = resolved.subCategoryId;
+
+      // 4. 🎓 Verificar se precisa de aprendizado (detecção de termo desconhecido)
+      this.logger.debug(
+        `🎓 [DEBUG] Verificando aprendizado: messageLearningService=${!!this.messageLearningService}`,
+      );
+
+      if (this.messageLearningService) {
+        this.logger.debug(
+          `🎓 [DEBUG] Chamando detectAndPrepareConfirmation com: phoneNumber=${phoneNumber}, text="${text}", categoryId=${extractedData.categoryId}`,
+        );
+
+        const learningResult = await this.messageLearningService.detectAndPrepareConfirmation(
+          phoneNumber,
+          text,
+          extractedData,
+        );
+
+        this.logger.debug(
+          `🎓 [DEBUG] Resultado do aprendizado: needsConfirmation=${learningResult.needsConfirmation}`,
+        );
+
+        if (learningResult.needsConfirmation) {
+          this.logger.log(
+            `🎓 Termo desconhecido detectado para ${phoneNumber} - Enviando confirmação de aprendizado`,
+          );
+          return {
+            success: true,
+            message: learningResult.message,
+            requiresConfirmation: true,
+            confirmationId: 'learning',
+          };
+        }
+      } else {
+        this.logger.warn(`⚠️ MessageLearningService não está disponível!`);
       }
 
       // 5. Sempre criar confirmação (a lógica de auto-register está no createConfirmation)
@@ -774,6 +833,17 @@ export class TransactionRegistrationService {
                 }
               }
 
+              // Formatar data para exibição
+              const formattedDate = validDate.toLocaleDateString('pt-BR', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+              });
+
+              // Formatar perfil temporal
+              const temporalProfile = data.temporalInfo?.profile || 'TODAY';
+              const temporalText = this.formatTemporalProfile(temporalProfile);
+
               return {
                 success: true,
                 message:
@@ -781,6 +851,7 @@ export class TransactionRegistrationService {
                   `💵 *Valor:* R$ ${data.amount.toFixed(2)}\n` +
                   `📂 *Categoria:* ${data.category}${data.subCategory ? ` > ${data.subCategory}` : ''}\n` +
                   `${data.description ? `📝 ${data.description}\n` : ''}` +
+                  `📅 *Data:* ${formattedDate} (${temporalText})\n` +
                   `👤 *Perfil:* ${accountName}\n`,
                 // `🤖 _Registrado com ${(data.confidence * 100).toFixed(1)}% de confiança_`,
                 requiresConfirmation: false,
@@ -922,11 +993,33 @@ export class TransactionRegistrationService {
           }
         }
 
+        // Formatar data para exibição
+        const transactionDate = new Date(confirmation.date);
+        const formattedDate = transactionDate.toLocaleDateString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+
+        // Tentar extrair perfil temporal do extractedData
+        let temporalText = 'hoje';
+        try {
+          const extractedData =
+            typeof confirmation.extractedData === 'string'
+              ? JSON.parse(confirmation.extractedData)
+              : confirmation.extractedData;
+          const temporalProfile = extractedData?.temporalInfo?.profile || 'TODAY';
+          temporalText = this.formatTemporalProfile(temporalProfile);
+        } catch (error) {
+          // Ignorar erro de parsing
+        }
+
         const successMessage =
           `${typeEmoji} *Transação registrada com sucesso!*\n\n` +
           `💵 *Valor:* R$ ${(Number(confirmation.amount) / 100).toFixed(2)}\n` +
           `📂 *Categoria:* ${confirmation.category}${subCategoryText}\n` +
           `${confirmation.description ? `📝 ${confirmation.description}\n` : ''}` +
+          `📅 *Data:* ${formattedDate} (${temporalText})\n` +
           `👤 *Perfil:* ${accountName}`;
 
         return {
@@ -1489,6 +1582,7 @@ export class TransactionRegistrationService {
     // 3. Detectar data com TemporalParser (suporta expressões complexas)
     const today = new Date();
     let date: Date | string = today;
+    let temporalInfo: any = null;
 
     try {
       // TemporalParser pode detectar:
@@ -1496,16 +1590,29 @@ export class TransactionRegistrationService {
       // - "dia 15", "dia 10 do mês que vem"
       // - "próxima semana", "mês passado"
       // - "início do mês", "fim da semana"
-      const parsedDate = this.temporalParser.parseAndCalculateDate(text, today);
+      const analysis = this.temporalParser.parseTemporalExpression(text);
+      const parsedDate = this.temporalParser.calculateDate(
+        today,
+        analysis.timeReference,
+        analysis.specificDay,
+      );
       date = parsedDate;
 
+      // Salvar informações temporais para exibir ao usuário
+      temporalInfo = {
+        profile: analysis.timeReference || 'TODAY',
+        confidence: analysis.confidence,
+        specificDay: analysis.specificDay,
+      };
+
       this.logger.debug(
-        `📅 TemporalParser detectou data: ${parsedDate.toISOString().split('T')[0]} para texto: "${text.substring(0, 50)}"`,
+        `📅 TemporalParser detectou data: ${parsedDate.toISOString().split('T')[0]} (perfil: ${temporalInfo.profile}) para texto: "${text.substring(0, 50)}"`,
       );
     } catch (error) {
-      // Fallback: se TemporalParser falhar, usar data atual
+      // Fallback: se TemporalParser falhou, usar data atual
       this.logger.warn(`⚠️ TemporalParser falhou, usando data atual:`, error);
       date = today;
+      temporalInfo = { profile: 'TODAY', confidence: 1.0 };
     }
 
     // 4. Extrair descrição (remover valor e palavras-chave)
@@ -1533,6 +1640,7 @@ export class TransactionRegistrationService {
       date,
       confidence: 0.85, // Confiança moderada (RAG + regex)
       merchant: null,
+      temporalInfo, // Adicionar informações do temporal parser
     };
   }
 
@@ -1592,5 +1700,25 @@ export class TransactionRegistrationService {
     // Se não detectou, retorna undefined (não filtra)
     this.logger.debug(`🔍 Tipo NÃO detectado - sem filtro de tipo`);
     return undefined;
+  }
+
+  /**
+   * Formata o perfil temporal para exibição amigável
+   */
+  private formatTemporalProfile(profile: string): string {
+    const profiles: Record<string, string> = {
+      TODAY: 'hoje',
+      YESTERDAY: 'ontem',
+      TOMORROW: 'amanhã',
+      DAY_BEFORE_YESTERDAY: 'anteontem',
+      LAST_WEEK: 'semana passada',
+      THIS_WEEK: 'esta semana',
+      NEXT_WEEK: 'próxima semana',
+      LAST_MONTH: 'mês passado',
+      THIS_MONTH: 'este mês',
+      NEXT_MONTH: 'próximo mês',
+    };
+
+    return profiles[profile] || 'hoje';
   }
 }

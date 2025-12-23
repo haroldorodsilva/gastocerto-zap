@@ -12,6 +12,7 @@ import { MessageContextService } from './message-context.service';
 import { IFilteredMessage } from '@common/interfaces/message.interface';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { UserCache } from '@prisma/client';
+import { MessageLearningService } from '@features/transactions/message-learning.service';
 
 interface MessageReceivedEvent {
   sessionId: string;
@@ -30,6 +31,7 @@ export class TelegramMessageHandler {
     private readonly contextService: MessageContextService,
     private readonly eventEmitter: EventEmitter2,
     private readonly userCacheService: UserCacheService,
+    private readonly messageLearningService: MessageLearningService,
   ) {}
 
   @OnEvent('telegram.message')
@@ -170,7 +172,41 @@ export class TelegramMessageHandler {
         return;
       }
 
-      // 7. Usuário válido - processar mensagem normalmente
+      // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
+      const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
+      
+      if (learningCheck.hasPending) {
+        this.logger.log(`[Telegram] 🎓 User ${phoneNumber} has pending learning - processing response`);
+        
+        const result = await this.messageLearningService.processLearningMessage(
+          phoneNumber,
+          message.text || '',
+        );
+        
+        if (result.success) {
+          this.eventEmitter.emit('telegram.reply', {
+            platformId: userId,
+            message: result.message,
+            context: 'INTENT_RESPONSE',
+            platform: MessagingPlatform.TELEGRAM,
+          });
+          
+          // 🔄 Se deve processar transação original, continuar
+          if (result.shouldProcessOriginalTransaction && result.originalText) {
+            this.logger.log(`[Telegram] 🔄 Continuing with original transaction: "${result.originalText}"`);
+            // Modificar mensagem para usar texto original
+            message.text = result.originalText;
+            // Não retornar - continuar processando
+          } else {
+            return;
+          }
+        } else {
+          this.logger.warn(`[Telegram] Failed to process learning response: ${result.message}`);
+          // Continuar com fluxo normal se falhar
+        }
+      }
+
+      // 8. Usuário válido - processar mensagem normalmente
       this.logger.log(`[Telegram] Processing message from registered user ${user.name}`);
       await this.processRegisteredUserMessage(sessionId, message, user);
     } catch (error) {

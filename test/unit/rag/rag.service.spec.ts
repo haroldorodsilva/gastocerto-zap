@@ -17,6 +17,10 @@ describe('RAGService', () => {
         create: jest.fn().mockResolvedValue({}),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      userSynonym: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
     };
 
     // Mock do CacheManager

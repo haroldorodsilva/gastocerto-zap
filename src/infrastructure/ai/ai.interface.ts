@@ -60,6 +60,11 @@ export interface TransactionData {
   merchant?: string;
   confidence: number; // 0-1
   rawData?: any; // Dados brutos da IA
+  temporalInfo?: {
+    profile: string;
+    confidence: number;
+    specificDay?: number;
+  };
 }
 
 /**

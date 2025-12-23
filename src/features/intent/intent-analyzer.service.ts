@@ -257,16 +257,11 @@ export class IntentAnalyzerService {
       confidence: transactionAnalysis.confidence,
       shouldProcess: false,
       suggestedResponse:
-        '❓ *Não entendi sua mensagem*\n\n' +
+        '❓ *Não entendi sua mensagem*\n' +
         'Sou especializado em ajudar você a registrar suas *despesas* e *receitas*.\n\n' +
         '💡 *Exemplos do que posso fazer:*\n\n' +
-        '💸 *Registrar gastos:*\n' +
         '   • "Gastei 50 no mercado"\n' +
-        '   • "Paguei 30 reais de uber"\n' +
-        '   • "Comprei um café de 5,50"\n\n' +
-        '💰 *Registrar receitas:*\n' +
         '   • "Recebi 1000 de salário"\n' +
-        '   • "Ganhei 200 de freelance"\n\n' +
         '📷 *Envie foto da nota fiscal*\n' +
         '🎤 *Grave um áudio descrevendo*\n\n' +
         'Tente reformular sua mensagem seguindo esses exemplos!',
@@ -465,26 +460,17 @@ export class IntentAnalyzerService {
     // Mensagem principal
     greeting +=
       '💡 *O que posso fazer por você hoje?*\n\n' +
-      '━━━━━━━━━━━━━━━━━━━\n\n' +
-      '💸 *Registrar gastos:*\n' +
+      '💸 *Registrar transações:*\n' +
       '   • "Gastei 50 no mercado"\n' +
-      '   • "Paguei 30 de uber"\n' +
-      '   • "Comprei café de 5,50"\n\n' +
-      '💰 *Registrar receitas:*\n' +
       '   • "Recebi 1000 de salário"\n' +
-      '   • "Ganhei 200 de freelance"\n\n' +
       '📊 *Consultar finanças:*\n' +
       '   • "Meu saldo"\n' +
       '   • "Minhas transações"\n' +
-      '   • "Minhas faturas"\n\n' +
-      '💳 *Cartões e faturas:*\n' +
+      '   • "Minhas faturas"\n' +
       '   • "Meus cartões"\n' +
-      '   • "Ver fatura 1"\n' +
-      '   • "Pagar fatura 2"\n\n' +
       '📷 *Outras formas:*\n' +
       '   • Envie foto de nota fiscal\n' +
       '   • Grave um áudio descrevendo\n\n' +
-      '━━━━━━━━━━━━━━━━━━━\n\n' +
       '✨ Use linguagem natural! Estou aqui para facilitar sua vida financeira.\n\n' +
       '❓ Digite *"ajuda"* para ver todos os comandos disponíveis.';
 
@@ -686,43 +672,31 @@ export class IntentAnalyzerService {
   private getHelpMessage(): string {
     return (
       '📖 *Guia de Uso - GastoCerto*\n\n' +
-      '💸 *Registrar Gastos:*\n' +
+      '💸 *Registrar transações:*\n' +
       '   • "Gastei 50 no mercado"\n' +
       '   • "Paguei 30 reais de uber"\n' +
-      '   • "Comprei café de 5,50"\n\n' +
-      '💰 *Registrar Receitas:*\n' +
       '   • "Recebi 1000 de salário"\n' +
-      '   • "Ganhei 200 de freelance"\n\n' +
+      '   • "Ganhei 200 de freelance"\n' +
       '💵 *Consultar Finanças:*\n' +
       '   • "Meu saldo" - Ver balanço geral\n' +
       '   • "Minhas transações" - Listar últimas 10\n' +
-      '   • "Histórico" - Ver histórico completo\n\n' +
       '💳 *Cartões de Crédito:*\n' +
       '   • "Meus cartões" - Listar cartões\n' +
       '   • "Minhas faturas" - Ver faturas\n' +
-      '   • "Ver fatura 1" - Detalhes da fatura\n' +
-      '   • "Pagar fatura 2" - Pagar fatura\n\n' +
       '📋 *Contas Pendentes:*\n' +
       '   • "Pendentes" - Ver contas a pagar\n' +
-      '   • "Pagar 3" - Pagar item #3 da lista\n' +
       '   • "Ver pendentes" - Listar pendências\n\n' +
       '✅ *Confirmações:*\n' +
       '   • "Pendentes de confirmação" - Ver aguardando\n' +
-      '   • "Sim" ou "Não" - Confirmar/Rejeitar\n\n' +
       '🏦 *Gerenciar Perfil:*\n' +
       '   • "Meus perfis" - Ver todas as contas\n' +
       '   • "Perfil" ou "conta ativa" - Ver conta atual\n' +
-      '   • "Usar Pessoal" - Trocar para conta Pessoal\n\n' +
       '📷 *Nota Fiscal:*\n' +
       '   • Tire uma foto e envie\n' +
       '   • Detectamos valores automaticamente\n\n' +
       '🎤 *Áudio:*\n' +
       '   • Grave descrevendo a transação\n' +
-      '   • Ex: "Gastei 40 reais no posto"\n\n' +
-      '💡 *Dicas:*\n' +
-      '   • Use linguagem natural\n' +
-      '   • Referências numéricas funcionam em listas\n' +
-      '   • Envie fotos e áudios para registrar rápido'
+      '   • Ex: "Gastei 40 reais no posto"\n\n'
     );
   }
 

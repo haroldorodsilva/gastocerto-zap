@@ -38,6 +38,13 @@ describe('OnboardingService', () => {
     onboardingSession: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    user: {
+      update: jest.fn().mockResolvedValue({
+        id: '707624962',
+        isActive: true,
+        isBlocked: false,
+      }),
+    },
   };
 
   const mockEventEmitter = {

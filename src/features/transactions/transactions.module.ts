@@ -13,6 +13,7 @@ import { TransactionRegistrationService } from './contexts/registration/registra
 import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
+import { MessageLearningService } from './message-learning.service';
 import { ListContextService } from './list-context.service';
 import { CreditCardService } from '../credit-cards/credit-card.service';
 import { TransactionsController } from './transactions.controller';
@@ -91,6 +92,7 @@ import { PrismaService } from '@core/database/prisma.service';
     TransactionListingService,
     TransactionPaymentService,
     TransactionSummaryService,
+    MessageLearningService, // ✅ Serviço de aprendizado inteligente
     CreditCardService, // ✅ Serviço de cartões de crédito
     ListContextService, // ✅ Serviço de contexto de lista
     PrismaService,
@@ -103,6 +105,7 @@ import { PrismaService } from '@core/database/prisma.service';
     TransactionListingService,
     TransactionPaymentService,
     TransactionSummaryService,
+    MessageLearningService, // ✅ Exportar para uso nos handlers
   ],
 })
 export class TransactionsModule {}

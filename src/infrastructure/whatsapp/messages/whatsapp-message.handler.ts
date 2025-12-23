@@ -10,6 +10,7 @@ import { UserRateLimiterService } from '@common/services/user-rate-limiter.servi
 import { PrismaService } from '@core/database/prisma.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 import { IFilteredMessage } from '@common/interfaces/message.interface';
+import { MessageLearningService } from '@features/transactions/message-learning.service';
 
 /**
  * WhatsAppMessageHandler
@@ -34,6 +35,7 @@ export class WhatsAppMessageHandler {
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly messageLearningService: MessageLearningService,
     @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
     @InjectQueue('transaction-confirmation') private readonly transactionQueue: Queue,
   ) {}
@@ -208,7 +210,36 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 7. Usuário válido - verificar se é confirmação de transação pendente
+      // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
+      const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
+      
+      if (learningCheck.hasPending) {
+        this.logger.log(`[WhatsApp] 🎓 User ${phoneNumber} has pending learning - processing response`);
+        
+        const result = await this.messageLearningService.processLearningMessage(
+          phoneNumber,
+          message.text,
+        );
+        
+        if (result.success) {
+          this.sendMessage(phoneNumber, result.message);
+          
+          // 🔄 Se deve processar transação original, continuar
+          if (result.shouldProcessOriginalTransaction && result.originalText) {
+            this.logger.log(`[WhatsApp] 🔄 Continuing with original transaction: "${result.originalText}"`);
+            // Modificar mensagem para usar texto original
+            message.text = result.originalText;
+            // Não retornar - continuar processando
+          } else {
+            return;
+          }
+        } else {
+          this.logger.warn(`[WhatsApp] Failed to process learning response: ${result.message}`);
+          // Continuar com fluxo normal se falhar
+        }
+      }
+
+      // 8. Verificar se é confirmação de transação pendente
       const pendingConfirmation = await this.checkPendingConfirmation(phoneNumber, message.text);
 
       if (pendingConfirmation) {
@@ -225,7 +256,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 8. Não é confirmação - processar como nova transação
+      // 9. Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
       // Enfileirar na fila de confirmação de transações

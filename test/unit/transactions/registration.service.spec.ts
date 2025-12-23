@@ -11,6 +11,8 @@ import { UserCacheService } from '../../../src/features/users/user-cache.service
 import { AccountManagementService } from '../../../src/features/accounts/account-management.service';
 import { TransactionType } from '../../../src/infrastructure/ai/ai.interface';
 import { PrismaService } from '../../../src/core/database/prisma.service';
+import { TemporalParserService } from '../../../src/common/services/temporal-parser.service';
+import { MessageLearningService } from '../../../src/features/transactions/message-learning.service';
 
 describe('TransactionRegistrationService - RAG Integration', () => {
   let service: TransactionRegistrationService;
@@ -28,6 +30,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
     name: 'João Silva',
     email: 'joao@example.com',
     hasActiveSubscription: true,
+    isBlocked: false,
+    isActive: true,
     activeAccountId: null,
     accounts: [],
     categories: [],
@@ -169,6 +173,20 @@ describe('TransactionRegistrationService - RAG Integration', () => {
       },
     };
 
+    const mockTemporalParserService = {
+      parseTemporalExpression: jest.fn().mockReturnValue({
+        date: new Date(),
+        type: 'hoje',
+      }),
+    };
+
+    const mockMessageLearningService = {
+      detectAndPrepareConfirmation: jest.fn().mockResolvedValue({
+        needsConfirmation: false,
+        unknownTerm: null,
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TransactionRegistrationService,
@@ -182,6 +200,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         { provide: AccountManagementService, useValue: mockAccountManagementService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: TemporalParserService, useValue: mockTemporalParserService },
+        { provide: MessageLearningService, useValue: mockMessageLearningService },
       ],
     }).compile();
 
