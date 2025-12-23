@@ -18,6 +18,16 @@ import {
 import { DateUtil } from '../../../../utils/date.util';
 import { TemporalParserService } from '@common/services/temporal-parser.service';
 import { MessageLearningService } from '../../message-learning.service';
+import {
+  TRANSACTION_VERBS,
+  TEMPORAL_WORDS,
+  PREPOSITIONS,
+  ARTICLES,
+  COMMON_ADJECTIVES,
+  COMMON_ESTABLISHMENTS,
+  EXPENSE_KEYWORDS,
+  INCOME_KEYWORDS,
+} from '@common/constants/nlp-keywords.constants';
 
 /**
  * TransactionRegistrationService
@@ -128,6 +138,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    skipLearning: boolean = false, // Evita loop infinito após confirmação
   ): Promise<{
     success: boolean;
     message: string;
@@ -438,7 +449,8 @@ export class TransactionRegistrationService {
         `🎓 [DEBUG] Verificando aprendizado: messageLearningService=${!!this.messageLearningService}`,
       );
 
-      if (this.messageLearningService) {
+      // 🔒 SKIP LEARNING se já confirmou (evita loop infinito)
+      if (!skipLearning && this.messageLearningService) {
         this.logger.debug(
           `🎓 [DEBUG] Chamando detectAndPrepareConfirmation com: phoneNumber=${phoneNumber}, text="${text}", categoryId=${extractedData.categoryId}`,
         );
@@ -464,6 +476,38 @@ export class TransactionRegistrationService {
             confirmationId: 'learning',
           };
         }
+      } else if (skipLearning) {
+        this.logger.log(
+          `🔒 [SKIP LEARNING] Processando transação após confirmação - AUTO-CONFIRMAR e ENVIAR`,
+        );
+
+        // Criar confirmação
+        const confirmResult = await this.createConfirmation(
+          phoneNumber,
+          extractedData,
+          messageId,
+          user,
+          platform,
+        );
+
+        if (!confirmResult.success || !confirmResult.confirmationId) {
+          this.logger.error(`❌ Falha ao criar confirmação para auto-envio`);
+          return confirmResult;
+        }
+
+        // Confirmar imediatamente (mudar status PENDING → CONFIRMED)
+        const confirmed = await this.confirmationService.confirm(confirmResult.confirmationId);
+        this.logger.log(`✅ Confirmação ${confirmed.id} auto-confirmada (skipLearning)`);
+
+        // Enviar para API
+        const sendResult = await this.registerConfirmedTransaction(confirmed);
+
+        return {
+          success: sendResult.success,
+          message: sendResult.message,
+          requiresConfirmation: false,
+          confirmationId: confirmed.id,
+        };
       } else {
         this.logger.warn(`⚠️ MessageLearningService não está disponível!`);
       }
@@ -1615,17 +1659,29 @@ export class TransactionRegistrationService {
       temporalInfo = { profile: 'TODAY', confidence: 1.0 };
     }
 
-    // 4. Extrair descrição (remover valor e palavras-chave)
+    // 4. Extrair descrição (pegar apenas produto/mercadoria)
+    // Criar regex dinâmico a partir das constantes
+    const verbsRegex = new RegExp(`\\b(${[...TRANSACTION_VERBS].join('|')})\\b`, 'gi');
+    const temporalRegex = new RegExp(`\\b(${[...TEMPORAL_WORDS].join('|')})\\b`, 'gi');
+    const prepositionsRegex = new RegExp(`\\b(${[...PREPOSITIONS].join('|')})\\b`, 'gi');
+    const articlesRegex = new RegExp(`\\b(${[...ARTICLES].join('|')})\\b`, 'gi');
+    const adjectivesRegex = new RegExp(`\\b(${[...COMMON_ADJECTIVES].join('|')})\\b`, 'gi');
+    const establishmentsRegex = new RegExp(`\\b(${[...COMMON_ESTABLISHMENTS].join('|')})\\b`, 'gi');
+
     let description = text
       .replace(/r\$\s*\d+[,.]?\d*/gi, '') // Remove valor
-      .replace(/gastei|comprei|paguei|recebi|ganhei/gi, '') // Remove verbos
-      .replace(/no|na|em|de|do|da/gi, '') // Remove preposições
-      .replace(/supermercado|mercado|farmácia|restaurante|padaria|lanchonete/gi, '') // Remove nomes comuns de estabelecimentos
+      .replace(/\bpor\s+\d+/gi, '') // Remove "por 1500"
+      .replace(verbsRegex, '') // Remove verbos de transação
+      .replace(temporalRegex, '') // Remove palavras temporais
+      .replace(prepositionsRegex, '') // Remove preposições
+      .replace(articlesRegex, '') // Remove artigos
+      .replace(adjectivesRegex, '') // Remove adjetivos comuns
+      .replace(establishmentsRegex, '') // Remove estabelecimentos
       .replace(/\s+/g, ' ') // Normaliza espaços
       .trim();
 
-    // Se descrição ficou vazia ou muito curta (< 5 chars), não incluir
-    if (!description || description.length < 5) {
+    // Se descrição ficou vazia ou muito curta (< 3 chars), não incluir
+    if (!description || description.length < 3) {
       description = null;
     } else if (description.length > 100) {
       description = description.substring(0, 100);
@@ -1650,39 +1706,8 @@ export class TransactionRegistrationService {
   private async detectTransactionType(text: string): Promise<'INCOME' | 'EXPENSES' | undefined> {
     const normalizedText = text.toLowerCase();
 
-    // Palavras-chave de GASTO (EXPENSES)
-    const expenseKeywords = [
-      'gastei',
-      'paguei',
-      'comprei',
-      'gasto',
-      'pago',
-      'compra',
-      'despesa',
-      'débito',
-      'debito',
-      'saiu',
-      'saque',
-    ];
-
-    // Palavras-chave de RECEITA (INCOME)
-    const incomeKeywords = [
-      'recebi',
-      'recebido',
-      'receita',
-      'salário',
-      'salario',
-      'rendimento',
-      'pagamento',
-      'entrou',
-      'depósito',
-      'deposito',
-      'ganho',
-      'entrada',
-    ];
-
     // Verificar EXPENSES primeiro (mais comum)
-    for (const keyword of expenseKeywords) {
+    for (const keyword of EXPENSE_KEYWORDS) {
       if (normalizedText.includes(keyword)) {
         this.logger.debug(`🔍 Tipo detectado: EXPENSES (palavra-chave: "${keyword}")`);
         return 'EXPENSES';
@@ -1690,7 +1715,7 @@ export class TransactionRegistrationService {
     }
 
     // Verificar INCOME
-    for (const keyword of incomeKeywords) {
+    for (const keyword of INCOME_KEYWORDS) {
       if (normalizedText.includes(keyword)) {
         this.logger.debug(`🔍 Tipo detectado: INCOME (palavra-chave: "${keyword}")`);
         return 'INCOME';

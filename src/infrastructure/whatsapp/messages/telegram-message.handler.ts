@@ -94,15 +94,19 @@ export class TelegramMessageHandler {
       this.logger.log(`[Telegram] 🔍 Checking if ${userId} is in onboarding...`);
       const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
       this.logger.log(`[Telegram] 🔍 isOnboarding result: ${isOnboarding}`);
-      
+
       if (isOnboarding) {
-        this.logger.log(`[Telegram] 📝 User ${userId} IS IN ONBOARDING - processing onboarding message`);
+        this.logger.log(
+          `[Telegram] 📝 User ${userId} IS IN ONBOARDING - processing onboarding message`,
+        );
         await this.handleOnboardingMessage(sessionId, message);
         this.logger.log(`[Telegram] ✅ Onboarding message processed for ${userId}`);
         return;
       }
-      
-      this.logger.log(`[Telegram] ℹ️ User ${userId} is NOT in onboarding - checking if user exists...`);
+
+      this.logger.log(
+        `[Telegram] ℹ️ User ${userId} is NOT in onboarding - checking if user exists...`,
+      );
 
       // 2. Buscar dados completos do usuário (com isBlocked e isActive)
       // 🔧 CRÍTICO: Usar getUserByTelegram para Telegram (busca por chatId/telegramId)
@@ -129,7 +133,7 @@ export class TelegramMessageHandler {
         this.logger.log(`[Telegram] ✅ Onboarding STARTED for new user ${userId}`);
         return;
       }
-      
+
       this.logger.log(`[Telegram] ✅ User ${userId} FOUND in cache - proceeding with normal flow`);
 
       // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
@@ -174,15 +178,17 @@ export class TelegramMessageHandler {
 
       // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
       const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
-      
+
       if (learningCheck.hasPending) {
-        this.logger.log(`[Telegram] 🎓 User ${phoneNumber} has pending learning - processing response`);
-        
+        this.logger.log(
+          `[Telegram] 🎓 User ${phoneNumber} has pending learning - processing response`,
+        );
+
         const result = await this.messageLearningService.processLearningMessage(
           phoneNumber,
           message.text || '',
         );
-        
+
         if (result.success) {
           this.eventEmitter.emit('telegram.reply', {
             platformId: userId,
@@ -190,13 +196,33 @@ export class TelegramMessageHandler {
             context: 'INTENT_RESPONSE',
             platform: MessagingPlatform.TELEGRAM,
           });
-          
-          // 🔄 Se deve processar transação original, continuar
+
+          // 🔄 Se deve processar transação original, chamar método específico
           if (result.shouldProcessOriginalTransaction && result.originalText) {
-            this.logger.log(`[Telegram] 🔄 Continuing with original transaction: "${result.originalText}"`);
-            // Modificar mensagem para usar texto original
-            message.text = result.originalText;
-            // Não retornar - continuar processando
+            this.logger.log(
+              `[Telegram] 🔄 Processing original transaction with skipLearning: "${result.originalText}"`,
+            );
+            // ⚠️ CRÍTICO: Chamar processOriginalTransaction (que usa skipLearning=true)
+            // NÃO modificar message.text e continuar (causaria loop infinito)
+            const transactionResult = await this.messageLearningService.processOriginalTransaction(
+              phoneNumber,
+              result.originalText,
+              message.id,
+              user,
+              'telegram',
+            );
+
+            // Enviar mensagem de sucesso/erro ao usuário
+            if (transactionResult) {
+              this.eventEmitter.emit('telegram.reply', {
+                platformId: userId,
+                message: transactionResult.message,
+                context: transactionResult.success ? 'TRANSACTION_RESULT' : 'ERROR',
+                platform: MessagingPlatform.TELEGRAM,
+              });
+            }
+
+            return; // Terminar aqui - transação já processada
           } else {
             return;
           }
@@ -228,7 +254,9 @@ export class TelegramMessageHandler {
 
     // 🔧 CRÍTICO: Verificar se usuário já completou onboarding
     if (response.completed) {
-      this.logger.warn(`⚠️ User ${userId} already completed onboarding - sending completion message`);
+      this.logger.warn(
+        `⚠️ User ${userId} already completed onboarding - sending completion message`,
+      );
       this.eventEmitter.emit('telegram.reply', {
         platformId: userId,
         message: response.message || '✅ Seu cadastro já foi concluído anteriormente.',
@@ -263,7 +291,9 @@ export class TelegramMessageHandler {
   ): Promise<void> {
     this.logger.log('📝 [HANDLE ONBOARDING] Processing onboarding message');
     const userId = message.chatId;
-    this.logger.log(`📝 [HANDLE ONBOARDING] userId: ${userId}, messageType: ${message.type}, text: ${message.text?.substring(0, 50)}`);
+    this.logger.log(
+      `📝 [HANDLE ONBOARDING] userId: ${userId}, messageType: ${message.type}, text: ${message.text?.substring(0, 50)}`,
+    );
 
     // Aceitar mensagens de texto ou contact (para compartilhamento de telefone)
     if (message.type !== MessageType.TEXT || !message.text) {

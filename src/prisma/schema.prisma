@@ -141,6 +141,10 @@ model TransactionConfirmation {
   confirmedAt      DateTime?
   notifiedExpiring Boolean            @default(false) // Se já enviou aviso de expiração próxima
 
+  // Campos para tracking/análise (relacionar com logs da IA/RAG)
+  aiUsageLogId   String? // ID do log de uso da IA (se usou IA)
+  ragSearchLogId String? // ID do log de busca RAG (se usou RAG)
+
   // Campos para controle de envio para API
   apiSent       Boolean   @default(false) // Se foi enviado para API GastoCerto
   apiSentAt     DateTime? // Quando foi enviado com sucesso

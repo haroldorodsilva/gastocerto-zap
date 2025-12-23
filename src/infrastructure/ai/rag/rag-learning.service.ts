@@ -3,6 +3,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
 import { Cache } from 'cache-manager';
 import { RAGService } from './rag.service';
+import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.constants';
 
 /**
  * RAGLearningService
@@ -181,6 +182,7 @@ export class RAGLearningService {
     action?: 'confirmed' | 'rejected' | 'cancelled';
     message?: string;
     shouldContinue?: boolean; // Se deve continuar com registro original
+    originalText?: string; // Texto original para processar transação
   }> {
     const context = await this.getContext(phoneNumber);
 
@@ -195,11 +197,14 @@ export class RAGLearningService {
     const hasOthersCategory = context.hasOutrosCategory !== false;
 
     // OPÇÃO 1: CONFIRMAR (apenas se hasOthersCategory = true)
+    // Aceita: 1, sim, confirmar, continuar, ok
     if (
       hasOthersCategory &&
       (normalizedResponse === '1' ||
         normalizedResponse.includes('sim') ||
-        normalizedResponse.includes('confirma'))
+        normalizedResponse.includes('confirma') ||
+        normalizedResponse.includes('continu') ||
+        normalizedResponse.includes('ok'))
     ) {
       // ⚠️ NÃO salvar sinônimo se for categoria genérica (Outros/Geral)
       const isGenericCategory =
@@ -245,6 +250,9 @@ export class RAGLearningService {
           `Agora vou registrar sua transação... ⏳`;
       }
 
+      // ⚠️ Salvar originalText ANTES de limpar contexto
+      const originalText = context.originalText;
+
       await this.clearContext(phoneNumber);
 
       return {
@@ -252,21 +260,25 @@ export class RAGLearningService {
         action: 'confirmed',
         message,
         shouldContinue: true, // Processar transação original
+        originalText, // Retornar para processamento
       };
     }
 
     // OPÇÃO 2 ou 1: REJEITAR/CORRIGIR
     // Se tem "Outros": opção 2 = Corrigir
     // Se NÃO tem "Outros": opção 1 = Corrigir
+    // Aceita: 2/1, corrigir, alterar, ajustar, mudar
+    // ⚠️ REMOVIDO "não/nao" pois é ambíguo - usuário pode querer cancelar
     const isRejectOption = hasOthersCategory
       ? normalizedResponse === '2'
       : normalizedResponse === '1';
 
     if (
       isRejectOption ||
-      normalizedResponse.includes('não') ||
-      normalizedResponse.includes('nao') ||
-      normalizedResponse.includes('corrig')
+      normalizedResponse.includes('corrig') ||
+      normalizedResponse.includes('alterar') ||
+      normalizedResponse.includes('ajustar') ||
+      normalizedResponse.includes('mudar')
     ) {
       return {
         processed: true,
@@ -286,11 +298,20 @@ export class RAGLearningService {
     // OPÇÃO 3 ou 2: CANCELAR
     // Se tem "Outros": opção 3 = Cancelar
     // Se NÃO tem "Outros": opção 2 = Cancelar
+    // Aceita: 3/2, não, nao, cancelar, desistir, não quero
     const isCancelOption = hasOthersCategory
       ? normalizedResponse === '3'
       : normalizedResponse === '2';
 
-    if (isCancelOption || normalizedResponse.includes('cancel')) {
+    if (
+      isCancelOption ||
+      normalizedResponse === 'não' ||
+      normalizedResponse === 'nao' ||
+      normalizedResponse.includes('cancel') ||
+      normalizedResponse.includes('desist') ||
+      (normalizedResponse.includes('não') && normalizedResponse.includes('quer')) ||
+      (normalizedResponse.includes('nao') && normalizedResponse.includes('quer'))
+    ) {
       await this.clearContext(phoneNumber);
 
       return {
@@ -309,7 +330,7 @@ export class RAGLearningService {
 
   /**
    * Processa correção manual do usuário
-   * Exemplo: "Alimentação > Delivery"
+   * Exemplo: "Alimentação > Delivery" ou "eletronicos" (busca fuzzy)
    */
   async processCorrection(
     phoneNumber: string,
@@ -320,6 +341,9 @@ export class RAGLearningService {
     success: boolean;
     message?: string;
     shouldContinue?: boolean;
+    needsSelection?: boolean; // Se true, aguarda seleção numérica do usuário
+    matches?: Array<{ category: any; subcategory?: any }>; // Opções encontradas
+    originalText?: string; // Texto original da transação para reprocessar
   }> {
     const context = await this.getContext(phoneNumber);
 
@@ -331,80 +355,168 @@ export class RAGLearningService {
     }
 
     try {
-      // Parsear correção (ex: "Alimentação > Delivery" ou só "Delivery")
+      // Verifica se é uma seleção numérica de opções anteriores
+      if (context.pendingMatches && /^\d+$/.test(correctionText.trim())) {
+        const selection = parseInt(correctionText.trim()) - 1;
+        const matches = context.pendingMatches;
+
+        if (selection >= 0 && selection < matches.length) {
+          const selected = matches[selection];
+          const originalText = context.originalText; // Salvar antes de limpar
+
+          // Salvar correção
+          await this.ragService.rejectAndCorrect({
+            userId,
+            originalTerm: context.detectedTerm,
+            rejectedCategoryId: context.suggestedCategoryId,
+            rejectedCategoryName: context.suggestedCategory,
+            correctCategoryId: selected.category.id,
+            correctCategoryName: selected.category.name,
+            correctSubcategoryId: selected.subcategory?.id,
+            correctSubcategoryName: selected.subcategory?.name,
+          });
+
+          await this.clearContext(phoneNumber);
+
+          return {
+            success: true,
+            message:
+              `✅ *Correção aprendida!*\n\n` +
+              `"${context.detectedTerm}" agora será categorizado como:\n` +
+              `📂 ${selected.category.name}${selected.subcategory ? ' > ' + selected.subcategory.name : ''}\n\n` +
+              `Agora vou registrar sua transação... ⏳`,
+            shouldContinue: true,
+            originalText, // Retornar texto original
+          };
+        } else {
+          return {
+            success: false,
+            message: `⚠️ Opção inválida. Digite um número entre 1 e ${matches.length}.`,
+          };
+        }
+      }
+
+      // Parsear correção (ex: "Alimentação > Delivery" ou só "eletronicos")
       const parts = correctionText.split('>').map((p) => p.trim());
+      const searchTerm = parts.length === 2 ? parts : [correctionText.trim()];
+      const normalizedSearch = searchTerm[0]
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
 
-      let categoryName: string;
-      let subcategoryName: string | undefined;
+      // Buscar em categorias e subcategorias
+      const matches: Array<{ category: any; subcategory?: any; score: number }> = [];
 
-      if (parts.length === 2) {
-        categoryName = parts[0];
-        subcategoryName = parts[1];
-      } else if (parts.length === 1) {
-        // Só subcategoria - usar categoria da sugestão original
-        categoryName = context.suggestedCategory;
-        subcategoryName = parts[0];
-      } else {
-        return {
-          success: false,
-          message:
-            `⚠️ Formato inválido.\n\n` +
-            `Use: "Categoria > Subcategoria"\n` +
-            `Ou só: "Subcategoria"`,
-        };
+      for (const category of userCategories) {
+        const normalizedCatName = category.name
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+
+        // Match na categoria
+        if (
+          normalizedCatName.includes(normalizedSearch) ||
+          normalizedSearch.includes(normalizedCatName)
+        ) {
+          matches.push({
+            category,
+            score: this.calculateSimilarity(normalizedSearch, normalizedCatName),
+          });
+        }
+
+        // Match nas subcategorias
+        if (category.subCategories) {
+          for (const subcategory of category.subCategories) {
+            const normalizedSubName = subcategory.name
+              .toLowerCase()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '');
+
+            if (
+              normalizedSubName.includes(normalizedSearch) ||
+              normalizedSearch.includes(normalizedSubName)
+            ) {
+              matches.push({
+                category,
+                subcategory,
+                score: this.calculateSimilarity(normalizedSearch, normalizedSubName),
+              });
+            }
+          }
+        }
       }
 
-      // Buscar categoria/subcategoria nas disponíveis do usuário
-      const category = userCategories.find(
-        (cat) => cat.name.toLowerCase() === categoryName.toLowerCase(),
-      );
+      // Ordenar por score (melhor match primeiro)
+      matches.sort((a, b) => b.score - a.score);
 
-      if (!category) {
+      if (matches.length === 0) {
         return {
           success: false,
           message:
-            `❌ Categoria "${categoryName}" não encontrada.\n\n` +
+            `❌ Nenhuma categoria ou subcategoria encontrada para "${correctionText}".\n\n` +
             `Categorias disponíveis:\n` +
-            userCategories.map((c) => `• ${c.name}`).join('\n'),
+            userCategories.map((c) => `• ${c.name}`).join('\n') +
+            `\n\nOu digite *"cancelar"* para desistir.`,
         };
       }
 
-      const subcategory = category.subCategories?.find(
-        (sub) => sub.name.toLowerCase() === subcategoryName.toLowerCase(),
-      );
+      // Se encontrou apenas 1 match, usar diretamente
+      if (matches.length === 1) {
+        const match = matches[0];
+        const originalText = context.originalText; // Salvar antes de limpar
+        
+        await this.ragService.rejectAndCorrect({
+          userId,
+          originalTerm: context.detectedTerm,
+          rejectedCategoryId: context.suggestedCategoryId,
+          rejectedCategoryName: context.suggestedCategory,
+          correctCategoryId: match.category.id,
+          correctCategoryName: match.category.name,
+          correctSubcategoryId: match.subcategory?.id,
+          correctSubcategoryName: match.subcategory?.name,
+        });
 
-      if (subcategoryName && !subcategory) {
-        const availableSubs = category.subCategories?.map((s) => s.name).join(', ') || 'nenhuma';
+        await this.clearContext(phoneNumber);
+
         return {
-          success: false,
+          success: true,
           message:
-            `❌ Subcategoria "${subcategoryName}" não encontrada em "${categoryName}".\n\n` +
-            `Subcategorias disponíveis: ${availableSubs}`,
+            `✅ *Correção aprendida!*\n\n` +
+            `"${context.detectedTerm}" agora será categorizado como:\n` +
+            `📂 ${match.category.name}${match.subcategory ? ' > ' + match.subcategory.name : ''}\n\n` +
+            `Agora vou registrar sua transação... ⏳`,
+          shouldContinue: true,
+          originalText, // Retornar texto original
         };
       }
 
-      // Salvar correção com alta confiança
-      await this.ragService.rejectAndCorrect({
-        userId,
-        originalTerm: context.detectedTerm,
-        rejectedCategoryId: context.suggestedCategoryId,
-        rejectedCategoryName: context.suggestedCategory,
-        correctCategoryId: category.id,
-        correctCategoryName: category.name,
-        correctSubcategoryId: subcategory?.id,
-        correctSubcategoryName: subcategory?.name,
+      // Se encontrou múltiplos matches, mostrar opções
+      const limitedMatches = matches.slice(0, 5); // Limitar a 5 opções
+
+      // Salvar matches no contexto para próxima mensagem
+      await this.saveContext(phoneNumber, {
+        ...context,
+        pendingMatches: limitedMatches,
       });
 
-      await this.clearContext(phoneNumber);
+      const optionsText = limitedMatches
+        .map((match, index) => {
+          const label = match.subcategory
+            ? `${match.category.name} > ${match.subcategory.name}`
+            : match.category.name;
+          return `${index + 1}️⃣ ${label}`;
+        })
+        .join('\n');
 
       return {
-        success: true,
+        success: false,
+        needsSelection: true,
+        matches: limitedMatches,
         message:
-          `✅ *Correção aprendida!*\n\n` +
-          `"${context.detectedTerm}" agora será categorizado como:\n` +
-          `📂 ${category.name}${subcategory ? ' > ' + subcategory.name : ''}\n\n` +
-          `Agora vou registrar sua transação... ⏳`,
-        shouldContinue: true, // Processar transação original
+          `🔍 Encontrei ${limitedMatches.length} opções para "${correctionText}":\n\n` +
+          `${optionsText}\n\n` +
+          `Digite o número da opção correta (1-${limitedMatches.length})\n` +
+          `Ou digite *"cancelar"* para desistir.`,
       };
     } catch (error) {
       this.logger.error('Erro ao processar correção:', error);
@@ -413,6 +525,56 @@ export class RAGLearningService {
         message: '❌ Erro ao processar correção. Tente novamente.',
       };
     }
+  }
+
+  /**
+   * Calcula similaridade entre duas strings (0 a 1)
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    // Se uma string contém a outra completamente, score alto
+    if (str1.includes(str2) || str2.includes(str1)) {
+      return 0.9;
+    }
+
+    // Levenshtein distance simplificado
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.length === 0) return 1.0;
+
+    const editDistance = this.levenshteinDistance(longer, shorter);
+    return (longer.length - editDistance) / longer.length;
+  }
+
+  /**
+   * Calcula distância de Levenshtein
+   */
+  private levenshteinDistance(str1: string, str2: string): number {
+    const matrix: number[][] = [];
+
+    for (let i = 0; i <= str2.length; i++) {
+      matrix[i] = [i];
+    }
+
+    for (let j = 0; j <= str1.length; j++) {
+      matrix[0][j] = j;
+    }
+
+    for (let i = 1; i <= str2.length; i++) {
+      for (let j = 1; j <= str1.length; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1,
+          );
+        }
+      }
+    }
+
+    return matrix[str2.length][str1.length];
   }
 
   /**
@@ -427,30 +589,36 @@ export class RAGLearningService {
    * Extrai o termo principal de uma frase (substantivo principal)
    */
   private extractMainTerm(text: string): string | null {
-    // Remove palavras comuns e números
-    const stopWords = [
-      'comprei',
-      'paguei',
-      'gastei',
-      'recebi',
-      'ganhei',
-      'um',
-      'uma',
-      'por',
-      'de',
-      'da',
-      'do',
-      'na',
-      'no',
-      'em',
-    ];
-    const tokens = text
+    this.logger.debug(`🔍 [extractMainTerm] Input text: "${text}"`);
+
+    // Tokenizar texto
+    const allTokens = text
       .toLowerCase()
       .replace(/[^\w\s]/g, '')
       .split(/\s+/)
-      .filter((t) => t.length > 2 && !stopWords.includes(t) && isNaN(Number(t)));
+      .filter((t) => t.length > 0);
 
-    return tokens[0] || null;
+    this.logger.debug(`🔍 [extractMainTerm] All tokens: [${allTokens.join(', ')}]`);
+
+    // Filtrar usando constante centralizada (remove temporais + verbos + números)
+    const filteredTokens = allTokens.filter(
+      (t) =>
+        t.length > 2 &&
+        !FILTER_WORDS_FOR_TERM_DETECTION.includes(t) &&
+        isNaN(Number(t)) &&
+        // Stopwords adicionais
+        !['um', 'uma', 'por', 'de', 'da', 'do', 'na', 'no', 'em'].includes(t),
+    );
+
+    this.logger.debug(
+      `🔍 [extractMainTerm] Filtered tokens: [${filteredTokens.join(', ')}] ` +
+        `(removed: ${allTokens.filter((t) => !filteredTokens.includes(t)).join(', ')})`,
+    );
+
+    const result = filteredTokens[0] || null;
+    this.logger.debug(`🔍 [extractMainTerm] Result: "${result}"`);
+
+    return result;
   }
 
   /**

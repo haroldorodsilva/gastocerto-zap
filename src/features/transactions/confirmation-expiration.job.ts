@@ -197,7 +197,8 @@ export class ConfirmationExpirationJob {
 
   /**
    * Job executado a cada 5 minutos
-   * Limpa confirmações antigas (mais de 1 hora expiradas)
+   * Limpa apenas confirmações JÁ ENVIADAS para API (apiSent: true)
+   * ⚠️ NÃO apaga REJECTED - mantém para análise posterior
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async cleanupOldConfirmations() {
@@ -206,14 +207,7 @@ export class ConfirmationExpirationJob {
 
       const result = await this.prisma.transactionConfirmation.deleteMany({
         where: {
-          OR: [
-            {
-              status: ConfirmationStatus.REJECTED,
-            },
-            {
-              apiSent: true,
-            },
-          ],
+          apiSent: true, // Apenas registros já enviados com sucesso
           expiresAt: {
             lt: oneHourAgo,
           },

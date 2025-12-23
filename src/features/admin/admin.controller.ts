@@ -1846,27 +1846,50 @@ isActive: ${dto.isActive}
         }
       }
 
-      // Filtrar por mínimo de ocorrências e ordenar
-      const suggestions = Array.from(grouped.values())
-        .filter((entry) => entry.occurrences >= minOccur)
-        .map((entry) => ({
-          keyword: entry.keyword,
-          userCount: entry.users.size,
-          totalOccurrences: entry.occurrences,
-          suggestedCategoryId: entry.suggestedCategoryId,
-          suggestedCategoryName: entry.suggestedCategoryName,
-          suggestedSubCategoryName: entry.suggestedSubCategoryName,
-          avgAiConfidence: entry.totalAiConfidence / entry.occurrences,
-          lastUsedAt: entry.lastUsedAt,
-          exampleQueries: entry.exampleQueries,
-        }))
+      // Filtrar por mínimo de ocorrências e ordenar COM INFO DO USUÁRIO
+      const suggestions = await Promise.all(
+        Array.from(grouped.values())
+          .filter((entry) => entry.occurrences >= minOccur)
+          .map(async (entry) => {
+            // Buscar info dos usuários que usaram essa keyword
+            const userIds = Array.from(entry.users);
+            const users = await this.prisma.userCache.findMany({
+              where: {
+                gastoCertoId: {
+                  in: userIds,
+                },
+              },
+              select: {
+                gastoCertoId: true,
+                name: true,
+                phoneNumber: true,
+              },
+              take: 5, // Limitar a 5 usuários por sugestão
+            });
+
+            return {
+              keyword: entry.keyword,
+              userCount: entry.users.size,
+              totalOccurrences: entry.occurrences,
+              suggestedCategoryId: entry.suggestedCategoryId,
+              suggestedCategoryName: entry.suggestedCategoryName,
+              suggestedSubCategoryName: entry.suggestedSubCategoryName,
+              avgAiConfidence: entry.totalAiConfidence / entry.occurrences,
+              lastUsedAt: entry.lastUsedAt,
+              exampleQueries: entry.exampleQueries,
+              users, // Incluir info dos usuários
+            };
+          }),
+      );
+
+      const sortedSuggestions = suggestions
         .sort((a, b) => b.totalOccurrences - a.totalOccurrences)
         .slice(0, limitNum);
 
       return {
         success: true,
-        suggestions,
-        total: suggestions.length,
+        suggestions: sortedSuggestions,
+        total: sortedSuggestions.length,
         filters: {
           minOccurrences: minOccur,
           minAiConfidence: minConf,
@@ -2156,13 +2179,49 @@ isActive: ${dto.isActive}
     this.logger.log(`🗑️ Admin deletando sinônimo: ${id}`);
 
     try {
+      const synonym = await this.prisma.userSynonym.findUnique({
+        where: { id },
+        select: {
+          userId: true,
+          keyword: true,
+          categoryName: true,
+        },
+      });
+
+      if (!synonym) {
+        return {
+          success: false,
+          message: 'Sinônimo não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Buscar dados do usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: synonym.userId },
+        select: {
+          gastoCertoId: true,
+          name: true,
+          phoneNumber: true,
+        },
+      });
+
       await this.prisma.userSynonym.delete({
         where: { id },
       });
 
+      this.logger.log(
+        `✅ Sinônimo deletado: "${synonym.keyword}" → ${synonym.categoryName} (user: ${user?.name || 'N/A'})`,
+      );
+
       return {
         success: true,
         message: 'Sinônimo deletado com sucesso',
+        data: {
+          keyword: synonym.keyword,
+          categoryName: synonym.categoryName,
+          user,
+        },
         timestamp: new Date().toISOString(),
       };
     } catch (error: any) {
@@ -2171,6 +2230,101 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao deletar sinônimo',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Editar sinônimo
+   * PUT /admin/synonyms/:id
+   */
+  @Put('synonyms/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateSynonym(
+    @Param('id') id: string,
+    @Body()
+    dto: {
+      keyword?: string;
+      categoryId?: string;
+      categoryName?: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+      confidence?: number;
+    },
+  ) {
+    this.logger.log(`✏️ Admin editando sinônimo: ${id}`);
+
+    try {
+      // Verificar se sinônimo existe
+      const existing = await this.prisma.userSynonym.findUnique({
+        where: { id },
+      });
+
+      if (!existing) {
+        return {
+          success: false,
+          message: 'Sinônimo não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Preparar dados para atualização
+      const updateData: any = {};
+
+      if (dto.keyword !== undefined) updateData.keyword = dto.keyword;
+      if (dto.categoryId !== undefined) updateData.categoryId = dto.categoryId;
+      if (dto.categoryName !== undefined) updateData.categoryName = dto.categoryName;
+      if (dto.subCategoryId !== undefined) updateData.subCategoryId = dto.subCategoryId;
+      if (dto.subCategoryName !== undefined) updateData.subCategoryName = dto.subCategoryName;
+      if (dto.confidence !== undefined) updateData.confidence = dto.confidence;
+
+      updateData.updatedAt = new Date();
+
+      const updated = await this.prisma.userSynonym.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Buscar dados do usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: updated.userId },
+        select: {
+          gastoCertoId: true,
+          name: true,
+          phoneNumber: true,
+        },
+      });
+
+      this.logger.log(
+        `✅ Sinônimo atualizado: "${updated.keyword}" → ${updated.categoryName} (user: ${user?.name || 'N/A'})`,
+      );
+
+      return {
+        success: true,
+        message: 'Sinônimo atualizado com sucesso',
+        data: {
+          id: updated.id,
+          keyword: updated.keyword,
+          categoryName: updated.categoryName,
+          subCategoryName: updated.subCategoryName,
+          categoryId: updated.categoryId,
+          subCategoryId: updated.subCategoryId,
+          confidence: updated.confidence,
+          usageCount: updated.usageCount,
+          source: updated.source,
+          user,
+          updatedAt: updated.updatedAt,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao atualizar sinônimo:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao atualizar sinônimo',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
@@ -2197,18 +2351,55 @@ isActive: ${dto.isActive}
         },
       });
 
-      // Top keywords (mais usados)
-      const topKeywords = await this.prisma.userSynonym.findMany({
+      // Top keywords (mais usados) COM INFO DO USUÁRIO
+      const topKeywordsRaw = await this.prisma.userSynonym.findMany({
         select: {
+          id: true,
+          userId: true,
           keyword: true,
           usageCount: true,
           categoryName: true,
+          subCategoryName: true,
+          confidence: true,
+          source: true,
+          createdAt: true,
+          lastUsedAt: true,
         },
         orderBy: {
           usageCount: 'desc',
         },
         take: 10,
       });
+
+      // Buscar dados dos usuários
+      const userIds = [...new Set(topKeywordsRaw.map((k) => k.userId))];
+      const users = await this.prisma.userCache.findMany({
+        where: {
+          gastoCertoId: {
+            in: userIds,
+          },
+        },
+        select: {
+          gastoCertoId: true,
+          name: true,
+          phoneNumber: true,
+        },
+      });
+
+      const usersMap = new Map(users.map((u) => [u.gastoCertoId, u]));
+
+      const topKeywords = topKeywordsRaw.map((k) => ({
+        id: k.id,
+        keyword: k.keyword,
+        usageCount: k.usageCount,
+        categoryName: k.categoryName,
+        subCategoryName: k.subCategoryName,
+        confidence: k.confidence,
+        source: k.source,
+        createdAt: k.createdAt,
+        lastUsedAt: k.lastUsedAt,
+        user: usersMap.get(k.userId) || null,
+      }));
 
       // Top categorias (com mais sinônimos)
       const categoryGroups = await this.prisma.userSynonym.groupBy({
@@ -2224,9 +2415,59 @@ isActive: ${dto.isActive}
         take: 10,
       });
 
-      // Sinônimos recentes (últimos 7 dias)
+      // Sinônimos recentes (últimos 7 dias) COM INFO DO USUÁRIO
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const recentSynonymsRaw = await this.prisma.userSynonym.findMany({
+        where: {
+          createdAt: {
+            gte: sevenDaysAgo,
+          },
+        },
+        select: {
+          id: true,
+          userId: true,
+          keyword: true,
+          categoryName: true,
+          subCategoryName: true,
+          usageCount: true,
+          source: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: 10,
+      });
+
+      // Buscar dados dos usuários dos sinônimos recentes
+      const recentUserIds = [...new Set(recentSynonymsRaw.map((s) => s.userId))];
+      const recentUsers = await this.prisma.userCache.findMany({
+        where: {
+          gastoCertoId: {
+            in: recentUserIds,
+          },
+        },
+        select: {
+          gastoCertoId: true,
+          name: true,
+          phoneNumber: true,
+        },
+      });
+
+      const recentUsersMap = new Map(recentUsers.map((u) => [u.gastoCertoId, u]));
+
+      const recentSynonyms = recentSynonymsRaw.map((s) => ({
+        id: s.id,
+        keyword: s.keyword,
+        categoryName: s.categoryName,
+        subCategoryName: s.subCategoryName,
+        usageCount: s.usageCount,
+        source: s.source,
+        createdAt: s.createdAt,
+        user: recentUsersMap.get(s.userId) || null,
+      }));
 
       const recentlyCreated = await this.prisma.userSynonym.count({
         where: {
@@ -2248,16 +2489,13 @@ isActive: ${dto.isActive}
         stats: {
           totalSynonyms,
           bySource: Object.fromEntries(bySource.map((s) => [s.source, s._count.id])),
-          topKeywords: topKeywords.map((k) => ({
-            keyword: k.keyword,
-            totalUsage: k.usageCount,
-            categoryName: k.categoryName,
-          })),
+          topKeywords,
           topCategories: categoryGroups.map((c) => ({
             categoryName: c.categoryName,
             synonymCount: c._count.id,
           })),
-          recentlyCreated,
+          recentSynonyms,
+          recentlyCreatedCount: recentlyCreated,
           learningOpportunities,
         },
         timestamp: new Date().toISOString(),

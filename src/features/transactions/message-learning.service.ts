@@ -88,14 +88,12 @@ export class MessageLearningService {
 
     if (response.processed) {
       if (response.action === 'confirmed') {
-        // Usuário confirmou - recuperar contexto para processar transação
-        const context = await this.ragLearningService.getContext(phoneNumber);
-
+        // Usuário confirmou - usar originalText do response
         return {
           success: true,
           message: response.message,
           shouldProcessOriginalTransaction: true,
-          originalText: context?.originalText,
+          originalText: response.originalText, // Já vem do processResponse
         };
       } else if (response.action === 'rejected') {
         // Usuário rejeitou - pedir correção
@@ -128,14 +126,12 @@ export class MessageLearningService {
     );
 
     if (correctionResult.success) {
-      // Correção aceita - recuperar contexto
-      const context = await this.ragLearningService.getContext(phoneNumber);
-
+      // Correção aceita - retornar originalText do resultado
       return {
         success: true,
         message: correctionResult.message,
         shouldProcessOriginalTransaction: correctionResult.shouldContinue,
-        originalText: context?.originalText,
+        originalText: correctionResult.originalText, // Usar originalText do resultado
       };
     } else {
       // Correção inválida
@@ -170,12 +166,14 @@ export class MessageLearningService {
     }
 
     try {
+      // ⚠️ IMPORTANTE: skipLearning=true para evitar loop infinito
       const result = await this.transactionRegistrationService.processTextTransaction(
         phoneNumber,
         originalText,
         messageId,
         user,
         platform,
+        true, // skipLearning: não verificar learning novamente
       );
 
       return {

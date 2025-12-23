@@ -165,11 +165,14 @@ export class WhatsAppMessageHandler {
       if (!user) {
         this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
         const response = await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
-        
+
         // 🔧 CRÍTICO: Se usuário já completou onboarding, enviar mensagem e retornar
         if (response.completed) {
           this.logger.warn(`⚠️ User ${phoneNumber} already completed onboarding`);
-          this.sendMessage(phoneNumber, response.message || '✅ Seu cadastro já foi concluído anteriormente.');
+          this.sendMessage(
+            phoneNumber,
+            response.message || '✅ Seu cadastro já foi concluído anteriormente.',
+          );
         }
         return;
       }
@@ -212,24 +215,41 @@ export class WhatsAppMessageHandler {
 
       // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
       const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
-      
+
       if (learningCheck.hasPending) {
-        this.logger.log(`[WhatsApp] 🎓 User ${phoneNumber} has pending learning - processing response`);
-        
+        this.logger.log(
+          `[WhatsApp] 🎓 User ${phoneNumber} has pending learning - processing response`,
+        );
+
         const result = await this.messageLearningService.processLearningMessage(
           phoneNumber,
           message.text,
         );
-        
+
         if (result.success) {
           this.sendMessage(phoneNumber, result.message);
-          
-          // 🔄 Se deve processar transação original, continuar
+
+          // 🔄 Se deve processar transação original, chamar método específico
           if (result.shouldProcessOriginalTransaction && result.originalText) {
-            this.logger.log(`[WhatsApp] 🔄 Continuing with original transaction: "${result.originalText}"`);
-            // Modificar mensagem para usar texto original
-            message.text = result.originalText;
-            // Não retornar - continuar processando
+            this.logger.log(
+              `[WhatsApp] 🔄 Processing original transaction with skipLearning: "${result.originalText}"`,
+            );
+            // ⚠️ CRÍTICO: Chamar processOriginalTransaction (que usa skipLearning=true)
+            // NÃO modificar message.text e continuar (causaria loop infinito)
+            const transactionResult = await this.messageLearningService.processOriginalTransaction(
+              phoneNumber,
+              result.originalText,
+              message.messageId, // WhatsApp usa messageId
+              user,
+              'whatsapp',
+            );
+
+            // Enviar mensagem de sucesso/erro ao usuário
+            if (transactionResult) {
+              this.sendMessage(phoneNumber, transactionResult.message);
+            }
+
+            return; // Terminar aqui - transação já processada
           } else {
             return;
           }

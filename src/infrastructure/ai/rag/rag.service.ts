@@ -4,6 +4,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { PrismaService } from '@core/database/prisma.service';
 import { CategoryMatch, RAGConfig, UserCategory } from './rag.interface';
+import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.constants';
 
 /**
  * RAGService - Retrieval-Augmented Generation
@@ -1419,10 +1420,21 @@ export class RAGService {
         `🔍 [detectUnknownTerm] hasExactSubcategoryMatch=${hasExactSubcategoryMatch}`,
       );
 
-      // Identificar termo principal da query (palavra mais relevante)
-      const detectedTerm = this.extractMainTerm(tokens, categories);
+      // Filtrar palavras temporais/verbos antes de extrair termo
+      const filteredTokens = tokens.filter(
+        (t) => !FILTER_WORDS_FOR_TERM_DETECTION.includes(t) && !/^\d+$/.test(t),
+      );
 
-      this.logger.debug(`🔍 [detectUnknownTerm] detectedTerm="${detectedTerm}"`);
+      this.logger.debug(
+        `🔍 [detectUnknownTerm] filteredTokens AFTER filter: [${filteredTokens.join(', ')}] (removed: ${tokens.filter((t) => FILTER_WORDS_FOR_TERM_DETECTION.includes(t)).join(', ')})`,
+      );
+
+      // Identificar termo principal da query (palavra mais relevante)
+      const detectedTerm = this.extractMainTerm(filteredTokens, categories);
+
+      this.logger.debug(
+        `🔍 [detectUnknownTerm] detectedTerm="${detectedTerm}" (from filteredTokens: ${filteredTokens.join(', ')})`,
+      );
       this.logger.debug(
         `🎯 [detectUnknownTerm] Análise de decisão: ` +
           `isGenericCategory=${isGenericCategory}, ` +
@@ -1517,29 +1529,58 @@ export class RAGService {
       'real',
     ]);
 
-    // Buscar tokens que não são stopwords
-    const significantTokens = tokens.filter((token) => !stopwords.has(token));
+    // 🔥 Palavras muito genéricas que devem ser ignoradas
+    const genericWords = new Set([
+      'outro',
+      'outra',
+      'outros',
+      'outras',
+      'coisa',
+      'coisas',
+      'negocio',
+      'negócio',
+      'item',
+      'produto',
+    ]);
+
+    // Buscar tokens que não são stopwords nem genéricos
+    const significantTokens = tokens.filter(
+      (token) => !stopwords.has(token) && !genericWords.has(token),
+    );
 
     if (significantTokens.length === 0) {
       return null;
     }
 
-    // Verificar se algum token é uma subcategoria conhecida
-    for (const token of significantTokens) {
+    // 🎯 NOVA LÓGICA: Dar prioridade a termos mais específicos
+    // 1. Ordenar por tamanho (termos mais longos tendem a ser mais específicos)
+    // 2. Filtrar termos que NÃO são subcategorias conhecidas
+    const tokensWithScore = significantTokens.map((token) => {
       const isKnownSubcategory = categories.some((cat) => {
         if (!cat.subCategory?.name) return false;
         const normalizedSub = this.normalize(cat.subCategory.name);
         return normalizedSub.includes(token) || token.includes(normalizedSub);
       });
 
-      if (!isKnownSubcategory) {
-        // Retornar primeiro termo significativo que não é subcategoria conhecida
-        return token;
-      }
+      return {
+        token,
+        length: token.length,
+        isKnownSubcategory,
+      };
+    });
+
+    // Priorizar termos DESCONHECIDOS e mais longos
+    const unknownTokens = tokensWithScore.filter((t) => !t.isKnownSubcategory);
+
+    if (unknownTokens.length > 0) {
+      // Ordenar por tamanho (maior primeiro)
+      unknownTokens.sort((a, b) => b.length - a.length);
+      return unknownTokens[0].token;
     }
 
-    // Se todos são conhecidos, retornar o primeiro significativo
-    return significantTokens[0];
+    // Se todos são conhecidos, retornar o mais longo
+    tokensWithScore.sort((a, b) => b.length - a.length);
+    return tokensWithScore[0].token;
   }
 
   /**
