@@ -6,6 +6,7 @@ import { SessionsService } from '../sessions.service';
 import { SessionManagerService } from '../session-manager.service';
 import { DatabaseAuthStateManager } from './database-auth-state.manager';
 import { BaileysWhatsAppProvider } from './baileys-whatsapp.provider';
+import { BaileysProviderFactory } from './baileys-provider.factory';
 import { WhatsAppGateway } from './whatsapp.gateway';
 import { PrismaService } from '@core/database/prisma.service';
 
@@ -26,14 +27,16 @@ import { PrismaService } from '@core/database/prisma.service';
     SessionsService,
     SessionManagerService,
     DatabaseAuthStateManager,
-    BaileysWhatsAppProvider,
+    // BaileysWhatsAppProvider NÃO é provider direto - criado via factory
+    BaileysProviderFactory,
     WhatsAppGateway,
   ],
   exports: [
     SessionsService,
     SessionManagerService,
     DatabaseAuthStateManager,
-    BaileysWhatsAppProvider,
+    // BaileysWhatsAppProvider NÃO exportado - use BaileysProviderFactory
+    BaileysProviderFactory,
   ],
 })
 export class WhatsAppModule {}

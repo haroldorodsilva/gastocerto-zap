@@ -9,6 +9,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
 import { SessionStatus } from '@prisma/client';
 import { BaileysWhatsAppProvider } from './whatsapp/baileys-whatsapp.provider';
+import { BaileysProviderFactory } from './whatsapp/baileys-provider.factory';
 import { DatabaseAuthStateManager } from './whatsapp/database-auth-state.manager';
 import { IWhatsAppProvider } from '@common/interfaces/whatsapp-provider.interface';
 
@@ -22,6 +23,7 @@ interface SessionInfo {
   restartTimer?: NodeJS.Timeout;
   error515Attempts?: number; // Tentativas específicas para erro 515
   lastError515?: Date; // Última ocorrência do erro 515
+  connectingTimeout?: NodeJS.Timeout; // Timeout para estado CONNECTING
 }
 
 /**
@@ -40,12 +42,13 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   private readonly RECONNECT_DELAY_515_MS = 300000; // 5 minutos para erro 515 (ban temporário)
   private readonly MAX_ERROR_515_ATTEMPTS = 10; // Mais tentativas para erro 515 (2-24h)
   private readonly QR_TIMEOUT_MS = 120000; // 2 minutes
+  private readonly CONNECTING_TIMEOUT_MS = 60000; // 60 segundos timeout para CONNECTING
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly authStateManager: DatabaseAuthStateManager,
     private readonly eventEmitter: EventEmitter2,
-    private readonly baileysProvider: BaileysWhatsAppProvider,
+    private readonly providerFactory: BaileysProviderFactory,
   ) {}
 
   async onModuleInit() {
@@ -133,9 +136,23 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
    * Start a WhatsApp session
    */
   async startSession(sessionId: string): Promise<void> {
-    if (this.sessions.has(sessionId)) {
-      this.logger.warn(`Session ${sessionId} already running`);
+    // Verificar se sessão já está rodando COM provider ativo
+    const existingSession = this.sessions.get(sessionId);
+    if (existingSession && existingSession.provider) {
+      this.logger.warn(`Session ${sessionId} already running with active provider`);
       return;
+    }
+
+    // Se sessão existe MAS sem provider (ex: após erro 515), preservar tracking data
+    let preservedError515Attempts = 0;
+    let preservedLastError515: Date | undefined;
+
+    if (existingSession && !existingSession.provider) {
+      this.logger.log(`Session ${sessionId} exists without provider (retry scenario), recreating...`);
+      // Preservar dados de tracking de erro 515
+      preservedError515Attempts = existingSession.error515Attempts || 0;
+      preservedLastError515 = existingSession.lastError515;
+      this.sessions.delete(sessionId);
     }
 
     const session = await this.prisma.whatsAppSession.findUnique({
@@ -152,10 +169,8 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       // Create auth state using database manager
       const authState = await this.authStateManager.createBaileysAuthState(sessionId);
 
-      // Create WhatsApp provider instance
-      const provider = new BaileysWhatsAppProvider(
-        {} as any, // ConfigService is not needed here, passed in module
-      );
+      // Create WhatsApp provider instance usando factory (DI pattern)
+      const provider = await this.providerFactory.create(sessionId);
 
       // Initialize provider with callbacks
       await provider.initialize(
@@ -175,19 +190,26 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         },
       );
 
-      // Store session info
+      // Store session info (preservando tracking de erro 515 se for retry)
       const sessionInfo: SessionInfo = {
         sessionId,
         provider,
         isConnected: false,
         lastActivity: new Date(),
         restartAttempts: 0,
+        error515Attempts: preservedError515Attempts,
+        lastError515: preservedLastError515,
       };
 
       // Set QR timeout
       sessionInfo.qrTimer = setTimeout(() => {
         this.handleQRTimeout(sessionId);
       }, this.QR_TIMEOUT_MS);
+
+      // Set CONNECTING timeout (60s)
+      sessionInfo.connectingTimeout = setTimeout(() => {
+        this.handleConnectingTimeout(sessionId);
+      }, this.CONNECTING_TIMEOUT_MS);
 
       this.sessions.set(sessionId, sessionInfo);
 
@@ -269,8 +291,18 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
    * Restart a session
    */
   async restartSession(sessionId: string): Promise<void> {
-    await this.stopSession(sessionId);
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
+    const sessionInfo = this.sessions.get(sessionId);
+
+    // Se sessão tem provider ativo, parar primeiro
+    if (sessionInfo?.provider) {
+      await this.stopSession(sessionId);
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
+    } else {
+      // Sessão já foi parada (ex: erro 515), apenas aguardar um pouco
+      this.logger.log(`Session ${sessionId} already stopped, just waiting before restart...`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
     await this.startSession(sessionId);
   }
 
@@ -320,6 +352,16 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     const sessionInfo = this.sessions.get(sessionId);
     if (sessionInfo) {
       sessionInfo.isConnected = true;
+
+      // Limpar timeouts quando conectar com sucesso
+      if (sessionInfo.qrTimer) {
+        clearTimeout(sessionInfo.qrTimer);
+        sessionInfo.qrTimer = undefined;
+      }
+      if (sessionInfo.connectingTimeout) {
+        clearTimeout(sessionInfo.connectingTimeout);
+        sessionInfo.connectingTimeout = undefined;
+      }
       sessionInfo.restartAttempts = 0;
       sessionInfo.error515Attempts = 0; // Reset contador de erro 515 ao conectar
       sessionInfo.lastActivity = new Date();
@@ -418,23 +460,46 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       // Verificar se excedeu o limite de tentativas para erro 515
       if (sessionInfo.error515Attempts > this.MAX_ERROR_515_ATTEMPTS) {
         this.logger.error(
-          `❌ Max error 515 attempts (${this.MAX_ERROR_515_ATTEMPTS}) reached for ${sessionId}`,
+          `❌ Max error 515 attempts (${this.MAX_ERROR_515_ATTEMPTS}) reached for ${sessionId}`
         );
-        await this.stopSession(sessionId);
-        await this.authStateManager.clearAuthState(sessionId);
+
+        // NÃO deletar credenciais! Apenas marcar como ERROR e notificar admin
+        await this.prisma.whatsAppSession.update({
+          where: { sessionId },
+          data: {
+            status: SessionStatus.ERROR,
+            lastSeen: new Date(),
+          },
+        });
+
         this.eventEmitter.emit('session.error.515.max_attempts', {
           sessionId,
-          message: `Máximo de tentativas para erro 515 atingido. Por favor, reconecte manualmente.`,
+          attempts: sessionInfo.error515Attempts,
+          message:
+            'WhatsApp ban temporário - Atingiu máximo de tentativas. ' +
+            'Credenciais preservadas. Aguarde 24h ou contate suporte.'
         });
+
+        // Parar sessão mas NÃO deletar credenciais
+        await this.stopSession(sessionId);
         return;
       }
 
-      // Apenas desconectar o provider, MAS MANTER sessionInfo no Map
-      try {
-        await sessionInfo.provider.disconnect();
-      } catch (error) {
-        this.logger.warn(`Error disconnecting provider for ${sessionId}: ${error.message}`);
-      }
+      // IMPORTANTE: Limpar completamente a sessão para evitar corrupção de credenciais
+      // O provider fica em estado inconsistente após erro 515
+      await this.stopSession(sessionId);
+
+      // MANTER sessionInfo básico no Map para tracking de tentativas
+      const errorInfo: SessionInfo = {
+        sessionId,
+        provider: null as any, // Será recriado no restart
+        isConnected: false,
+        lastActivity: new Date(),
+        restartAttempts: 0,
+        error515Attempts: sessionInfo.error515Attempts,
+        lastError515: sessionInfo.lastError515,
+      };
+      this.sessions.set(sessionId, errorInfo);
 
       // Atualizar status no banco
       await this.prisma.whatsAppSession.update({
@@ -445,18 +510,35 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      // Calcular delay com backoff exponencial
+      // Attempt 1: 5min, Attempt 2: 10min, Attempt 3: 20min, ..., Max: 24h
+      const baseDelay = this.RECONNECT_DELAY_515_MS; // 5 minutos
+      const delay = Math.min(
+        baseDelay * Math.pow(2, sessionInfo.error515Attempts - 1),
+        86400000 // Max 24 horas
+      );
+
+      const delayMinutes = Math.floor(delay / 60000);
+      const delayHours = Math.floor(delayMinutes / 60);
+      const remainingMinutes = delayMinutes % 60;
+
       this.logger.log(
         `⏰ WhatsApp temporary ban - Attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}`,
       );
-      this.logger.log(`✅ Credentials preserved - Will retry with extended delay`);
+      this.logger.log(`✅ Credentials preserved - Will retry in ${delayHours}h ${remainingMinutes}min`);
 
       // Emit event
       this.eventEmitter.emit('session.error.515', {
         sessionId,
-        message: `WhatsApp error 515: Temporary ban detected (attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}). Credentials preserved. Retrying with extended delay...`,
+        attempts: sessionInfo.error515Attempts,
+        maxAttempts: this.MAX_ERROR_515_ATTEMPTS,
+        delayMs: delay,
+        message:
+          `WhatsApp error 515: Temporary ban detected (attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}). ` +
+          `Credentials preserved. Retrying in ${delayHours}h ${remainingMinutes}min...`,
       });
 
-      // ✅ AGENDAR RETRY com delay de 5 minutos (sessionInfo ainda está no Map!)
+      // ✅ AGENDAR RETRY com backoff exponencial (sessionInfo ainda está no Map!)
       await this.scheduleReconnect(sessionId, true, 'error_515');
       return;
     }
@@ -527,6 +609,30 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     this.eventEmitter.emit('session.qr.expired', { sessionId });
   }
 
+  /**
+   * Handle CONNECTING state timeout (60s)
+   * Se sessão ficar presa em CONNECTING, reiniciar
+   */
+  private handleConnectingTimeout(sessionId: string) {
+    const sessionInfo = this.sessions.get(sessionId);
+    if (!sessionInfo) {
+      return;
+    }
+
+    // Verificar se ainda está em CONNECTING
+    if (!sessionInfo.isConnected) {
+      this.logger.warn(
+        `⏰ CONNECTING timeout para sessão ${sessionId}. ` +
+        `Sessão ficou presa em estado CONNECTING por mais de 60s. Reiniciando...`
+      );
+
+      this.eventEmitter.emit('session.connecting.timeout', { sessionId });
+
+      // Tentar reiniciar sessão
+      this.handleDisconnected(sessionId, 'timeout_connecting');
+    }
+  }
+
   private async scheduleReconnect(sessionId: string, isError515: boolean = false, reason?: string) {
     const sessionInfo = this.sessions.get(sessionId);
     if (!sessionInfo) {
@@ -549,16 +655,24 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         this.logger.error(
           `❌ Max error 515 attempts (${maxAttempts}) reached for session: ${sessionId}`,
         );
+        // NÃO deletar credenciais - já foi tratado em handleDisconnected
         await this.stopSession(sessionId);
-        await this.authStateManager.clearAuthState(sessionId);
         return;
       }
 
-      // Delay progressivo: 5min, 10min, 15min, etc.
-      const delay = this.RECONNECT_DELAY_515_MS * attempts;
+      // Delay com backoff exponencial: 5min, 10min, 20min, ..., Max: 24h
+      const baseDelay = this.RECONNECT_DELAY_515_MS; // 5 minutos
+      const delay = Math.min(
+        baseDelay * Math.pow(2, attempts - 1),
+        86400000 // Max 24 horas
+      );
+
       const delayMinutes = Math.floor(delay / 60000);
-      const delaySeconds = Math.floor((delay % 60000) / 1000);
-      const delayStr = delayMinutes > 0 ? `${delayMinutes}m ${delaySeconds}s` : `${delaySeconds}s`;
+      const delayHours = Math.floor(delayMinutes / 60);
+      const remainingMinutes = delayMinutes % 60;
+      const delayStr = delayHours > 0
+        ? `${delayHours}h ${remainingMinutes}min`
+        : `${delayMinutes}min`;
 
       this.logger.log(
         `🔄 Scheduling reconnect for error 515 - ${sessionId} (attempt ${attempts}/${maxAttempts}) in ${delayStr}`,

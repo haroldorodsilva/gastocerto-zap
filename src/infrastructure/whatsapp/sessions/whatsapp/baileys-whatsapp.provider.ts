@@ -24,8 +24,18 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
   private connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED;
   private qrCode: string | null = null;
   private callbacks: WhatsAppCallbacks = {};
+  private sessionId: string | null = null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService?: ConfigService,
+    private readonly authState?: any,
+    sessionId?: string
+  ) {
+    if (sessionId) {
+      this.sessionId = sessionId;
+      this.logger.log(`Provider criado para sessão: ${sessionId}`);
+    }
+  }
 
   async initialize(config: WhatsAppConnectionConfig, callbacks: WhatsAppCallbacks): Promise<void> {
     try {

@@ -11,8 +11,10 @@ import {
   HttpStatus,
   Logger,
   NotFoundException,
+  BadRequestException,
   UseGuards,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SessionsService } from '../sessions.service';
 import { SessionManagerService } from '../session-manager.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -40,6 +42,7 @@ export class WhatsAppController {
   constructor(
     private readonly sessionsService: SessionsService,
     private readonly sessionManager: SessionManagerService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -242,6 +245,77 @@ export class WhatsAppController {
 
     const qr = await provider.getQRCode();
     return { qr };
+  }
+
+  /**
+   * Regenera QR Code da sessão (quando expirado)
+   * POST /sessions/:id/regenerate-qr
+   *
+   * @param id - ID da sessão
+   * @returns Novo QR Code
+   *
+   * @throws NotFoundException - Sessão não encontrada
+   * @throws BadRequestException - Sessão não está em estado apropriado
+   */
+  @Post(':id/regenerate-qr')
+  async regenerateQR(@Param('id') id: string): Promise<{ success: boolean; qr: string }> {
+    const session = await this.sessionsService.getSessionById(id);
+
+    if (!session) {
+      throw new NotFoundException('Sessão não encontrada');
+    }
+
+    // Verificar se sessão está em estado apropriado
+    if (
+      session.status !== 'CONNECTING' &&
+      session.status !== 'QR_PENDING' &&
+      session.status !== 'INACTIVE'
+    ) {
+      throw new BadRequestException(
+        `Só é possível regenerar QR em estado CONNECTING, QR_PENDING ou INACTIVE. ` +
+        `Estado atual: ${session.status}`
+      );
+    }
+
+    try {
+      // Parar sessão se estiver ativa
+      const isSessionActive = this.sessionManager.getSession(session.sessionId);
+      if (isSessionActive) {
+        await this.sessionManager.stopSession(session.sessionId);
+      }
+
+      // Aguardar um pouco para limpar state
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Reiniciar sessão para gerar novo QR
+      await this.sessionManager.startSession(session.sessionId);
+
+      // Aguardar novo QR ser gerado (max 15s)
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new BadRequestException('Timeout aguardando novo QR Code'));
+        }, 15000);
+
+        // Listener para novo QR
+        const qrHandler = (data: { sessionId: string; qr: string }) => {
+          if (data.sessionId === session.sessionId) {
+            clearTimeout(timeout);
+            this.eventEmitter.off('session.qr', qrHandler);
+            resolve({
+              success: true,
+              qr: data.qr
+            });
+          }
+        };
+
+        this.eventEmitter.on('session.qr', qrHandler);
+      });
+    } catch (error) {
+      this.logger.error(`Erro ao regenerar QR para sessão ${id}:`, error);
+      throw new BadRequestException(
+        `Erro ao regenerar QR Code: ${error.message}`
+      );
+    }
   }
 
   /**
