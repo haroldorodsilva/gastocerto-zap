@@ -890,7 +890,10 @@ export class OnboardingStateService {
         return (
           '📧 *Código enviado para seu email!*\n\n' +
           `Enviamos um código de verificação para *${data.email}*\n\n` +
-          'Digite o código de 6 dígitos que você recebeu:'
+          'Digite o código de 6 dígitos que você recebeu:\n\n' +
+          '💡 *Opções:*\n' +
+          '• Digite *"reenviar"* para receber um novo código\n' +
+          '• Digite *"corrigir email"* se o email está errado'
         );
 
       case OnboardingStep.CONFIRM_DATA:

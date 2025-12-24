@@ -24,6 +24,7 @@ interface SessionInfo {
   error515Attempts?: number; // Tentativas específicas para erro 515
   lastError515?: Date; // Última ocorrência do erro 515
   connectingTimeout?: NodeJS.Timeout; // Timeout para estado CONNECTING
+  reconnectInProgress?: boolean; // Flag para evitar múltiplos reconnects simultâneos
 }
 
 /**
@@ -39,7 +40,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   private readonly sessions = new Map<string, SessionInfo>();
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY_MS = 5000;
-  private readonly RECONNECT_DELAY_515_MS = 300000; // 5 minutos para erro 515 (ban temporário)
+  private readonly RECONNECT_DELAY_515_MS = 5000; // 5 segundos inicial para erro 515 (como zap-test)
   private readonly MAX_ERROR_515_ATTEMPTS = 10; // Mais tentativas para erro 515 (2-24h)
   private readonly QR_TIMEOUT_MS = 120000; // 2 minutes
   private readonly CONNECTING_TIMEOUT_MS = 60000; // 60 segundos timeout para CONNECTING
@@ -59,7 +60,9 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     this.logger.log('📴 Shutting down all sessions...');
     const sessionIds = Array.from(this.sessions.keys());
-    await Promise.all(sessionIds.map((sessionId) => this.stopSession(sessionId).catch(() => {})));
+    await Promise.all(
+      sessionIds.map((sessionId) => this.stopSession(sessionId, true).catch(() => {})),
+    ); // true = permanent on shutdown
   }
 
   /**
@@ -100,12 +103,9 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
                 `⚠️  WhatsApp session "${session.name}" (${session.sessionId}) has corrupted credentials, clearing...`,
               );
               await this.authStateManager.clearAuthState(session.sessionId);
-              await this.prisma.whatsAppSession.update({
-                where: { sessionId: session.sessionId },
-                data: {
-                  isActive: false,
-                  status: SessionStatus.DISCONNECTED,
-                },
+              await this.safeUpdateSession(session.sessionId, {
+                isActive: false,
+                status: SessionStatus.DISCONNECTED,
               });
             }
           } else {
@@ -113,12 +113,9 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
               `⚠️  WhatsApp session "${session.name}" (${session.sessionId}) has no auth state, skipping`,
             );
             // Update status to inactive since we can't connect
-            await this.prisma.whatsAppSession.update({
-              where: { sessionId: session.sessionId },
-              data: {
-                isActive: false,
-                status: SessionStatus.DISCONNECTED,
-              },
+            await this.safeUpdateSession(session.sessionId, {
+              isActive: false,
+              status: SessionStatus.DISCONNECTED,
             });
           }
         } catch (error) {
@@ -138,6 +135,14 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   async startSession(sessionId: string): Promise<void> {
     // Verificar se sessão já está rodando COM provider ativo
     const existingSession = this.sessions.get(sessionId);
+
+    this.logger.debug(`[startSession] Checking session ${sessionId}:`, {
+      exists: !!existingSession,
+      hasProvider: !!existingSession?.provider,
+      error515Attempts: existingSession?.error515Attempts,
+      isConnected: existingSession?.isConnected,
+    });
+
     if (existingSession && existingSession.provider) {
       this.logger.warn(`Session ${sessionId} already running with active provider`);
       return;
@@ -148,10 +153,22 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     let preservedLastError515: Date | undefined;
 
     if (existingSession && !existingSession.provider) {
-      this.logger.log(`Session ${sessionId} exists without provider (retry scenario), recreating...`);
+      this.logger.log(
+        `Session ${sessionId} exists without provider (retry scenario), recreating...`,
+      );
+
       // Preservar dados de tracking de erro 515
       preservedError515Attempts = existingSession.error515Attempts || 0;
       preservedLastError515 = existingSession.lastError515;
+
+      // 🔥 IMPORTANTE: Limpar timeouts antes de deletar sessão
+      if (existingSession.qrTimer) {
+        clearTimeout(existingSession.qrTimer);
+      }
+      if (existingSession.connectingTimeout) {
+        clearTimeout(existingSession.connectingTimeout);
+      }
+
       this.sessions.delete(sessionId);
     }
 
@@ -160,6 +177,13 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!session) {
+      // Sessão não existe no banco - limpar também da memória se existir
+      if (existingSession) {
+        this.logger.warn(
+          `Session ${sessionId} not found in database but exists in memory - cleaning up`,
+        );
+        this.sessions.delete(sessionId);
+      }
       throw new NotFoundException(`Session ${sessionId} not found`);
     }
 
@@ -214,12 +238,9 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       this.sessions.set(sessionId, sessionInfo);
 
       // Update database
-      await this.prisma.whatsAppSession.update({
-        where: { sessionId },
-        data: {
-          status: SessionStatus.CONNECTING,
-          isActive: true,
-        },
+      await this.safeUpdateSession(sessionId, {
+        status: SessionStatus.CONNECTING,
+        isActive: true,
       });
 
       this.logger.log(`✅ Session ${sessionId} started successfully`);
@@ -243,9 +264,30 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Stop a WhatsApp session
+   * Safely update session in database (handles case where session doesn't exist)
    */
-  async stopSession(sessionId: string): Promise<void> {
+  private async safeUpdateSession(sessionId: string, data: any): Promise<void> {
+    try {
+      await this.prisma.whatsAppSession.update({
+        where: { sessionId },
+        data,
+      });
+    } catch (error) {
+      if (error.code === 'P2025') {
+        // Record not found - session was already deleted
+        this.logger.debug(`Session ${sessionId} not found in database (already deleted)`);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Stop a WhatsApp session
+   * @param sessionId - The session ID to stop
+   * @param permanent - If true, completely remove from memory and mark as inactive. If false, preserve state for reconnect.
+   */
+  async stopSession(sessionId: string, permanent: boolean = false): Promise<void> {
     const sessionInfo = this.sessions.get(sessionId);
     if (!sessionInfo) {
       this.logger.warn(`Session ${sessionId} not found in memory`);
@@ -253,31 +295,59 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      this.logger.log(`🔴 Stopping session: ${sessionId}`);
+      this.logger.log(`🔴 Stopping session: ${sessionId} (permanent: ${permanent})`);
 
-      // Clear timers
+      // Clear ALL timers comprehensively
       if (sessionInfo.qrTimer) {
         clearTimeout(sessionInfo.qrTimer);
+        sessionInfo.qrTimer = undefined;
       }
       if (sessionInfo.restartTimer) {
         clearTimeout(sessionInfo.restartTimer);
+        sessionInfo.restartTimer = undefined;
+      }
+      if (sessionInfo.connectingTimeout) {
+        clearTimeout(sessionInfo.connectingTimeout);
+        sessionInfo.connectingTimeout = undefined;
       }
 
       // Disconnect provider
-      await sessionInfo.provider.disconnect();
+      if (sessionInfo.provider) {
+        await sessionInfo.provider.disconnect();
+        sessionInfo.provider = null;
+      }
 
-      // Remove from memory
-      this.sessions.delete(sessionId);
+      sessionInfo.isConnected = false;
+      sessionInfo.reconnectInProgress = false;
 
-      // Update database
-      await this.prisma.whatsAppSession.update({
-        where: { sessionId },
-        data: {
+      // Only remove from memory if permanent stop (logout/replaced)
+      // For reconnects, preserve session info to maintain error515Attempts and other state
+      if (permanent) {
+        this.sessions.delete(sessionId);
+        this.logger.log(`🗑️  Session ${sessionId} removed from memory (permanent stop)`);
+        
+        // Delete from database as well when permanent
+        try {
+          await this.prisma.whatsAppSession.delete({
+            where: { sessionId },
+          });
+          this.logger.log(`🗑️  Session ${sessionId} deleted from database`);
+        } catch (error) {
+          // Ignore if already deleted
+          this.logger.debug(
+            `Session ${sessionId} already deleted from database or not found`,
+          );
+        }
+      } else {
+        this.logger.log(`💾 Session ${sessionId} state preserved in memory for reconnect`);
+        
+        // Update database (safe - handles missing session)
+        await this.safeUpdateSession(sessionId, {
           status: SessionStatus.DISCONNECTED,
-          isActive: false,
+          isActive: true, // Keep active - reconnect planned
           lastSeen: new Date(),
-        },
-      });
+        });
+      }
 
       this.logger.log(`✅ Session ${sessionId} stopped`);
       this.eventEmitter.emit('session.stopped', { sessionId });
@@ -293,17 +363,60 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
   async restartSession(sessionId: string): Promise<void> {
     const sessionInfo = this.sessions.get(sessionId);
 
-    // Se sessão tem provider ativo, parar primeiro
-    if (sessionInfo?.provider) {
-      await this.stopSession(sessionId);
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
-    } else {
-      // Sessão já foi parada (ex: erro 515), apenas aguardar um pouco
-      this.logger.log(`Session ${sessionId} already stopped, just waiting before restart...`);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Prevent overlapping reconnect attempts
+    if (sessionInfo?.reconnectInProgress) {
+      this.logger.warn(
+        `[restartSession] Reconnect already in progress for ${sessionId}, skipping...`,
+      );
+      return;
     }
 
-    await this.startSession(sessionId);
+    this.logger.log(`[restartSession] Starting restart for ${sessionId}:`, {
+      hasSessionInfo: !!sessionInfo,
+      hasProvider: !!sessionInfo?.provider,
+      error515Attempts: sessionInfo?.error515Attempts,
+      restartAttempts: sessionInfo?.restartAttempts,
+    });
+
+    // Mark reconnect in progress
+    if (sessionInfo) {
+      sessionInfo.reconnectInProgress = true;
+    }
+
+    try {
+      // Se sessão tem provider ativo, parar primeiro (but not permanently)
+      if (sessionInfo?.provider) {
+        this.logger.log(`[restartSession] Session has active provider, stopping first...`);
+        await this.stopSession(sessionId, false); // false = not permanent
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
+      } else {
+        // Sessão já foi parada (ex: erro 515), apenas aguardar um pouco
+        this.logger.log(`[restartSession] Session already stopped, just waiting before restart...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      this.logger.log(`[restartSession] Calling startSession for ${sessionId}...`);
+      await this.startSession(sessionId);
+    } catch (error) {
+      // Se a sessão não existe no banco, NÃO tentar reconectar
+      if (error.message?.includes('not found')) {
+        this.logger.warn(
+          `[restartSession] Session ${sessionId} not found in database - stopping reconnect attempts`,
+        );
+        // Limpar da memória se ainda existir
+        if (this.sessions.has(sessionId)) {
+          this.sessions.delete(sessionId);
+        }
+        return; // Não propagar erro - apenas parar silenciosamente
+      }
+      throw error; // Outros erros devem ser propagados
+    } finally {
+      // Clear reconnect flag after attempt (success or failure)
+      const updatedSessionInfo = this.sessions.get(sessionId);
+      if (updatedSessionInfo) {
+        updatedSessionInfo.reconnectInProgress = false;
+      }
+    }
   }
 
   /**
@@ -395,15 +508,10 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       sessionInfo.isConnected = false;
     }
 
-    await this.prisma.whatsAppSession
-      .update({
-        where: { sessionId },
-        data: {
-          status: SessionStatus.DISCONNECTED,
-          lastSeen: new Date(),
-        },
-      })
-      .catch(() => {});
+    await this.safeUpdateSession(sessionId, {
+      status: SessionStatus.DISCONNECTED,
+      lastSeen: new Date(),
+    }).catch(() => {});
 
     this.eventEmitter.emit('session.disconnected', { sessionId, reason });
 
@@ -416,14 +524,11 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `❌ Corrupted credentials detected for ${sessionId} - Clearing auth state...`,
       );
-      await this.stopSession(sessionId);
+      await this.stopSession(sessionId, true); // true = permanent stop for corrupted creds
       await this.authStateManager.clearAuthState(sessionId);
-      await this.prisma.whatsAppSession.update({
-        where: { sessionId },
-        data: {
-          isActive: false,
-          status: SessionStatus.DISCONNECTED,
-        },
+      await this.safeUpdateSession(sessionId, {
+        isActive: false,
+        status: SessionStatus.DISCONNECTED,
       });
       this.logger.log(`✅ Auth state cleared for ${sessionId}. Please scan QR code again.`);
 
@@ -448,9 +553,21 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      // IMPORTANTE: Erro 515 É TEMPORÁRIO - NÃO limpar credenciais!
-      // As credenciais são válidas, apenas aguardar e tentar reconectar
-      this.logger.log(`🕒 Keeping credentials intact - error 515 is temporary`);
+      // Clear any existing restart timer from handleConnectionUpdate
+      // Error 515 needs special handling with different delays
+      if (sessionInfo.restartTimer) {
+        clearTimeout(sessionInfo.restartTimer);
+        sessionInfo.restartTimer = undefined;
+        this.logger.debug(`🧹 Cleared previous reconnect timer, will use error 515 timing`);
+      }
+
+      // CRÍTICO: Verificar se a sessão já estava CONECTADA antes do erro 515
+      // Se estava apenas CONNECTING (handshake incompleto), os credentials estão corrompidos
+      const wasConnected = sessionInfo.isConnected === true;
+
+      this.logger.log(
+        `🕒 Error 515 detected - Session was ${wasConnected ? 'CONNECTED' : 'CONNECTING'}`,
+      );
 
       // Incrementar contador de tentativas específico para erro 515
       sessionInfo.error515Attempts = (sessionInfo.error515Attempts || 0) + 1;
@@ -460,16 +577,13 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       // Verificar se excedeu o limite de tentativas para erro 515
       if (sessionInfo.error515Attempts > this.MAX_ERROR_515_ATTEMPTS) {
         this.logger.error(
-          `❌ Max error 515 attempts (${this.MAX_ERROR_515_ATTEMPTS}) reached for ${sessionId}`
+          `❌ Max error 515 attempts (${this.MAX_ERROR_515_ATTEMPTS}) reached for ${sessionId}`,
         );
 
         // NÃO deletar credenciais! Apenas marcar como ERROR e notificar admin
-        await this.prisma.whatsAppSession.update({
-          where: { sessionId },
-          data: {
-            status: SessionStatus.ERROR,
-            lastSeen: new Date(),
-          },
+        await this.safeUpdateSession(sessionId, {
+          status: SessionStatus.ERROR,
+          lastSeen: new Date(),
         });
 
         this.eventEmitter.emit('session.error.515.max_attempts', {
@@ -477,37 +591,40 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
           attempts: sessionInfo.error515Attempts,
           message:
             'WhatsApp ban temporário - Atingiu máximo de tentativas. ' +
-            'Credenciais preservadas. Aguarde 24h ou contate suporte.'
+            'Credenciais preservadas. Aguarde 24h ou contate suporte.',
         });
 
-        // Parar sessão mas NÃO deletar credenciais
-        await this.stopSession(sessionId);
+        // Parar sessão permanentemente após max tentativas
+        await this.stopSession(sessionId, true); // true = permanent
         return;
       }
 
-      // IMPORTANTE: Limpar completamente a sessão para evitar corrupção de credenciais
-      // O provider fica em estado inconsistente após erro 515
-      await this.stopSession(sessionId);
+      // Se a sessão NUNCA conectou (estava em CONNECTING), os credentials estão incompletos
+      // Error 515 interrompeu o handshake - precisamos limpar e gerar novo QR
+      if (!wasConnected) {
+        this.logger.warn(`⚠️  Session was still connecting - credentials incomplete, clearing...`);
+        await this.authStateManager.clearAuthState(sessionId);
+        await this.stopSession(sessionId, true); // true = permanent, forçar novo QR
 
-      // MANTER sessionInfo básico no Map para tracking de tentativas
-      const errorInfo: SessionInfo = {
-        sessionId,
-        provider: null as any, // Será recriado no restart
-        isConnected: false,
-        lastActivity: new Date(),
-        restartAttempts: 0,
-        error515Attempts: sessionInfo.error515Attempts,
-        lastError515: sessionInfo.lastError515,
-      };
-      this.sessions.set(sessionId, errorInfo);
+        this.eventEmitter.emit('session.error.515.incomplete_auth', {
+          sessionId,
+          message: 'Error 515 durante conexão inicial - Necessário novo QR code',
+        });
+
+        return;
+      }
+
+      // Se a sessão JÁ ESTAVA conectada, os credentials são válidos
+      // Erro 515 é apenas ban temporário - manter credentials e reconectar
+      this.logger.log(`💾 Session was connected - keeping authenticated credentials`);
+
+      // Parar sessão mas preservar state E credentials
+      await this.stopSession(sessionId, false); // false = preserve everything
 
       // Atualizar status no banco
-      await this.prisma.whatsAppSession.update({
-        where: { sessionId },
-        data: {
-          status: SessionStatus.DISCONNECTED,
-          lastSeen: new Date(),
-        },
+      await this.safeUpdateSession(sessionId, {
+        status: SessionStatus.DISCONNECTED,
+        lastSeen: new Date(),
       });
 
       // Calcular delay com backoff exponencial
@@ -515,7 +632,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       const baseDelay = this.RECONNECT_DELAY_515_MS; // 5 minutos
       const delay = Math.min(
         baseDelay * Math.pow(2, sessionInfo.error515Attempts - 1),
-        86400000 // Max 24 horas
+        86400000, // Max 24 horas
       );
 
       const delayMinutes = Math.floor(delay / 60000);
@@ -525,7 +642,9 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `⏰ WhatsApp temporary ban - Attempt ${sessionInfo.error515Attempts}/${this.MAX_ERROR_515_ATTEMPTS}`,
       );
-      this.logger.log(`✅ Credentials preserved - Will retry in ${delayHours}h ${remainingMinutes}min`);
+      this.logger.log(
+        `✅ Credentials preserved - Will retry in ${delayHours}h ${remainingMinutes}min`,
+      );
 
       // Emit event
       this.eventEmitter.emit('session.error.515', {
@@ -544,11 +663,11 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Auto-reconnect logic for other errors
-    if (reason !== 'logged_out' && sessionInfo) {
+    if (reason !== 'logged_out' && reason !== 'connection_replaced' && sessionInfo) {
       await this.scheduleReconnect(sessionId, false);
     } else {
-      // Logged out or replaced - remove session
-      await this.stopSession(sessionId);
+      // Logged out or replaced - PERMANENT stop and clear credentials
+      await this.stopSession(sessionId, true); // true = permanent
       await this.authStateManager.clearAuthState(sessionId);
     }
   }
@@ -623,7 +742,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
     if (!sessionInfo.isConnected) {
       this.logger.warn(
         `⏰ CONNECTING timeout para sessão ${sessionId}. ` +
-        `Sessão ficou presa em estado CONNECTING por mais de 60s. Reiniciando...`
+          `Sessão ficou presa em estado CONNECTING por mais de 60s. Reiniciando...`,
       );
 
       this.eventEmitter.emit('session.connecting.timeout', { sessionId });
@@ -640,10 +759,39 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Limpar timer anterior se existir
+    // Verificar se a sessão ainda existe no banco antes de agendar reconnect
+    const sessionInDb = await this.prisma.whatsAppSession.findUnique({
+      where: { sessionId },
+      select: { sessionId: true },
+    });
+
+    if (!sessionInDb) {
+      this.logger.warn(
+        `Cannot schedule reconnect for ${sessionId}: session deleted from database`,
+      );
+      // Limpar da memória também
+      this.sessions.delete(sessionId);
+      return;
+    }
+
+    // Prevent scheduling if reconnect already in progress
+    if (sessionInfo.reconnectInProgress) {
+      this.logger.warn(`Cannot schedule reconnect for ${sessionId}: reconnect already in progress`);
+      return;
+    }
+
+    // Clear ALL existing timers to prevent overlap
     if (sessionInfo.restartTimer) {
       clearTimeout(sessionInfo.restartTimer);
       sessionInfo.restartTimer = undefined;
+    }
+    if (sessionInfo.qrTimer) {
+      clearTimeout(sessionInfo.qrTimer);
+      sessionInfo.qrTimer = undefined;
+    }
+    if (sessionInfo.connectingTimeout) {
+      clearTimeout(sessionInfo.connectingTimeout);
+      sessionInfo.connectingTimeout = undefined;
     }
 
     // Para erro 515, usar contador e limite específicos
@@ -655,24 +803,24 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         this.logger.error(
           `❌ Max error 515 attempts (${maxAttempts}) reached for session: ${sessionId}`,
         );
-        // NÃO deletar credenciais - já foi tratado em handleDisconnected
-        await this.stopSession(sessionId);
+        // Permanent stop after max attempts - clear credentials
+        await this.stopSession(sessionId, true); // true = permanent
+        await this.authStateManager.clearAuthState(sessionId);
         return;
       }
 
-      // Delay com backoff exponencial: 5min, 10min, 20min, ..., Max: 24h
-      const baseDelay = this.RECONNECT_DELAY_515_MS; // 5 minutos
+      // Delay com backoff exponencial: 5s, 10s, 20s, 40s, 80s, ..., Max: 5min
+      const baseDelay = this.RECONNECT_DELAY_515_MS; // 5 segundos
       const delay = Math.min(
-        baseDelay * Math.pow(2, attempts - 1),
-        86400000 // Max 24 horas
+        baseDelay * Math.pow(2, attempts), // attempts já foi incrementado, então começa com 5s * 2^1 = 10s na 2ª tentativa
+        300000, // Max 5 minutos
       );
 
-      const delayMinutes = Math.floor(delay / 60000);
-      const delayHours = Math.floor(delayMinutes / 60);
-      const remainingMinutes = delayMinutes % 60;
-      const delayStr = delayHours > 0
-        ? `${delayHours}h ${remainingMinutes}min`
-        : `${delayMinutes}min`;
+      const delaySeconds = Math.floor(delay / 1000);
+      const delayMinutes = Math.floor(delaySeconds / 60);
+      const remainingSeconds = delaySeconds % 60;
+      const delayStr =
+        delayMinutes > 0 ? `${delayMinutes}m ${remainingSeconds}s` : `${delaySeconds}s`;
 
       this.logger.log(
         `🔄 Scheduling reconnect for error 515 - ${sessionId} (attempt ${attempts}/${maxAttempts}) in ${delayStr}`,
@@ -692,7 +840,7 @@ export class SessionManagerService implements OnModuleInit, OnModuleDestroy {
         this.logger.error(
           `❌ Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached for session: ${sessionId}`,
         );
-        await this.stopSession(sessionId);
+        await this.stopSession(sessionId, true); // true = permanent
         return;
       }
 

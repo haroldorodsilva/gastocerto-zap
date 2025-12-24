@@ -448,7 +448,7 @@ export class OnboardingService {
           message:
             `❌ *Código inválido*\n\n` +
             `O código que você digitou não está correto.\n\n` +
-            `Por favor:\n` +
+            `💡 *Você pode:*\n` +
             `• Digite o código de 6 dígitos novamente\n` +
             `• Digite *"reenviar"* para receber um novo código\n` +
             `• Digite *"corrigir email"* se o email está errado`,
@@ -460,7 +460,10 @@ export class OnboardingService {
         success: false,
         message:
           `❌ Não foi possível validar o código.\n\n` +
-          `Por favor, tente novamente ou digite *"reenviar"* para receber um novo código.`,
+          `💡 *Você pode:*\n` +
+          `• Tente novamente digitando o código\n` +
+          `• Digite *"reenviar"* para receber um novo código\n` +
+          `• Digite *"corrigir email"* se o email está errado`,
       };
     }
   }

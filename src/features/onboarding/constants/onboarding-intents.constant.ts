@@ -30,6 +30,7 @@ export const VERIFICATION_CODE_INTENTS: IntentPattern[] = [
   {
     intent: 'correct_email',
     patterns: [
+      'corrigir',
       'corrigir email',
       'corrigir e-mail',
       'mudar email',
