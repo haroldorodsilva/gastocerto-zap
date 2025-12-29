@@ -12,7 +12,10 @@ import { MessageContextService } from './message-context.service';
 import { IFilteredMessage } from '@common/interfaces/message.interface';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { UserCache } from '@prisma/client';
-import { MessageLearningService } from '@features/transactions/message-learning.service';
+import {
+  MessageValidationService,
+  ValidationAction,
+} from '@features/messages/message-validation.service';
 
 interface MessageReceivedEvent {
   sessionId: string;
@@ -31,7 +34,7 @@ export class TelegramMessageHandler {
     private readonly contextService: MessageContextService,
     private readonly eventEmitter: EventEmitter2,
     private readonly userCacheService: UserCacheService,
-    private readonly messageLearningService: MessageLearningService,
+    private readonly messageValidation: MessageValidationService,
   ) {}
 
   @OnEvent('telegram.message')
@@ -89,150 +92,84 @@ export class TelegramMessageHandler {
           (gastoCertoId ? ` | userId: ${gastoCertoId}` : ''),
       );
 
-      // 1. PRIMEIRO: Verificar se está em processo de onboarding (ANTES de verificar usuário)
-      // Isso evita o loop de verificação de usuário não existente
-      this.logger.log(`[Telegram] 🔍 Checking if ${userId} is in onboarding...`);
-      const isOnboarding = await this.onboardingService.isUserOnboarding(userId);
-      this.logger.log(`[Telegram] 🔍 isOnboarding result: ${isOnboarding}`);
+      // ✨ NOVO: Usar MessageValidationService para validação unificada
+      const validation = await this.messageValidation.validateUser(userId, 'telegram');
 
-      if (isOnboarding) {
-        this.logger.log(
-          `[Telegram] 📝 User ${userId} IS IN ONBOARDING - processing onboarding message`,
-        );
-        await this.handleOnboardingMessage(sessionId, message);
-        this.logger.log(`[Telegram] ✅ Onboarding message processed for ${userId}`);
-        return;
-      }
+      // Tratar ações conforme resultado da validação
+      switch (validation.action) {
+        case ValidationAction.ONBOARDING:
+          // Usuário está em onboarding - processar mensagem
+          this.logger.log(`[Telegram] 📝 User ${userId} is in onboarding`);
+          await this.handleOnboardingMessage(sessionId, message);
+          return;
 
-      this.logger.log(
-        `[Telegram] ℹ️ User ${userId} is NOT in onboarding - checking if user exists...`,
-      );
+        case ValidationAction.START_ONBOARDING:
+          // Novo usuário - iniciar onboarding
+          this.logger.log(`[Telegram] ⭐ Starting onboarding for new user ${userId}`);
+          await this.startOnboarding(sessionId, message);
+          return;
 
-      // 2. Buscar dados completos do usuário (com isBlocked e isActive)
-      // 🔧 CRÍTICO: Usar getUserByTelegram para Telegram (busca por chatId/telegramId)
-      this.logger.log(`🔍 Buscando usuário Telegram por chatId: ${userId}`);
-      const user = await this.userCacheService.getUserByTelegram(userId);
-
-      // 🐛 DEBUG: Logar status do usuário
-      this.logger.log(
-        `[Telegram] 🔍 User status for ${userId}:`,
-        JSON.stringify({
-          found: !!user,
-          isBlocked: user?.isBlocked,
-          isActive: user?.isActive,
-          hasActiveSubscription: user?.hasActiveSubscription,
-          gastoCertoId: user?.gastoCertoId,
-          phoneNumber: user?.phoneNumber,
-        }),
-      );
-
-      // 3. Se usuário não existe, iniciar onboarding
-      if (!user) {
-        this.logger.log(`[Telegram] ⭐ NEW USER DETECTED: ${userId} - STARTING ONBOARDING`);
-        await this.startOnboarding(sessionId, message);
-        this.logger.log(`[Telegram] ✅ Onboarding STARTED for new user ${userId}`);
-        return;
-      }
-
-      this.logger.log(`[Telegram] ✅ User ${userId} FOUND in cache - proceeding with normal flow`);
-
-      // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
-      if (user.isBlocked) {
-        this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED - Rejecting message`);
-        this.eventEmitter.emit('telegram.reply', {
-          platformId: userId,
-          message:
-            '🚫 *Acesso Bloqueado*\n\n' +
-            'Sua conta foi bloqueada temporariamente.\n\n' +
-            '📞 Entre em contato com o suporte para mais informações:\n' +
-            'suporte@gastocerto.com',
-          context: 'ERROR',
-          platform: MessagingPlatform.TELEGRAM,
-        });
-        return;
-      }
-
-      // 5. Verificar se usuário está inativo → Iniciar reativação
-      if (!user.isActive) {
-        this.logger.log(`[Telegram] 🔄 User ${userId} is INACTIVE - Starting reactivation process`);
-        await this.onboardingService.reactivateUser(userId, 'telegram');
-        return;
-      }
-
-      // 6. Verificar assinatura ativa
-      if (!user.hasActiveSubscription) {
-        this.logger.warn(`[Telegram] User ${userId} has no active subscription`);
-        this.eventEmitter.emit('telegram.reply', {
-          platformId: userId,
-          message:
-            '💳 *Assinatura Inativa*\n\n' +
-            'Sua assinatura expirou ou está inativa.\n\n' +
-            '🔄 Para continuar usando o GastoCerto, renove sua assinatura:\n' +
-            '👉 https://gastocerto.com/assinatura\n\n' +
-            '❓ Dúvidas? Fale conosco: suporte@gastocerto.com',
-          context: 'ERROR',
-          platform: MessagingPlatform.TELEGRAM,
-        });
-        return;
-      }
-
-      // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
-      const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
-
-      if (learningCheck.hasPending) {
-        this.logger.log(
-          `[Telegram] 🎓 User ${phoneNumber} has pending learning - processing response`,
-        );
-
-        const result = await this.messageLearningService.processLearningMessage(
-          phoneNumber,
-          message.text || '',
-        );
-
-        if (result.success) {
+        case ValidationAction.BLOCKED:
+          // Usuário bloqueado
+          this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED`);
           this.eventEmitter.emit('telegram.reply', {
             platformId: userId,
-            message: result.message,
-            context: 'INTENT_RESPONSE',
+            message: validation.message!,
+            context: 'ERROR',
             platform: MessagingPlatform.TELEGRAM,
           });
+          return;
 
-          // 🔄 Se deve processar transação original, chamar método específico
-          if (result.shouldProcessOriginalTransaction && result.originalText) {
-            this.logger.log(
-              `[Telegram] 🔄 Processing original transaction with skipLearning: "${result.originalText}"`,
-            );
-            // ⚠️ CRÍTICO: Chamar processOriginalTransaction (que usa skipLearning=true)
-            // NÃO modificar message.text e continuar (causaria loop infinito)
-            const transactionResult = await this.messageLearningService.processOriginalTransaction(
-              phoneNumber,
-              result.originalText,
-              message.id,
-              user,
-              'telegram',
-            );
+        case ValidationAction.INACTIVE:
+          // Usuário inativo - reativar
+          this.logger.log(`[Telegram] 🔄 Reactivating user ${userId}`);
+          await this.onboardingService.reactivateUser(userId, 'telegram');
+          return;
 
-            // Enviar mensagem de sucesso/erro ao usuário
-            if (transactionResult) {
-              this.eventEmitter.emit('telegram.reply', {
-                platformId: userId,
-                message: transactionResult.message,
-                context: transactionResult.success ? 'TRANSACTION_RESULT' : 'ERROR',
-                platform: MessagingPlatform.TELEGRAM,
-              });
-            }
+        case ValidationAction.NO_SUBSCRIPTION:
+          // Sem assinatura ativa
+          this.logger.warn(`[Telegram] 💳 User ${userId} has no subscription`);
+          this.eventEmitter.emit('telegram.reply', {
+            platformId: userId,
+            message: validation.message!,
+            context: 'ERROR',
+            platform: MessagingPlatform.TELEGRAM,
+          });
+          return;
 
-            return; // Terminar aqui - transação já processada
-          } else {
-            return;
+        case ValidationAction.LEARNING_PENDING:
+          // Aprendizado pendente
+          this.logger.log(`[Telegram] 🎓 Processing learning for ${userId}`);
+          const learningResult = await this.messageValidation.processLearning(
+            userId,
+            message.text || '',
+            message.id,
+            validation.user!,
+            'telegram',
+          );
+
+          if (learningResult.success) {
+            this.eventEmitter.emit('telegram.reply', {
+              platformId: userId,
+              message: learningResult.message,
+              context: 'INTENT_RESPONSE',
+              platform: MessagingPlatform.TELEGRAM,
+            });
           }
-        } else {
-          this.logger.warn(`[Telegram] Failed to process learning response: ${result.message}`);
-          // Continuar com fluxo normal se falhar
-        }
+          return;
+
+        case ValidationAction.PROCEED:
+          // Usuário válido - prosseguir com processamento normal
+          this.logger.log(`[Telegram] ✅ Processing message for user ${validation.user!.name}`);
+          break;
+
+        default:
+          this.logger.warn(`[Telegram] Unknown validation action: ${validation.action}`);
+          return;
       }
 
-      // 8. Usuário válido - processar mensagem normalmente
+      // Continuar com fluxo normal de transações
+      const user = validation.user!;
       this.logger.log(`[Telegram] Processing message from registered user ${user.name}`);
       await this.processRegisteredUserMessage(sessionId, message, user);
     } catch (error) {

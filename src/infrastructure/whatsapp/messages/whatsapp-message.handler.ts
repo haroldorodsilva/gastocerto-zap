@@ -10,7 +10,10 @@ import { UserRateLimiterService } from '@common/services/user-rate-limiter.servi
 import { PrismaService } from '@core/database/prisma.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 import { IFilteredMessage } from '@common/interfaces/message.interface';
-import { MessageLearningService } from '@features/transactions/message-learning.service';
+import {
+  MessageValidationService,
+  ValidationAction,
+} from '@features/messages/message-validation.service';
 
 /**
  * WhatsAppMessageHandler
@@ -35,7 +38,7 @@ export class WhatsAppMessageHandler {
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly messageLearningService: MessageLearningService,
+    private readonly messageValidation: MessageValidationService,
     @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
     @InjectQueue('transaction-confirmation') private readonly transactionQueue: Queue,
   ) {}
@@ -54,6 +57,11 @@ export class WhatsAppMessageHandler {
       const senderPhone = remoteJid?.split('@')[0] || 'unknown';
       const messageId = message.key.id;
 
+      // Ignorar mensagens de broadcast/status (status@broadcast) silenciosamente
+      if (remoteJid === 'status@broadcast') {
+        return;
+      }
+
       this.logger.log(
         `📱 [WhatsApp] RAW MESSAGE | Session: ${sessionId} | From: ${senderPhone} | MessageId: ${messageId} | RemoteJid: ${remoteJid}`,
       );
@@ -66,9 +74,15 @@ export class WhatsAppMessageHandler {
       const filteredMessage = await this.messageFilter.extractMessageData(message);
 
       if (!filteredMessage) {
-        this.logger.log(
-          `🚫 [WhatsApp] Message FILTERED OUT | From: ${senderPhone} | MessageId: ${messageId} | Reason: Invalid format or content`,
+        this.logger.debug(
+          `🚫 [WhatsApp] Message FILTERED OUT | From: ${senderPhone} | MessageId: ${messageId}`,
         );
+        return;
+      }
+
+      // Ignorar mensagens enviadas por nós mesmos (evita loop infinito)
+      if (filteredMessage.isFromMe) {
+        this.logger.debug(`🚫 [WhatsApp] Ignoring self-sent message | MessageId: ${messageId}`);
         return;
       }
 
@@ -149,129 +163,77 @@ export class WhatsAppMessageHandler {
         `🔄 [WhatsApp] Processing queued message from ${phoneNumber} (${message.type})`,
       );
 
-      // 1. PRIMEIRO: Verificar se está em processo de onboarding (ANTES de verificar usuário)
-      // Isso evita o loop de verificação de usuário não existente
-      const isOnboarding = await this.onboardingService.isUserOnboarding(phoneNumber);
-      if (isOnboarding) {
-        this.logger.log(`[WhatsApp] 📝 User ${phoneNumber} is in onboarding - processing message`);
-        await this.handleOnboardingMessage(message);
-        return;
-      }
+      // ✨ NOVO: Usar MessageValidationService para validação unificada
+      const validation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
 
-      // 2. Buscar usuário no cache/API (com isBlocked e isActive)
-      const user = await this.userCacheService.getUser(phoneNumber);
+      // Tratar ações conforme resultado da validação
+      switch (validation.action) {
+        case ValidationAction.ONBOARDING:
+          // Usuário está em onboarding - processar mensagem
+          this.logger.log(`[WhatsApp] 📝 User ${phoneNumber} is in onboarding`);
+          await this.handleOnboardingMessage(message);
+          return;
 
-      // 🐛 DEBUG: Logar status do usuário
-      this.logger.log(
-        `[WhatsApp] 🔍 User status for ${phoneNumber}:`,
-        JSON.stringify({
-          found: !!user,
-          isBlocked: user?.isBlocked,
-          isActive: user?.isActive,
-          hasActiveSubscription: user?.hasActiveSubscription,
-          gastoCertoId: user?.gastoCertoId,
-        }),
-      );
-
-      // 3. Se usuário não existe, iniciar onboarding
-      if (!user) {
-        this.logger.log(`[WhatsApp] New user detected: ${phoneNumber}, starting onboarding`);
-        const response = await this.onboardingService.startOnboarding(phoneNumber, 'whatsapp');
-
-        // 🔧 CRÍTICO: Se usuário já completou onboarding, enviar mensagem e retornar
-        if (response.completed) {
-          this.logger.warn(`⚠️ User ${phoneNumber} already completed onboarding`);
-          this.sendMessage(
+        case ValidationAction.START_ONBOARDING:
+          // Novo usuário - iniciar onboarding
+          this.logger.log(`[WhatsApp] ⭐ Starting onboarding for new user ${phoneNumber}`);
+          const welcomeMessage = await this.messageValidation.startOnboarding(
             phoneNumber,
-            response.message || '✅ Seu cadastro já foi concluído anteriormente.',
+            'whatsapp',
           );
-        }
-        return;
-      }
-
-      // 4. ❗ CRÍTICO: Verificar se usuário está bloqueado (PRIORIDADE MÁXIMA)
-      if (user.isBlocked) {
-        this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is BLOCKED - Rejecting message`);
-        this.sendMessage(
-          phoneNumber,
-          '🚫 *Acesso Bloqueado*\n\n' +
-            'Sua conta foi bloqueada temporariamente.\n\n' +
-            '📞 Entre em contato com o suporte para mais informações:\n' +
-            'suporte@gastocerto.com',
-        );
-        return;
-      }
-
-      // 5. Verificar se usuário está inativo → Iniciar reativação
-      if (!user.isActive) {
-        this.logger.log(
-          `[WhatsApp] 🔄 User ${phoneNumber} is INACTIVE - Starting reactivation process`,
-        );
-        await this.onboardingService.reactivateUser(phoneNumber, 'whatsapp');
-        return;
-      }
-
-      // 6. Verificar assinatura ativa
-      if (!user.hasActiveSubscription) {
-        this.logger.warn(`[WhatsApp] User ${phoneNumber} has no active subscription`);
-        this.sendMessage(
-          phoneNumber,
-          '💳 *Assinatura Inativa*\n\n' +
-            'Sua assinatura expirou ou está inativa.\n\n' +
-            '🔄 Para continuar usando o GastoCerto, renove sua assinatura:\n' +
-            '👉 https://gastocerto.com/assinatura\n\n' +
-            '❓ Dúvidas? Fale conosco: suporte@gastocerto.com',
-        );
-        return;
-      }
-
-      // 7. Usuário válido - PRIMEIRO verificar se tem aprendizado pendente
-      const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
-
-      if (learningCheck.hasPending) {
-        this.logger.log(
-          `[WhatsApp] 🎓 User ${phoneNumber} has pending learning - processing response`,
-        );
-
-        const result = await this.messageLearningService.processLearningMessage(
-          phoneNumber,
-          message.text,
-        );
-
-        if (result.success) {
-          this.sendMessage(phoneNumber, result.message);
-
-          // 🔄 Se deve processar transação original, chamar método específico
-          if (result.shouldProcessOriginalTransaction && result.originalText) {
-            this.logger.log(
-              `[WhatsApp] 🔄 Processing original transaction with skipLearning: "${result.originalText}"`,
-            );
-            // ⚠️ CRÍTICO: Chamar processOriginalTransaction (que usa skipLearning=true)
-            // NÃO modificar message.text e continuar (causaria loop infinito)
-            const transactionResult = await this.messageLearningService.processOriginalTransaction(
-              phoneNumber,
-              result.originalText,
-              message.messageId, // WhatsApp usa messageId
-              user,
-              'whatsapp',
-            );
-
-            // Enviar mensagem de sucesso/erro ao usuário
-            if (transactionResult) {
-              this.sendMessage(phoneNumber, transactionResult.message);
-            }
-
-            return; // Terminar aqui - transação já processada
-          } else {
-            return;
+          if (welcomeMessage) {
+            this.sendMessage(phoneNumber, welcomeMessage);
           }
-        } else {
-          this.logger.warn(`[WhatsApp] Failed to process learning response: ${result.message}`);
-          // Continuar com fluxo normal se falhar
-        }
+          return;
+
+        case ValidationAction.BLOCKED:
+          // Usuário bloqueado
+          this.logger.warn(`[WhatsApp] ❌ User ${phoneNumber} is BLOCKED`);
+          this.sendMessage(phoneNumber, validation.message!);
+          return;
+
+        case ValidationAction.INACTIVE:
+          // Usuário inativo - reativar
+          this.logger.log(`[WhatsApp] 🔄 Reactivating user ${phoneNumber}`);
+          await this.onboardingService.reactivateUser(phoneNumber, 'whatsapp');
+          return;
+
+        case ValidationAction.NO_SUBSCRIPTION:
+          // Sem assinatura ativa
+          this.logger.warn(`[WhatsApp] 💳 User ${phoneNumber} has no subscription`);
+          this.sendMessage(phoneNumber, validation.message!);
+          return;
+
+        case ValidationAction.LEARNING_PENDING:
+          // Aprendizado pendente
+          this.logger.log(`[WhatsApp] 🎓 Processing learning for ${phoneNumber}`);
+          const learningResult = await this.messageValidation.processLearning(
+            phoneNumber,
+            message.text,
+            message.messageId,
+            validation.user!,
+            'whatsapp',
+          );
+
+          if (learningResult.success) {
+            this.sendMessage(phoneNumber, learningResult.message);
+          }
+          return;
+
+        case ValidationAction.PROCEED:
+          // Usuário válido - prosseguir com processamento normal
+          this.logger.log(`[WhatsApp] ✅ Processing message for user ${validation.user!.name}`);
+          break;
+
+        default:
+          this.logger.warn(`[WhatsApp] Unknown validation action: ${validation.action}`);
+          return;
       }
 
-      // 8. Verificar se é confirmação de transação pendente
+      // Continuar com fluxo normal de transações
+      const user = validation.user!;
+
+      // Verificar se é confirmação de transação pendente
       const pendingConfirmation = await this.checkPendingConfirmation(phoneNumber, message.text);
 
       if (pendingConfirmation) {
@@ -288,7 +250,7 @@ export class WhatsAppMessageHandler {
         return;
       }
 
-      // 9. Não é confirmação - processar como nova transação
+      // Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
       // Enfileirar na fila de confirmação de transações

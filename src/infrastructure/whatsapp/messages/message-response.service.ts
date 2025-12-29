@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { MultiPlatformSessionService } from '../sessions/multi-platform-session.service';
 import { SessionsService } from '../sessions/sessions.service';
+import { WhatsAppSessionManager } from '../sessions/whatsapp-session-manager.service';
 import { MessageContextService } from './message-context.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 
@@ -49,6 +50,7 @@ export class MessageResponseService {
   constructor(
     private readonly multiPlatformService: MultiPlatformSessionService,
     private readonly sessionsService: SessionsService,
+    private readonly whatsappSessionManager: WhatsAppSessionManager,
     private readonly contextService: MessageContextService,
   ) {}
 
@@ -138,8 +140,8 @@ export class MessageResponseService {
         return;
       }
 
-      // 3. Enviar mensagem via MultiPlatformSessionService
-      await this.sendMessage(targetSessionId, platformId, message);
+      // 3. Enviar mensagem via serviço correto (WhatsApp ou Telegram)
+      await this.sendMessage(targetSessionId, platformId, message, targetPlatform);
 
       this.logger.log(
         `✅ Mensagem enviada com sucesso!\n` +
@@ -203,16 +205,38 @@ export class MessageResponseService {
   }
 
   /**
-   * Envia mensagem via MultiPlatformSessionService
+   * Envia mensagem via serviço correto (WhatsApp ou Telegram)
    */
-  private async sendMessage(sessionId: string, platformId: string, message: string): Promise<void> {
+  private async sendMessage(
+    sessionId: string,
+    platformId: string,
+    message: string,
+    platform: MessagingPlatform,
+  ): Promise<void> {
     try {
-      // Para WhatsApp, usar chatId com formato correto
-      const chatId = platformId.includes('@') ? platformId : `${platformId}`;
+      if (platform === MessagingPlatform.WHATSAPP) {
+        // WhatsApp: usar WhatsAppSessionManager
+        this.logger.debug(`📤 Enviando via WhatsAppSessionManager: ${sessionId} → ${platformId}`);
 
-      await this.multiPlatformService.sendTextMessage(sessionId, chatId, message);
+        // Formatar phoneNumber sem @s.whatsapp.net se necessário
+        const phoneNumber = platformId.replace('@s.whatsapp.net', '');
+        const success = await this.whatsappSessionManager.sendMessage(sessionId, phoneNumber, message);
+
+        if (!success) {
+          throw new Error('Failed to send WhatsApp message');
+        }
+      } else if (platform === MessagingPlatform.TELEGRAM) {
+        // Telegram: usar MultiPlatformSessionService
+        this.logger.debug(`📤 Enviando via MultiPlatformSessionService: ${sessionId} → ${platformId}`);
+        await this.multiPlatformService.sendTextMessage(sessionId, platformId, message);
+      } else {
+        throw new Error(`Unsupported platform: ${platform}`);
+      }
     } catch (error) {
-      this.logger.error(`Erro ao enviar mensagem via MultiPlatformService:`, error);
+      this.logger.error(
+        `Erro ao enviar mensagem via ${platform === MessagingPlatform.WHATSAPP ? 'WhatsAppSessionManager' : 'MultiPlatformService'}:`,
+        error,
+      );
       throw error;
     }
   }

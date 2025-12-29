@@ -6,6 +6,7 @@ import { TelegramMessageHandler } from './telegram-message.handler';
 import { WhatsAppMessageHandler } from './whatsapp-message.handler';
 import { MessageResponseService } from './message-response.service';
 import { MessageContextService } from './message-context.service';
+import { MessageValidationService } from '@features/messages/message-validation.service';
 import { UsersModule } from '@features/users/users.module';
 import { OnboardingModule } from '@features/onboarding/onboarding.module';
 import { TransactionsModule } from '@features/transactions/transactions.module';
@@ -44,7 +45,13 @@ import { PrismaService } from '@core/database/prisma.service';
     WhatsAppMessageHandler,
     MessageResponseService,
     MessageContextService,
+    MessageValidationService,
   ],
-  exports: [MessageFilterService, MessageResponseService, MessageContextService],
+  exports: [
+    MessageFilterService,
+    MessageResponseService,
+    MessageContextService,
+    MessageValidationService,
+  ],
 })
 export class MessagesModule {}
