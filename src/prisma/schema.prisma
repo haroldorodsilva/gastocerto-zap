@@ -12,16 +12,17 @@ datasource db {
 
 // Sessões WhatsApp
 model WhatsAppSession {
-  id          String        @id @default(uuid())
-  sessionId   String        @unique
-  phoneNumber String // Removido @unique - será preenchido após QR code
-  name        String?
-  status      SessionStatus @default(INACTIVE)
-  creds       Json? // Credenciais Baileys (chaves, tokens)
-  isActive    Boolean       @default(true)
-  lastSeen    DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id            String        @id @default(uuid())
+  sessionId     String        @unique
+  phoneNumber   String // Removido @unique - será preenchido após QR code
+  name          String?
+  status        SessionStatus @default(INACTIVE)
+  creds         Json? // Credenciais Baileys (chaves, tokens)
+  isActive      Boolean       @default(true)
+  lastSeen      DateTime?
+  lastConnected DateTime? // Última conexão bem-sucedida
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   @@index([phoneNumber])
   @@index([status])

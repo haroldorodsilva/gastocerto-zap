@@ -27,6 +27,7 @@ import { OnboardingModule } from './features/onboarding/onboarding.module';
 import { AiModule } from './infrastructure/ai/ai.module';
 import { TransactionsModule } from './features/transactions/transactions.module';
 import { AdminModule } from '@features/admin/admin.module';
+import { WebChatModule } from '@features/webchat/webchat.module';
 // import { MediaModule } from './infrastructure/media/media.module'; // TODO: Fase 5
 // import { SubscriptionsModule } from './features/subscriptions/subscriptions.module'; // TODO: Futuro
 
@@ -84,6 +85,7 @@ import { AdminModule } from '@features/admin/admin.module';
     AiModule,
     TransactionsModule,
     AdminModule,
+    WebChatModule, // Chat web para frontend
     // MediaModule, // TODO: Fase 5
     // SubscriptionsModule, // TODO: Futuro
   ],

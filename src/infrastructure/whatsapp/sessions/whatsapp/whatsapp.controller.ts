@@ -17,6 +17,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SessionsService } from '../sessions.service';
 import { SessionManagerService } from '../session-manager.service';
+import { WhatsAppSessionManager } from '../whatsapp-session-manager.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import {
   CreateSessionDto,
@@ -42,6 +43,7 @@ export class WhatsAppController {
   constructor(
     private readonly sessionsService: SessionsService,
     private readonly sessionManager: SessionManagerService,
+    private readonly whatsappSessionManager: WhatsAppSessionManager,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -76,17 +78,23 @@ export class WhatsAppController {
   async listSessions(@Query() query: ListSessionsQueryDto): Promise<SessionResponseDto[]> {
     const sessions = await this.sessionsService.listSessions(query);
 
-    return sessions.map((session) => ({
-      id: session.id,
-      sessionId: session.sessionId,
-      phoneNumber: session.phoneNumber,
-      name: session.name || undefined,
-      status: session.status,
-      isActive: session.isActive,
-      lastSeen: session.lastSeen || undefined,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-    }));
+    return sessions.map((session) => {
+      // ✅ Verificar se está realmente conectada em memória
+      const isReallyConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
+
+      return {
+        id: session.id,
+        sessionId: session.sessionId,
+        phoneNumber: session.phoneNumber,
+        name: session.name || undefined,
+        // ✅ Usar status real da memória, não do banco
+        status: isReallyConnected ? 'CONNECTED' : 'DISCONNECTED',
+        isActive: session.isActive,
+        lastSeen: session.lastSeen || undefined,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
+    });
   }
 
   /**
@@ -97,12 +105,16 @@ export class WhatsAppController {
   async getSession(@Param('id') id: string): Promise<SessionResponseDto> {
     const session = await this.sessionsService.getSessionById(id);
 
+    // ✅ Verificar se está realmente conectada em memória
+    const isReallyConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
+
     return {
       id: session.id,
       sessionId: session.sessionId,
       phoneNumber: session.phoneNumber,
       name: session.name || undefined,
-      status: session.status,
+      // ✅ Usar status real da memória
+      status: isReallyConnected ? 'CONNECTED' : 'DISCONNECTED',
       isActive: session.isActive,
       lastSeen: session.lastSeen || undefined,
       createdAt: session.createdAt,
@@ -237,13 +249,12 @@ export class WhatsAppController {
   @Get(':id/qr')
   async getQRCode(@Param('id') id: string): Promise<{ qr: string | null }> {
     const session = await this.sessionsService.getSessionById(id);
-    const provider = this.sessionManager.getSession(session.sessionId);
+    const qr = await this.sessionManager.getQRCode(session.sessionId);
 
-    if (!provider) {
-      throw new NotFoundException(`Session ${session.sessionId} is not active`);
+    if (!qr) {
+      throw new NotFoundException(`No QR code available for session ${session.sessionId}`);
     }
 
-    const qr = await provider.getQRCode();
     return { qr };
   }
 
@@ -363,17 +374,23 @@ export class WhatsAppController {
   async getActiveSessions(): Promise<SessionResponseDto[]> {
     const sessions = await this.sessionsService.getActiveSessions();
 
-    return sessions.map((session) => ({
-      id: session.id,
-      sessionId: session.sessionId,
-      phoneNumber: session.phoneNumber,
-      name: session.name || undefined,
-      status: session.status,
-      isActive: session.isActive,
-      lastSeen: session.lastSeen || undefined,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-    }));
+    return sessions.map((session) => {
+      // ✅ Verificar se está realmente conectada em memória
+      const isReallyConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
+
+      return {
+        id: session.id,
+        sessionId: session.sessionId,
+        phoneNumber: session.phoneNumber,
+        name: session.name || undefined,
+        // ✅ Usar status real da memória
+        status: isReallyConnected ? 'CONNECTED' : 'DISCONNECTED',
+        isActive: session.isActive,
+        lastSeen: session.lastSeen || undefined,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
+    });
   }
 
   /**
@@ -389,10 +406,16 @@ export class WhatsAppController {
       this.sessionsService.getConnectedSessions(),
     ]);
 
+    // ✅ Contar apenas sessões realmente conectadas em memória
+    const reallyConnected = this.whatsappSessionManager.getActiveSessionIds().length;
+
     return {
       total,
       active: active.length,
-      connected: connected.length,
+      // ✅ Usar contagem real da memória
+      connected: reallyConnected,
+      // Status do banco (pode estar desatualizado)
+      dbConnected: connected.length,
       byStatus,
     };
   }

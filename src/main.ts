@@ -39,6 +39,7 @@ async function bootstrap() {
   logger.log(`📊 Environment: ${nodeEnv}`);
   logger.log(`🔗 API: http://localhost:${port}`);
   logger.log(`🌐 WebSocket: ws://localhost:${port}/ws`);
+  logger.log('\n✅ WhatsApp será inicializado automaticamente pelo WhatsAppIntegrationService\n');
 }
 
 bootstrap();

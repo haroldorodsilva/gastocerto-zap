@@ -10,6 +10,7 @@ import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
 @Injectable()
 export class MessageFilterService implements IMessageFilter {
   private readonly logger = new Logger(MessageFilterService.name);
+  private readonly testPhoneNumber = process.env.TEST_PHONE_NUMBER;
 
   /**
    * Verifica se a mensagem é válida para processamento
@@ -17,11 +18,21 @@ export class MessageFilterService implements IMessageFilter {
   isValidMessage(message: IMessage): boolean {
     // Ignorar mensagens vazias
     if (!message || !message.message) {
+      this.logger.debug(`❌ Empty message or no message content`);
       return false;
     }
 
-    // Ignorar mensagens próprias (enviadas por nós)
+    // Ignorar mensagens próprias (enviadas por nós) - EXCETO em modo de teste
     if (message.key.fromMe) {
+      // ✅ Em modo de teste, permite mensagens do próprio número
+      if (this.testPhoneNumber) {
+        const messagePhone = message.key.remoteJid?.split('@')[0];
+        if (messagePhone === this.testPhoneNumber) {
+          this.logger.debug(`✅ Test mode: Allowing message from self (${this.testPhoneNumber})`);
+          return true; // Permitir em modo de teste
+        }
+      }
+      this.logger.debug(`❌ Message from me (fromMe=true)`);
       return false;
     }
 
@@ -32,6 +43,7 @@ export class MessageFilterService implements IMessageFilter {
       messageType === 'protocolMessage' ||
       messageType === 'senderKeyDistributionMessage'
     ) {
+      this.logger.debug(`❌ Protocol message type: ${messageType}`);
       return false;
     }
 
@@ -68,6 +80,7 @@ export class MessageFilterService implements IMessageFilter {
     try {
       // Validações básicas
       if (!this.isValidMessage(message)) {
+        this.logger.debug(`❌ isValidMessage failed for ${message.key.id}`);
         return null;
       }
 
@@ -78,6 +91,9 @@ export class MessageFilterService implements IMessageFilter {
 
       const messageContent = message.message;
       const messageType = getContentType(messageContent);
+
+      // 🐛 DEBUG: Log do tipo de mensagem recebido
+      this.logger.debug(`📥 Message type detected: ${messageType} | MessageId: ${message.key.id}`);
 
       // Extrair número de telefone
       const phoneNumber = this.extractPhoneNumber(message.key.remoteJid || '');
@@ -151,7 +167,9 @@ export class MessageFilterService implements IMessageFilter {
           break;
 
         default:
-          this.logger.debug(`Tipo de mensagem não suportado: ${messageType}`);
+          this.logger.warn(
+            `⚠️  Tipo de mensagem não suportado: ${messageType} | MessageId: ${message.key.id} | Keys: ${Object.keys(messageContent || {}).join(', ')}`,
+          );
           return null;
       }
 

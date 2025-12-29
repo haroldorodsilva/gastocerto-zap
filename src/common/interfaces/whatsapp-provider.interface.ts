@@ -88,6 +88,7 @@ export interface WhatsAppConnectionUpdate {
   status: ConnectionStatus;
   reason?: string;
   shouldReconnect?: boolean;
+  isNewLogin?: boolean; // Indica se acabou de autenticar (escaneou QR)
 }
 
 export interface WhatsAppCallbacks {

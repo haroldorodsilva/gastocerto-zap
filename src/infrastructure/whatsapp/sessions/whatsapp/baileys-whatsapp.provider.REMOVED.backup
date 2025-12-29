@@ -55,7 +55,7 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
 
       // Handle connection updates
       this.socket.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect, qr, isNewLogin } = update;
 
         // Handle QR code
         if (qr) {
@@ -102,6 +102,7 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
               status: ConnectionStatus.DISCONNECTED,
               reason,
               shouldReconnect,
+              isNewLogin, // Passar flag de novo login
             });
           }
         } else if (connection === 'open') {
@@ -115,6 +116,7 @@ export class BaileysWhatsAppProvider implements IWhatsAppProvider {
           if (this.callbacks.onConnectionUpdate) {
             this.callbacks.onConnectionUpdate({
               status: ConnectionStatus.CONNECTED,
+              isNewLogin,
             });
           }
 

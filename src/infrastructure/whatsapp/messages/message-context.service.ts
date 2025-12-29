@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
 
 /**
@@ -206,6 +206,35 @@ export class MessageContextService {
       oldestContext: oldest ? new Date(oldest) : null,
       newestContext: newest ? new Date(newest) : null,
     };
+  }
+
+  /**
+   * Envia mensagem para o usuário na plataforma correta
+   */
+  async sendMessage(platformId: string, message: string): Promise<boolean> {
+    const context = this.getContext(platformId);
+    
+    if (!context) {
+      this.logger.warn(`⚠️ Tentativa de enviar mensagem sem contexto: ${platformId}`);
+      return false;
+    }
+
+    try {
+      if (context.platform === MessagingPlatform.WHATSAPP) {
+        // Importação dinâmica para evitar dependência circular
+        const { sendWhatsAppMessage } = await import('../simple-whatsapp-init');
+        return await sendWhatsAppMessage(platformId, message);
+      } else if (context.platform === MessagingPlatform.TELEGRAM) {
+        this.logger.warn(`⚠️ Envio de mensagens Telegram ainda não implementado`);
+        return false;
+      }
+      
+      this.logger.warn(`⚠️ Plataforma desconhecida: ${context.platform}`);
+      return false;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao enviar mensagem para ${platformId}:`, error);
+      return false;
+    }
   }
 
   /**

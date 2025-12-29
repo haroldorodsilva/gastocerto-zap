@@ -49,6 +49,15 @@ export class WhatsAppMessageHandler {
     const { sessionId, message } = payload;
 
     try {
+      // 📱 LOG INICIAL - Mostra SEMPRE de quem veio a mensagem ANTES de qualquer filtro
+      const remoteJid = message.key.remoteJid;
+      const senderPhone = remoteJid?.split('@')[0] || 'unknown';
+      const messageId = message.key.id;
+
+      this.logger.log(
+        `📱 [WhatsApp] RAW MESSAGE | Session: ${sessionId} | From: ${senderPhone} | MessageId: ${messageId} | RemoteJid: ${remoteJid}`,
+      );
+
       this.logger.debug(
         `📨 [WhatsApp] Received message from session ${sessionId}: ${message.key.id}`,
       );
@@ -57,12 +66,15 @@ export class WhatsAppMessageHandler {
       const filteredMessage = await this.messageFilter.extractMessageData(message);
 
       if (!filteredMessage) {
-        this.logger.debug(`[WhatsApp] Message filtered out: ${message.key.id}`);
+        this.logger.log(
+          `🚫 [WhatsApp] Message FILTERED OUT | From: ${senderPhone} | MessageId: ${messageId} | Reason: Invalid format or content`,
+        );
         return;
       }
 
       const phoneNumber = filteredMessage.phoneNumber;
       this.logger.log(`✅ [WhatsApp] Processing message from ${phoneNumber}`);
+      this.logger.log(`✅ [WhatsApp] message: ${JSON.stringify(filteredMessage)}`);
 
       // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
       const rateLimitCheck = await this.userRateLimiter.checkLimit(phoneNumber);

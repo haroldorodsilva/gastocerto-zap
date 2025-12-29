@@ -21,7 +21,7 @@ import { UsersModule } from '../../../features/users/users.module';
 @Module({
   imports: [ConfigModule, MultiPlatformSessionModule, WhatsAppModule, TelegramModule, UsersModule],
   controllers: [ExternalController],
-  providers: [PrismaService, SessionsService, SessionManagerService],
-  exports: [SessionsService, SessionManagerService, WhatsAppModule, TelegramModule],
+  providers: [PrismaService, SessionsService],
+  exports: [SessionsService, WhatsAppModule, TelegramModule],
 })
 export class SessionsModule {}
