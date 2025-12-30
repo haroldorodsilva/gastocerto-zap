@@ -33,8 +33,9 @@ export class WhatsAppSessionManager implements OnModuleInit {
   // Set para controlar sessões sendo paradas intencionalmente (evita auto-recuperação)
   private readonly stoppingSessions = new Set<string>();
 
-  // Diretório base para autenticação
-  private readonly BASE_AUTH_DIR = path.join(process.cwd(), '.auth_sessions');
+  // Diretório base para autenticação (usa /tmp em produção para evitar problemas de permissão)
+  private readonly BASE_AUTH_DIR =
+    process.env.AUTH_SESSIONS_DIR || path.join(process.cwd(), '.auth_sessions');
 
   // Logger compatível com Baileys
   private readonly baileysLogger: any = {
@@ -52,9 +53,17 @@ export class WhatsAppSessionManager implements OnModuleInit {
     private readonly eventEmitter: EventEmitter2,
     private readonly chatCache: WhatsAppChatCacheService,
   ) {
-    // Criar diretório base se não existir
-    if (!fs.existsSync(this.BASE_AUTH_DIR)) {
-      fs.mkdirSync(this.BASE_AUTH_DIR, { recursive: true });
+    // Criar diretório base se não existir (com tratamento de erro)
+    try {
+      if (!fs.existsSync(this.BASE_AUTH_DIR)) {
+        fs.mkdirSync(this.BASE_AUTH_DIR, { recursive: true });
+        this.logger.log(`📁 Auth sessions directory created: ${this.BASE_AUTH_DIR}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `⚠️ Could not create auth directory ${this.BASE_AUTH_DIR}: ${error.message}`,
+      );
+      this.logger.warn(`   Sessions will use database only (no local files)`);
     }
   }
 

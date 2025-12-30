@@ -47,6 +47,11 @@ RUN apk add --no-cache openssl tini
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 
+# Create auth sessions directory with proper permissions
+RUN mkdir -p /tmp/auth_sessions && \
+    chown -R nestjs:nodejs /tmp/auth_sessions && \
+    chmod -R 755 /tmp/auth_sessions
+
 # Copy necessary files
 COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/yarn.lock ./
@@ -56,7 +61,8 @@ COPY --from=builder --chown=nestjs:nodejs /app/src/prisma ./src/prisma
 
 # Set environment
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    AUTH_SESSIONS_DIR=/tmp/auth_sessions
 
 # Switch to non-root user
 USER nestjs
