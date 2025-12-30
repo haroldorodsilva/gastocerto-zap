@@ -1703,6 +1703,7 @@ isActive: ${dto.isActive}
   @HttpCode(HttpStatus.OK)
   async deleteRagSearchLogs(@Body() dto: { ids: string[] }) {
     this.logger.log(`🗑️ Admin solicitou exclusão de ${dto.ids?.length || 0} logs RAG`);
+    this.logger.debug(`IDs para deletar: ${JSON.stringify(dto.ids)}`);
 
     try {
       if (!dto.ids || !Array.isArray(dto.ids) || dto.ids.length === 0) {
@@ -1710,6 +1711,8 @@ isActive: ${dto.isActive}
       }
 
       const result = await this.ragService.deleteSearchLogs(dto.ids);
+      
+      this.logger.log(`✅ Deletados ${result.deletedCount} de ${dto.ids.length} logs solicitados`);
 
       return {
         success: true,

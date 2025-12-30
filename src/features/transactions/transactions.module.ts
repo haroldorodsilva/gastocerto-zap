@@ -18,6 +18,12 @@ import { ListContextService } from './list-context.service';
 import { CreditCardService } from '../credit-cards/credit-card.service';
 import { TransactionsController } from './transactions.controller';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
+import { TemporalParserService } from '@common/services/temporal-parser.service';
+import { InstallmentParserService } from '@common/services/installment-parser.service';
+import { FixedTransactionParserService } from '@common/services/fixed-transaction-parser.service';
+import { CreditCardParserService } from '@common/services/credit-card-parser.service';
+import { CreditCardInvoiceCalculatorService } from '@common/services/credit-card-invoice-calculator.service';
+import { PaymentStatusResolverService } from './services/payment-status-resolver.service';
 import { AiModule } from '../../infrastructure/ai/ai.module';
 import { RAGModule } from '../../infrastructure/ai/rag/rag.module';
 import { UsersModule } from '@features/users/users.module';
@@ -95,6 +101,13 @@ import { PrismaService } from '@core/database/prisma.service';
     MessageLearningService, // ✅ Serviço de aprendizado inteligente
     CreditCardService, // ✅ Serviço de cartões de crédito
     ListContextService, // ✅ Serviço de contexto de lista
+    // Serviços NLP para transações avançadas
+    TemporalParserService,
+    InstallmentParserService,
+    FixedTransactionParserService,
+    CreditCardParserService,
+    CreditCardInvoiceCalculatorService,
+    PaymentStatusResolverService,
     PrismaService,
   ],
   exports: [

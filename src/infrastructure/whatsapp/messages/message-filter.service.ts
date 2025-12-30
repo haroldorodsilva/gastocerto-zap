@@ -22,16 +22,8 @@ export class MessageFilterService implements IMessageFilter {
       return false;
     }
 
-    // Ignorar mensagens próprias (enviadas por nós) - EXCETO em modo de teste
+    // Ignorar mensagens próprias (enviadas por nós)
     if (message.key.fromMe) {
-      // ✅ Em modo de teste, permite mensagens do próprio número
-      if (this.testPhoneNumber) {
-        const messagePhone = message.key.remoteJid?.split('@')[0];
-        if (messagePhone === this.testPhoneNumber) {
-          this.logger.debug(`✅ Test mode: Allowing message from self (${this.testPhoneNumber})`);
-          return true; // Permitir em modo de teste
-        }
-      }
       this.logger.debug(`❌ Message from me (fromMe=true)`);
       return false;
     }
@@ -99,6 +91,14 @@ export class MessageFilterService implements IMessageFilter {
       const phoneNumber = this.extractPhoneNumber(message.key.remoteJid || '');
       if (!phoneNumber) {
         this.logger.warn(`Não foi possível extrair número de telefone: ${message.key.remoteJid}`);
+        return null;
+      }
+
+      // 🔒 FILTRO TEST_PHONE_NUMBER: Se configurado, processar apenas mensagens desse número
+      if (this.testPhoneNumber && phoneNumber !== this.testPhoneNumber) {
+        this.logger.log(
+          `⏭️  Mensagem ignorada - Número ${phoneNumber} não é o número de teste (${this.testPhoneNumber})`,
+        );
         return null;
       }
 

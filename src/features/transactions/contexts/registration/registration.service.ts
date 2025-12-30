@@ -28,6 +28,12 @@ import {
   EXPENSE_KEYWORDS,
   INCOME_KEYWORDS,
 } from '@common/constants/nlp-keywords.constants';
+import { InstallmentParserService } from '@common/services/installment-parser.service';
+import { FixedTransactionParserService } from '@common/services/fixed-transaction-parser.service';
+import { CreditCardParserService } from '@common/services/credit-card-parser.service';
+import { CreditCardInvoiceCalculatorService } from '@common/services/credit-card-invoice-calculator.service';
+import { PaymentStatusResolverService } from '../../services/payment-status-resolver.service';
+import { CreditCardService } from '@features/credit-cards/credit-card.service';
 
 /**
  * TransactionRegistrationService
@@ -57,6 +63,12 @@ export class TransactionRegistrationService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly temporalParser: TemporalParserService,
+    private readonly installmentParser: InstallmentParserService,
+    private readonly fixedParser: FixedTransactionParserService,
+    private readonly creditCardParser: CreditCardParserService,
+    private readonly invoiceCalculator: CreditCardInvoiceCalculatorService,
+    private readonly paymentStatusResolver: PaymentStatusResolverService,
+    private readonly creditCardService: CreditCardService,
     @Optional()
     @Inject(forwardRef(() => MessageLearningService))
     private readonly messageLearningService?: MessageLearningService,
@@ -407,6 +419,114 @@ export class TransactionRegistrationService {
           `Categoria: ${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ' (sem subcategoria)'} | ` +
           `Confiança: ${(extractedData.confidence * 100).toFixed(1)}%`,
       );
+
+      // ✨ NOVO: Detectar parcelamento, transação fixa e cartão de crédito
+      this.logger.log(`🔍 Iniciando detecções avançadas...`);
+
+      // 1. Detectar parcelamento
+      const installmentDetection = this.installmentParser.detectInstallments(text);
+      this.logger.debug(`🔍 Detecção de parcelamento: ${JSON.stringify(installmentDetection)}`);
+
+      // 2. Detectar transação fixa
+      const fixedDetection = this.fixedParser.detectFixed(text);
+      this.logger.debug(`🔍 Detecção de fixa: ${JSON.stringify(fixedDetection)}`);
+
+      // 3. Detectar cartão de crédito
+      const creditCardDetection = this.creditCardParser.detectCreditCard(text);
+      this.logger.debug(`🔍 Detecção de cartão: ${JSON.stringify(creditCardDetection)}`);
+
+      // 4. Enriquecer dados extraídos com detecções
+      if (installmentDetection.isInstallment) {
+        extractedData.installments = installmentDetection.installments;
+        extractedData.installmentNumber = 1;
+        this.logger.log(
+          `💳 Parcelamento detectado: ${installmentDetection.installments}x` +
+          ` (padrão: "${installmentDetection.matchedPattern}")`
+        );
+      }
+
+      if (fixedDetection.isFixed) {
+        extractedData.isFixed = true;
+        extractedData.fixedFrequency = fixedDetection.frequency;
+        this.logger.log(
+          `🔁 Transação fixa detectada: ${fixedDetection.frequency}` +
+          ` (keywords: ${fixedDetection.matchedKeywords?.join(', ')})`
+        );
+      }
+
+      if (creditCardDetection.usesCreditCard) {
+        // 💳 VALIDAÇÃO DE CARTÃO: Verificar cartões disponíveis e aplicar regras
+        const cardValidation = await this.validateCreditCardUsage(user);
+
+        if (!cardValidation.success) {
+          // Retornar erro se não passou na validação
+          return {
+            success: false,
+            message: cardValidation.message,
+            requiresConfirmation: false,
+          };
+        }
+
+        extractedData.creditCardId = cardValidation.creditCardId;
+        this.logger.log(
+          `💳 Cartão de crédito validado` +
+          ` (keywords: ${creditCardDetection.matchedKeywords?.join(', ')})` +
+          ` | creditCardId: ${cardValidation.creditCardId}` +
+          ` | ${cardValidation.wasAutoSet ? 'AUTO-SET' : 'DEFAULT'}`
+        );
+      }
+
+      // 5. Calcular mês da fatura (se for cartão de crédito)
+      let invoiceMonth: string | undefined;
+      let invoiceMonthFormatted: string | undefined;
+
+      if (extractedData.creditCardId) {
+        try {
+          const closingDay = await this.invoiceCalculator.getCardClosingDay(
+            user.id,
+            extractedData.creditCardId,
+          );
+
+          const invoiceCalc = this.invoiceCalculator.calculateInvoiceMonth(
+            extractedData.date || new Date().toISOString(),
+            closingDay,
+          );
+
+          invoiceMonth = invoiceCalc.invoiceMonth;
+          invoiceMonthFormatted = invoiceCalc.invoiceMonthFormatted;
+          extractedData.invoiceMonth = invoiceMonth;
+
+          this.logger.log(
+            `📅 Fatura calculada: ${invoiceMonthFormatted}` +
+            ` (Fechamento dia ${closingDay}, transação: ${invoiceCalc.isAfterClosing ? 'APÓS' : 'ANTES'} do fechamento)`
+          );
+        } catch (error) {
+          this.logger.error(`❌ Erro ao calcular mês da fatura:`, error);
+        }
+      }
+
+      // 6. Determinar status de pagamento
+      const statusDecision = this.paymentStatusResolver.resolvePaymentStatus(
+        extractedData,
+        invoiceMonth,
+        invoiceMonthFormatted,
+      );
+      extractedData.paymentStatus = statusDecision.status;
+
+      this.logger.log(
+        `✅ Status determinado: ${statusDecision.status}` +
+        ` (${statusDecision.reason})` +
+        ` | Requer confirmação obrigatória: ${statusDecision.requiresConfirmation}`
+      );
+
+      // 7. Forçar confidence baixa se requer confirmação obrigatória
+      if (statusDecision.requiresConfirmation) {
+        // Garantir que NÃO será auto-registrada
+        extractedData.confidence = Math.min(extractedData.confidence, 0.75);
+        this.logger.log(
+          `⚠️ Confirmação obrigatória: confidence ajustada de ${((extractedData.confidence || 0) * 100).toFixed(1)}% para máx 75%`
+        );
+      }
 
       // Registrar uso de IA apenas se foi usada
       if (usedAI) {
@@ -931,6 +1051,14 @@ export class TransactionRegistrationService {
           confidence: data.confidence,
           subcategory: data.subCategory,
         },
+        // 📦 Novos campos para transações avançadas
+        isFixed: data.isFixed || undefined,
+        fixedFrequency: data.fixedFrequency || undefined,
+        installments: data.installments || undefined,
+        installmentNumber: data.installmentNumber || undefined,
+        creditCardId: data.creditCardId || undefined,
+        paymentStatus: data.paymentStatus || undefined,
+        invoiceMonth: data.invoiceMonth || undefined,
       };
 
       const confirmation = await this.confirmationService.create(dto);
@@ -958,6 +1086,40 @@ export class TransactionRegistrationService {
         }
       }
 
+      // 📦 Informações adicionais para transações especiais
+      let additionalInfo = '';
+      
+      // Transação parcelada
+      if (data.installments && data.installments > 1) {
+        const installmentValue = data.amount / data.installments;
+        additionalInfo += `\n💳 *Parcelamento:* ${data.installments}x de R$ ${installmentValue.toFixed(2)}`;
+        if (data.installmentNumber) {
+          additionalInfo += ` (parcela ${data.installmentNumber}/${data.installments})`;
+        }
+      }
+      
+      // Transação fixa/recorrente
+      if (data.isFixed && data.fixedFrequency) {
+        const frequencyMap = {
+          'MONTHLY': 'Mensal',
+          'WEEKLY': 'Semanal',
+          'ANNUAL': 'Anual',
+          'BIENNIAL': 'Bienal'
+        };
+        additionalInfo += `\n🔄 *Recorrência:* ${frequencyMap[data.fixedFrequency] || data.fixedFrequency}`;
+      }
+      
+      // Transação no cartão de crédito
+      if (data.creditCardId && data.invoiceMonth) {
+        additionalInfo += `\n💳 *Cartão de Crédito*`;
+        additionalInfo += `\n📅 *Fatura:* ${data.invoiceMonth}`;
+      }
+      
+      // Status do pagamento
+      if (data.paymentStatus === 'PENDING') {
+        additionalInfo += `\n⏳ *Status:* Pendente`;
+      }
+
       return {
         success: true,
         message:
@@ -967,8 +1129,9 @@ export class TransactionRegistrationService {
           `${data.description ? `📝 *Descrição:* ${data.description}\n` : ''}` +
           `${data.date ? `📅 *Data:* ${DateUtil.formatBR(validDate)}\n` : ''}` +
           `${data.merchant ? `🏪 *Local:* ${data.merchant}\n` : ''}` +
-          `👤 *Perfil:* ${accountName}\n\n` +
-          `✅ Digite *"sim"* para confirmar\n` +
+          `👤 *Perfil:* ${accountName}` +
+          additionalInfo + // Adiciona informações de parcelas/fixa/cartão
+          `\n\n✅ Digite *"sim"* para confirmar\n` +
           `❌ Digite *"não"* para cancelar`,
         requiresConfirmation: true,
         confirmationId: confirmation.id,
@@ -988,6 +1151,309 @@ export class TransactionRegistrationService {
       errors.map((err) => `• ${err}`).join('\n') +
       '\n\n_Por favor, corrija e tente novamente._'
     );
+  }
+
+  /**
+   * � FASE 8: Cria próximas ocorrências para transações fixas/recorrentes
+   * 
+   * Quando o usuário confirma uma transação fixa (ex: assinatura mensal), este método:
+   * 1. Determina a frequência (MONTHLY, WEEKLY, ANNUAL, BIENNIAL)
+   * 2. Calcula as próximas N datas baseado na frequência
+   * 3. Cria transações futuras na API
+   * 4. Limite padrão: 6 meses (ou 26 semanas se semanal)
+   */
+  private async createRecurringOccurrences(confirmation: any): Promise<void> {
+    try {
+      const frequency = confirmation.fixedFrequency;
+      const occurrencesLimit = this.getOccurrencesLimit(frequency);
+
+      this.logger.log(
+        `🔄 [RECURRING] Criando ocorrências futuras: ${occurrencesLimit} ocorrências (${frequency})`,
+      );
+
+      // Buscar usuário
+      const user = await this.userCache.getUser(confirmation.phoneNumber);
+      if (!user) {
+        this.logger.warn(`⚠️ [RECURRING] Usuário não encontrado: ${confirmation.phoneNumber}`);
+        return;
+      }
+
+      // Usar accountId da confirmação
+      const accountId = confirmation.accountId;
+      if (!accountId) {
+        this.logger.warn(`⚠️ [RECURRING] Confirmação sem accountId`);
+        return;
+      }
+
+      // Data base da primeira ocorrência
+      const baseDate = new Date(confirmation.date);
+
+      // Criar próximas ocorrências
+      const occurrencesToCreate = [];
+      for (let i = 1; i <= occurrencesLimit; i++) {
+        const occurrenceDate = this.calculateNextOccurrenceDate(baseDate, frequency, i);
+        occurrencesToCreate.push({
+          occurrenceNumber: i + 1, // +1 porque a primeira já foi criada
+          date: occurrenceDate,
+        });
+      }
+
+      // Criar cada ocorrência na API
+      for (const occurrence of occurrencesToCreate) {
+        const dto: CreateGastoCertoTransactionDto = {
+          userId: user.gastoCertoId,
+          accountId,
+          categoryId: confirmation.categoryId,
+          subCategoryId: confirmation.subCategoryId || undefined,
+          type: confirmation.type,
+          amount: confirmation.amount,
+          description: confirmation.description
+            ? `${confirmation.description} (${this.formatFrequency(frequency)})`
+            : `Recorrência ${this.formatFrequency(frequency)}`,
+          date: occurrence.date.toISOString().split('T')[0], // YYYY-MM-DD
+          source: confirmation.platform || 'whatsapp',
+        };
+
+        try {
+          const response = await this.gastoCertoApi.createTransaction(dto);
+          this.logger.log(
+            `✅ [RECURRING] Ocorrência ${occurrence.occurrenceNumber} criada: ${occurrence.date.toISOString().split('T')[0]}`,
+          );
+
+          // Opcional: Salvar no banco para rastreamento
+          await this.prisma.transactionConfirmation.create({
+            data: {
+              phoneNumber: confirmation.phoneNumber,
+              platform: confirmation.platform || 'whatsapp',
+              messageId: `${confirmation.messageId}_recurring_${occurrence.occurrenceNumber}`,
+              type: confirmation.type,
+              amount: confirmation.amount,
+              category: confirmation.category,
+              categoryId: confirmation.categoryId,
+              subCategoryId: confirmation.subCategoryId,
+              subCategoryName: confirmation.subCategoryName,
+              description: dto.description,
+              date: occurrence.date,
+              extractedData: confirmation.extractedData,
+              confirmedAt: new Date(),
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h de expiração
+              apiSent: true,
+              apiSentAt: new Date(),
+              // Campos de recorrência
+              isFixed: true,
+              fixedFrequency: frequency,
+              paymentStatus: 'PENDING',
+            },
+          });
+        } catch (error) {
+          this.logger.error(
+            `❌ [RECURRING] Erro ao criar ocorrência ${occurrence.occurrenceNumber}:`,
+            error,
+          );
+          // Continua criando as outras ocorrências mesmo se uma falhar
+        }
+      }
+
+      this.logger.log(
+        `✅ [RECURRING] Processo concluído: ${occurrencesToCreate.length} ocorrências criadas`,
+      );
+    } catch (error) {
+      this.logger.error(`❌ [RECURRING] Erro ao criar ocorrências recorrentes:`, error);
+      // Não propaga erro para não bloquear confirmação principal
+    }
+  }
+
+  /**
+   * Determina quantas ocorrências futuras criar baseado na frequência
+   */
+  private getOccurrencesLimit(frequency: string): number {
+    switch (frequency) {
+      case 'WEEKLY':
+        return 12; // 12 semanas = ~3 meses
+      case 'MONTHLY':
+        return 6; // 6 meses
+      case 'ANNUAL':
+        return 2; // 2 anos
+      case 'BIENNIAL':
+        return 1; // 1 ocorrência (daqui a 2 anos)
+      default:
+        return 6;
+    }
+  }
+
+  /**
+   * Calcula a data da próxima ocorrência baseado na frequência
+   */
+  private calculateNextOccurrenceDate(
+    baseDate: Date,
+    frequency: string,
+    incrementCount: number,
+  ): Date {
+    const nextDate = new Date(baseDate);
+
+    switch (frequency) {
+      case 'WEEKLY':
+        nextDate.setDate(baseDate.getDate() + incrementCount * 7);
+        break;
+      case 'MONTHLY':
+        nextDate.setMonth(baseDate.getMonth() + incrementCount);
+        break;
+      case 'ANNUAL':
+        nextDate.setFullYear(baseDate.getFullYear() + incrementCount);
+        break;
+      case 'BIENNIAL':
+        nextDate.setFullYear(baseDate.getFullYear() + incrementCount * 2);
+        break;
+    }
+
+    return nextDate;
+  }
+
+  /**
+   * Formata a frequência para exibição
+   */
+  private formatFrequency(frequency: string): string {
+    const frequencyMap: Record<string, string> = {
+      WEEKLY: 'Semanal',
+      MONTHLY: 'Mensal',
+      ANNUAL: 'Anual',
+      BIENNIAL: 'Bienal',
+    };
+    return frequencyMap[frequency] || frequency;
+  }
+
+  /**
+   * �📦 FASE 7: Cria parcelas adicionais para transações parceladas
+   * 
+   * Quando o usuário confirma uma transação parcelada (ex: 4x), este método:
+   * 1. Calcula as datas das próximas parcelas (incrementa mês a mês)
+   * 2. Cria N-1 transações adicionais na API (primeira já foi criada)
+   * 3. Cada parcela tem seu próprio installmentNumber (2/4, 3/4, 4/4)
+   * 4. Se for cartão, calcula o mês da fatura para cada parcela
+   */
+  private async createAdditionalInstallments(confirmation: any): Promise<void> {
+    try {
+      const totalInstallments = confirmation.installments;
+      const currentInstallmentNumber = confirmation.installmentNumber || 1;
+
+      this.logger.log(
+        `📦 [INSTALLMENTS] Criando parcelas adicionais: ${totalInstallments - currentInstallmentNumber} restantes`,
+      );
+
+      // Buscar usuário
+      const user = await this.userCache.getUser(confirmation.phoneNumber);
+      if (!user) {
+        this.logger.warn(`⚠️ [INSTALLMENTS] Usuário não encontrado: ${confirmation.phoneNumber}`);
+        return;
+      }
+
+      // Usar accountId da confirmação
+      const accountId = confirmation.accountId;
+      if (!accountId) {
+        this.logger.warn(`⚠️ [INSTALLMENTS] Confirmação sem accountId`);
+        return;
+      }
+
+      // Data base da primeira parcela
+      const baseDate = new Date(confirmation.date);
+
+      // Criar parcelas restantes (de installmentNumber+1 até totalInstallments)
+      const installmentsToCreate = [];
+      for (let i = currentInstallmentNumber + 1; i <= totalInstallments; i++) {
+        // Calcular data da parcela (adiciona meses)
+        const installmentDate = new Date(baseDate);
+        installmentDate.setMonth(baseDate.getMonth() + (i - currentInstallmentNumber));
+
+        // Calcular mês da fatura se for cartão
+        let invoiceMonth: string | undefined;
+        let invoiceMonthFormatted: string | undefined;
+        if (confirmation.creditCardId) {
+          // Buscar dia de fechamento do cartão
+          const closingDay = await this.invoiceCalculator.getCardClosingDay(
+            user.gastoCertoId,
+            confirmation.creditCardId,
+          );
+          const invoiceResult = this.invoiceCalculator.calculateInvoiceMonth(
+            installmentDate,
+            closingDay,
+          );
+          invoiceMonth = invoiceResult.invoiceMonth;
+          invoiceMonthFormatted = invoiceResult.invoiceMonthFormatted;
+        }
+
+        installmentsToCreate.push({
+          installmentNumber: i,
+          date: installmentDate,
+          invoiceMonth,
+          invoiceMonthFormatted,
+        });
+      }
+
+      // Criar cada parcela na API
+      for (const installment of installmentsToCreate) {
+        const dto: CreateGastoCertoTransactionDto = {
+          userId: user.gastoCertoId,
+          accountId,
+          categoryId: confirmation.categoryId,
+          subCategoryId: confirmation.subCategoryId || undefined,
+          type: confirmation.type,
+          amount: confirmation.amount, // Mesmo valor para cada parcela
+          description: confirmation.description
+            ? `${confirmation.description} (${installment.installmentNumber}/${totalInstallments})`
+            : `Parcela ${installment.installmentNumber}/${totalInstallments}`,
+          date: installment.date.toISOString().split('T')[0], // YYYY-MM-DD
+          source: confirmation.platform || 'whatsapp', // Campo obrigatório
+        };
+
+        try {
+          const response = await this.gastoCertoApi.createTransaction(dto);
+          this.logger.log(
+            `✅ [INSTALLMENTS] Parcela ${installment.installmentNumber}/${totalInstallments} criada com sucesso`,
+          );
+
+          // Opcional: Salvar no banco para rastreamento
+          await this.prisma.transactionConfirmation.create({
+            data: {
+              phoneNumber: confirmation.phoneNumber,
+              platform: confirmation.platform || 'whatsapp',
+              messageId: `${confirmation.messageId}_installment_${installment.installmentNumber}`,
+              type: confirmation.type,
+              amount: confirmation.amount,
+              category: confirmation.category,
+              categoryId: confirmation.categoryId,
+              subCategoryId: confirmation.subCategoryId,
+              subCategoryName: confirmation.subCategoryName,
+              description: dto.description,
+              date: installment.date,
+              extractedData: confirmation.extractedData,
+              confirmedAt: new Date(),
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h de expiração
+              apiSent: true,
+              apiSentAt: new Date(),
+              // Campos de parcelamento
+              installments: totalInstallments,
+              installmentNumber: installment.installmentNumber,
+              creditCardId: confirmation.creditCardId,
+              invoiceMonth: installment.invoiceMonth,
+              paymentStatus: 'PENDING',
+            },
+          });
+        } catch (error) {
+          this.logger.error(
+            `❌ [INSTALLMENTS] Erro ao criar parcela ${installment.installmentNumber}/${totalInstallments}:`,
+            error,
+          );
+          // Continua criando as outras parcelas mesmo se uma falhar
+        }
+      }
+
+      this.logger.log(
+        `✅ [INSTALLMENTS] Processo concluído: ${installmentsToCreate.length} parcelas criadas`,
+      );
+    } catch (error) {
+      this.logger.error(`❌ [INSTALLMENTS] Erro ao criar parcelas adicionais:`, error);
+      // Não propaga erro para não bloquear confirmação principal
+    }
   }
 
   /**
@@ -1013,6 +1479,16 @@ export class TransactionRegistrationService {
           },
         });
         this.logger.log(`✅ Confirmação ${confirmation.id} marcada como enviada`);
+
+        // 📦 FASE 7: Criar parcelas adicionais se transação for parcelada
+        if (confirmation.installments && confirmation.installments > 1) {
+          await this.createAdditionalInstallments(confirmation);
+        }
+
+        // 🔄 FASE 8: Criar próximas ocorrências se transação for fixa/recorrente
+        if (confirmation.isFixed && confirmation.fixedFrequency) {
+          await this.createRecurringOccurrences(confirmation);
+        }
 
         const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
         const subCategoryText = confirmation.subCategoryName
@@ -1213,7 +1689,7 @@ export class TransactionRegistrationService {
           ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
           : DateUtil.formatToISO(DateUtil.today()),
         merchant: confirmation.extractedData?.merchant || data?.merchant,
-        source: 'whatsapp',
+        source: confirmation.platform || 'whatsapp', // Usar platform da confirmação
       };
 
       this.logger.log(`📤 Enviando para GastoCerto API:`, JSON.stringify(dto, null, 2));
@@ -1725,6 +2201,105 @@ export class TransactionRegistrationService {
     // Se não detectou, retorna undefined (não filtra)
     this.logger.debug(`🔍 Tipo NÃO detectado - sem filtro de tipo`);
     return undefined;
+  }
+
+  /**
+   * Valida uso de cartão de crédito e aplica regras:
+   * 1. Se tem cartão default → usar
+   * 2. Se não tem default mas tem 1 cartão → definir como default e usar
+   * 3. Se não tem cartão → retornar erro
+   * 4. Se tem 2+ cartões → pedir escolha
+   */
+  private async validateCreditCardUsage(user: UserCache): Promise<{
+    success: boolean;
+    message: string;
+    creditCardId?: string;
+    wasAutoSet?: boolean;
+  }> {
+    try {
+      this.logger.log(`💳 [VALIDATE CARD] Validando uso de cartão para usuário ${user.gastoCertoId}`);
+
+      // 1. Verificar se já tem cartão default
+      if (user.defaultCreditCardId) {
+        this.logger.log(`💳 [VALIDATE CARD] Cartão default encontrado: ${user.defaultCreditCardId}`);
+        return {
+          success: true,
+          message: '',
+          creditCardId: user.defaultCreditCardId,
+          wasAutoSet: false,
+        };
+      }
+
+      // 2. Buscar cartões disponíveis
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
+      if (!activeAccount) {
+        this.logger.error(`❌ [VALIDATE CARD] Conta ativa não encontrada`);
+        return {
+          success: false,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
+        };
+      }
+
+      const cardsResult = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+      this.logger.log(`💳 [VALIDATE CARD] Cartões encontrados: ${JSON.stringify(cardsResult)}`);
+
+      if (!cardsResult.success || !cardsResult.data || cardsResult.data.length === 0) {
+        // 3. Não tem cartão cadastrado
+        this.logger.warn(`💳 [VALIDATE CARD] Nenhum cartão cadastrado`);
+        return {
+          success: false,
+          message:
+            '💳 *Cartão de crédito não encontrado*\n\n' +
+            '📭 Você ainda não tem cartões cadastrados.\n\n' +
+            '💡 _Cadastre um cartão no app para usar esta funcionalidade!_',
+        };
+      }
+
+      const cards = cardsResult.data;
+
+      if (cards.length === 1) {
+        // 4. Tem apenas 1 cartão → definir como default automaticamente
+        const card = cards[0];
+        this.logger.log(`💳 [VALIDATE CARD] Apenas 1 cartão encontrado - definindo como default: ${card.id}`);
+
+        // Definir como default no cache
+        await this.userCache.setDefaultCreditCard(user.phoneNumber, card.id);
+
+        return {
+          success: true,
+          message: '',
+          creditCardId: card.id,
+          wasAutoSet: true,
+        };
+      }
+
+      // 5. Tem 2+ cartões → pedir escolha
+      this.logger.warn(`💳 [VALIDATE CARD] Múltiplos cartões (${cards.length}) - requer escolha`);
+
+      let message = '💳 *Escolha um cartão padrão*\n\n';
+      message += `📊 Você tem ${cards.length} cartões cadastrados:\n\n`;
+      message += '───────────────────\n\n';
+
+      cards.forEach((card, index) => {
+        message += `${index + 1}. 💳 *${card.name}*\n`;
+        message += `   🏦 ${card.bank?.name || ''}\n`;
+        message += `   💰 Limite: R$ ${(card.limit / 100).toFixed(2)}\n\n`;
+      });
+
+      message += '\n💡 _Digite: "usar cartão [nome]" para definir o padrão_';
+      message += '\n\n📌 _Exemplo: "usar cartão nubank"_';
+
+      return {
+        success: false,
+        message,
+      };
+    } catch (error) {
+      this.logger.error(`❌ [VALIDATE CARD] Erro ao validar cartão:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao validar cartão de crédito. Tente novamente.',
+      };
+    }
   }
 
   /**

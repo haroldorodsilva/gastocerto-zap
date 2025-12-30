@@ -1043,6 +1043,39 @@ export class UserCacheService {
   }
 
   /**
+   * Define o cartão de crédito padrão do usuário
+   */
+  async setDefaultCreditCard(phoneNumber: string, creditCardId: string): Promise<UserCache | null> {
+    try {
+      const user = await this.getUser(phoneNumber);
+      if (!user) {
+        this.logger.warn(`Usuário não encontrado para definir cartão padrão: ${phoneNumber}`);
+        return null;
+      }
+
+      const updated = await this.prisma.userCache.update({
+        where: { id: user.id },
+        data: {
+          defaultCreditCardId: creditCardId,
+        },
+      });
+
+      // Invalidar cache Redis (todos os identificadores)
+      if (updated.phoneNumber)
+        await this.redisService.getClient().del(`user:${updated.phoneNumber}`);
+      if (updated.telegramId) await this.redisService.getClient().del(`user:${updated.telegramId}`);
+      if (updated.whatsappId) await this.redisService.getClient().del(`user:${updated.whatsappId}`);
+
+      this.logger.log(`✅ Cartão padrão definido para ${phoneNumber}: ${creditCardId}`);
+
+      return updated;
+    } catch (error) {
+      this.logger.error(`Erro ao definir cartão padrão do usuário ${phoneNumber}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Lista todas as contas do usuário
    */
   async listAccounts(phoneNumber: string): Promise<

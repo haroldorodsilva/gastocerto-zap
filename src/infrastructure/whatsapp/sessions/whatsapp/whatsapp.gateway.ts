@@ -194,9 +194,30 @@ export class WhatsAppGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @OnEvent('session.qr')
   handleQRCode(payload: { sessionId: string; qr: string }) {
     this.logger.log(`📱 QR code generated for session ${payload.sessionId}`);
+    
+    // Verificar quantos clientes estão inscritos nesta sessão
+    const roomName = `session:${payload.sessionId}`;
+    const sockets = this.server.in(roomName).allSockets();
+    
+    sockets.then((socketIds) => {
+      const subscribedClients = socketIds.size;
+      this.logger.log(`📊 Clients subscribed to ${roomName}: ${subscribedClients}`);
+      
+      // Se não houver clientes inscritos, emitir para todos
+      if (subscribedClients === 0) {
+        this.logger.log(`📡 No subscribed clients, broadcasting QR to all connected clients`);
+      }
+    });
 
     // Emit to all clients subscribed to this session
-    this.server.to(`session:${payload.sessionId}`).emit('qr', {
+    this.server.to(roomName).emit('qr', {
+      sessionId: payload.sessionId,
+      qr: payload.qr,
+      timestamp: new Date(),
+    });
+    
+    // Sempre fazer broadcast também para garantir que todos recebam
+    this.server.emit('qr', {
       sessionId: payload.sessionId,
       qr: payload.qr,
       timestamp: new Date(),
@@ -209,6 +230,25 @@ export class WhatsAppGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     this.server.to(`session:${payload.sessionId}`).emit('qr:expired', {
       sessionId: payload.sessionId,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('session.qr.scanned')
+  handleQRScanned(payload: { sessionId: string; success: boolean }) {
+    this.logger.log(`✅ QR code scanned for session ${payload.sessionId}`);
+
+    // Emit to room subscribers
+    this.server.to(`session:${payload.sessionId}`).emit('qr:scanned', {
+      sessionId: payload.sessionId,
+      success: payload.success,
+      timestamp: new Date(),
+    });
+
+    // Broadcast to all connected clients
+    this.server.emit('qr:scanned', {
+      sessionId: payload.sessionId,
+      success: payload.success,
       timestamp: new Date(),
     });
   }
@@ -231,6 +271,67 @@ export class WhatsAppGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       sessionId: payload.sessionId,
       reason: payload.reason,
       timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('session.message.sent')
+  handleMessageSent(payload: {
+    sessionId: string;
+    to: string;
+    messageId: string;
+    text?: string;
+    timestamp: Date;
+  }) {
+    this.logger.log(`📤 Message sent in session ${payload.sessionId} to ${payload.to}`);
+
+    // Emit to room subscribers
+    this.server.to(`session:${payload.sessionId}`).emit('message:sent', {
+      sessionId: payload.sessionId,
+      to: payload.to,
+      messageId: payload.messageId,
+      text: payload.text,
+      timestamp: payload.timestamp,
+    });
+
+    // Broadcast to all connected clients
+    this.server.emit('message:sent', {
+      sessionId: payload.sessionId,
+      to: payload.to,
+      messageId: payload.messageId,
+      text: payload.text,
+      timestamp: payload.timestamp,
+    });
+  }
+
+  @OnEvent('session.message.received')
+  handleMessageReceived(payload: {
+    sessionId: string;
+    from: string;
+    messageId: string;
+    text?: string;
+    fromMe: boolean;
+    timestamp: number;
+  }) {
+    this.logger.log(`📥 Message received in session ${payload.sessionId} from ${payload.from}`);
+
+    // Emit to room subscribers
+    this.server.to(`session:${payload.sessionId}`).emit('message:received', {
+      sessionId: payload.sessionId,
+      from: payload.from,
+      messageId: payload.messageId,
+      text: payload.text,
+      fromMe: payload.fromMe,
+      timestamp: payload.timestamp,
+    });
+
+    // Broadcast to all connected clients
+    this.server.emit('message:received', {
+      sessionId: payload.sessionId,
+      from: payload.from,
+      messageId: payload.messageId,
+      text: payload.text,
+      fromMe: payload.fromMe,
+      timestamp: payload.timestamp,
     });
   }
 
@@ -304,6 +405,78 @@ export class WhatsAppGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.server.to(`session:${payload.sessionId}`).emit('session:error:515', {
       sessionId: payload.sessionId,
       message: payload.message,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('message.status.update')
+  handleMessageStatusUpdate(payload: {
+    sessionId: string;
+    messageId: string;
+    chatId: string;
+    status: any;
+  }) {
+    this.logger.debug(`📊 Message status updated: ${payload.messageId}`);
+
+    this.server.to(`session:${payload.sessionId}`).emit('message:status:update', {
+      sessionId: payload.sessionId,
+      messageId: payload.messageId,
+      chatId: payload.chatId,
+      status: payload.status,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('chat.update')
+  handleChatUpdate(payload: { sessionId: string; chatId: string; unreadCount?: number }) {
+    this.logger.debug(`💬 Chat updated: ${payload.chatId}`);
+
+    this.server.to(`session:${payload.sessionId}`).emit('chat:update', {
+      sessionId: payload.sessionId,
+      chatId: payload.chatId,
+      unreadCount: payload.unreadCount,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('contact.update')
+  handleContactUpdate(payload: {
+    sessionId: string;
+    contactId: string;
+    name?: string;
+    notify?: string;
+  }) {
+    this.logger.debug(`👤 Contact updated: ${payload.contactId}`);
+
+    this.server.to(`session:${payload.sessionId}`).emit('contact:update', {
+      sessionId: payload.sessionId,
+      contactId: payload.contactId,
+      name: payload.name,
+      notify: payload.notify,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('typing.start')
+  handleTypingStart(payload: { sessionId: string; chatId: string; participantId: string }) {
+    this.logger.debug(`✍️  Typing started in ${payload.chatId}`);
+
+    this.server.to(`session:${payload.sessionId}`).emit('typing:start', {
+      sessionId: payload.sessionId,
+      chatId: payload.chatId,
+      participantId: payload.participantId,
+      timestamp: new Date(),
+    });
+  }
+
+  @OnEvent('typing.stop')
+  handleTypingStop(payload: { sessionId: string; chatId: string; participantId: string }) {
+    this.logger.debug(`✋ Typing stopped in ${payload.chatId}`);
+
+    this.server.to(`session:${payload.sessionId}`).emit('typing:stop', {
+      sessionId: payload.sessionId,
+      chatId: payload.chatId,
+      participantId: payload.participantId,
       timestamp: new Date(),
     });
   }

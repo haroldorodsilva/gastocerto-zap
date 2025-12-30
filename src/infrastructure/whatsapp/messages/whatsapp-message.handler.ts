@@ -9,11 +9,12 @@ import { UserCacheService } from '@features/users/user-cache.service';
 import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
-import { IFilteredMessage } from '@common/interfaces/message.interface';
+import { IFilteredMessage, MessageType } from '@common/interfaces/message.interface';
 import {
   MessageValidationService,
   ValidationAction,
 } from '@features/messages/message-validation.service';
+import { TransactionsService } from '@features/transactions/transactions.service';
 
 /**
  * WhatsAppMessageHandler
@@ -34,6 +35,7 @@ export class WhatsAppMessageHandler {
     private readonly messageFilter: MessageFilterService,
     private readonly contextService: MessageContextService,
     private readonly onboardingService: OnboardingService,
+    private readonly transactionsService: TransactionsService,
     private readonly userCacheService: UserCacheService,
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
@@ -253,15 +255,66 @@ export class WhatsAppMessageHandler {
       // Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
-      // Enfileirar na fila de confirmação de transações
-      await this.transactionQueue.add('create-confirmation', {
-        userId: user.gastoCertoId,
-        phoneNumber,
-        message,
-        timestamp: Date.now(),
-      });
+      // 🆕 NOVO: Processar por tipo de mensagem (igual Telegram)
+      switch (message.type) {
+        case MessageType.TEXT:
+          // Texto: enfileirar para processamento assíncrono
+          this.logger.log(`[WhatsApp] Queueing text message for processing`);
+          await this.transactionQueue.add('create-confirmation', {
+            userId: user.gastoCertoId,
+            phoneNumber,
+            message,
+            timestamp: Date.now(),
+          });
+          break;
 
-      this.logger.log(`[WhatsApp] Message queued for transaction processing`);
+        case MessageType.IMAGE:
+          // Imagem: processar diretamente via IA
+          if (message.imageBuffer) {
+            this.logger.log(`[WhatsApp] Processing image message directly`);
+            await this.transactionsService.processImageMessage(
+              phoneNumber,
+              message.imageBuffer,
+              message.mimeType || 'image/jpeg',
+              message.messageId,
+              'whatsapp',
+              phoneNumber, // platformId
+            );
+          } else {
+            this.logger.warn(`[WhatsApp] Image message without buffer`);
+          }
+          break;
+
+        case MessageType.AUDIO:
+          // Áudio: processar diretamente via IA
+          if (message.audioBuffer) {
+            this.logger.log(`[WhatsApp] Processing audio message directly`);
+            await this.transactionsService.processAudioMessage(
+              phoneNumber,
+              message.audioBuffer,
+              message.mimeType || 'audio/ogg',
+              message.messageId,
+              'whatsapp',
+              phoneNumber, // platformId
+            );
+          } else {
+            this.logger.warn(`[WhatsApp] Audio message without buffer`);
+          }
+          break;
+
+        default:
+          this.logger.warn(`[WhatsApp] Unsupported message type: ${message.type}`);
+          this.sendMessage(
+            phoneNumber,
+            '❌ Tipo de mensagem não suportado.\n\n' +
+              'Envie:\n' +
+              '• Texto: "Gastei 50 reais em alimentação"\n' +
+              '• Foto de nota fiscal\n' +
+              '• Áudio descrevendo o gasto',
+          );
+      }
+
+      this.logger.log(`[WhatsApp] Message processed successfully`);
     } catch (error) {
       this.logger.error(
         `[WhatsApp] Error processing message from ${phoneNumber}: ${error.message}`,

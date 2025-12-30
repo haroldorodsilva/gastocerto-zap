@@ -97,6 +97,7 @@ export class CreditCardService {
       });
 
       message += '\n💡 _Para ver as faturas, digite: "faturas do cartão"_';
+      message += '\n💡 _Para definir cartão padrão, digite: "usar cartão [nome]"_';
 
       return {
         success: true,
@@ -107,6 +108,293 @@ export class CreditCardService {
       return {
         success: false,
         message: '❌ Erro ao buscar cartões de crédito.',
+      };
+    }
+  }
+
+  /**
+   * Define um cartão como padrão/default
+   * Similar ao sistema de contas ("usar conta X")
+   */
+  async setDefaultCreditCard(
+    user: UserCache,
+    messageText: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    try {
+      this.logger.log(`💳 Definindo cartão padrão para ${user.phoneNumber}`);
+
+      // Obter conta ativa
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
+      if (!activeAccount) {
+        return {
+          success: false,
+          message: '❌ Erro ao obter conta ativa. Tente novamente.',
+        };
+      }
+
+      // Buscar cartões
+      const result = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+      if (!result.success || !result.data || result.data.length === 0) {
+        return {
+          success: false,
+          message: '❌ Você não tem cartões cadastrados.',
+        };
+      }
+
+      const cards = result.data;
+
+      // Identificar cartão pelo nome na mensagem
+      const cardName = messageText
+        .toLowerCase()
+        .replace(/usar cartao|usar cartão|cartao|cartão/gi, '')
+        .trim();
+
+      const targetCard = cards.find((c) =>
+        c.name.toLowerCase().includes(cardName) ||
+        c.bank?.name?.toLowerCase().includes(cardName)
+      );
+
+      if (!targetCard) {
+        // Não encontrou - mostrar lista
+        let message = `💳 *Qual cartão você quer usar?*\n\n`;
+        cards.forEach((card, index) => {
+          message += `${index + 1}. 💳 ${card.name}\n`;
+          message += `   🏦 ${card.bank?.name || ''}\n\n`;
+        });
+        message += '\n💡 _Digite "usar cartão [nome]" ou o número_';
+
+        return {
+          success: false,
+          message,
+        };
+      }
+
+      // Atualizar defaultCreditCardId no UserCache
+      await this.userCache.setDefaultCreditCard(user.phoneNumber, targetCard.id);
+
+      this.logger.log(`✅ Cartão padrão definido: ${targetCard.name} (${targetCard.id})`);
+
+      return {
+        success: true,
+        message:
+          `✅ *Cartão padrão definido!*\n\n` +
+          `💳 *Cartão:* ${targetCard.name}\n` +
+          `🏦 *Banco:* ${targetCard.bank?.name || ''}\n\n` +
+          `💡 _Agora este cartão será usado automaticamente nas transações._`,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Erro ao definir cartão padrão:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao definir cartão padrão.',
+      };
+    }
+  }
+
+  /**
+   * Mostra qual é o cartão padrão atual
+   */
+  async showDefaultCreditCard(user: UserCache): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    try {
+      this.logger.log(`💳 Mostrando cartão padrão para ${user.phoneNumber}`);
+
+      if (!user.defaultCreditCardId) {
+        return {
+          success: true,
+          message:
+            `ℹ️ *Cartão Padrão*\n\n` +
+            `Você ainda não definiu um cartão padrão.\n\n` +
+            `💡 _Use "meus cartões" para ver a lista e "usar cartão [nome]" para definir._`,
+        };
+      }
+
+      // Obter conta ativa
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
+      if (!activeAccount) {
+        return {
+          success: false,
+          message: '❌ Erro ao obter conta ativa.',
+        };
+      }
+
+      // Buscar dados do cartão padrão
+      const result = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+      const defaultCard = result.data?.find((c) => c.id === user.defaultCreditCardId);
+
+      if (!defaultCard) {
+        return {
+          success: true,
+          message:
+            `⚠️ *Cartão Padrão*\n\n` +
+            `O cartão padrão configurado não foi encontrado.\n\n` +
+            `💡 _Use "meus cartões" para ver a lista e redefinir._`,
+        };
+      }
+
+      return {
+        success: true,
+        message:
+          `💳 *Cartão Padrão:*\n\n` +
+          `💳 *${defaultCard.name}*\n` +
+          `🏦 ${defaultCard.bank?.name || ''}\n` +
+          `💰 Limite: R$ ${formatCurrencyFromCents(defaultCard.limit)}\n` +
+          `📅 Fechamento: dia ${defaultCard.closingDay}\n` +
+          `📅 Vencimento: dia ${defaultCard.dueDay}\n\n` +
+          `💡 _Para trocar, use "usar cartão [nome]"_`,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Erro ao mostrar cartão padrão:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao buscar cartão padrão.',
+      };
+    }
+  }
+
+  /**
+   * Ver fatura de um cartão específico pelo nome
+   * Ex: "ver fatura nubank", "fatura itau"
+   */
+  async showInvoiceByCardName(
+    user: UserCache,
+    messageText: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    try {
+      this.logger.log(`💳 Buscando fatura por nome do cartão: ${messageText}`);
+
+      // Obter conta ativa
+      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
+      if (!activeAccount) {
+        return {
+          success: false,
+          message: '❌ Erro ao obter conta ativa.',
+        };
+      }
+
+      // Extrair nome do cartão da mensagem
+      const cardName = messageText
+        .toLowerCase()
+        .replace(/ver fatura|fatura|do|da/gi, '')
+        .trim();
+
+      // Buscar cartões
+      const cardsResult = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+      if (!cardsResult.success || !cardsResult.data || cardsResult.data.length === 0) {
+        return {
+          success: false,
+          message: '❌ Você não tem cartões cadastrados.',
+        };
+      }
+
+      // Encontrar cartão pelo nome ou banco
+      const targetCard = cardsResult.data.find((c) =>
+        c.name.toLowerCase().includes(cardName) ||
+        c.bank?.name?.toLowerCase().includes(cardName)
+      );
+
+      if (!targetCard) {
+        return {
+          success: false,
+          message:
+            `❌ *Cartão não encontrado*\n\n` +
+            `Não encontrei nenhum cartão com "${cardName}".\n\n` +
+            `💡 _Use "meus cartões" para ver a lista._`,
+        };
+      }
+
+      // Buscar faturas deste cartão
+      const invoicesResult = await this.gastoCertoApi.listCreditCardInvoices(
+        activeAccount.id,
+        targetCard.id, // Filtrar por cartão específico
+      );
+
+      if (
+        !invoicesResult.success ||
+        !invoicesResult.invoices ||
+        invoicesResult.invoices.length === 0
+      ) {
+        return {
+          success: true,
+          message:
+            `💳 *Faturas do ${targetCard.name}*\n\n` +
+            `✅ Não há faturas abertas ou pendentes.\n\n` +
+            `💡 _Suas faturas aparecerão aqui quando houver transações._`,
+        };
+      }
+
+      const invoices = invoicesResult.invoices;
+
+      // Ordenar por data de vencimento
+      invoices.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+      // Pegar a fatura mais recente/aberta
+      const currentInvoice = invoices.find((inv) => inv.status === 'OPEN') || invoices[0];
+
+      // Buscar detalhes completos
+      const detailsResult = await this.gastoCertoApi.getInvoiceDetails(
+        activeAccount.id,
+        currentInvoice.yearMonth,
+        targetCard.id,
+      );
+
+      if (!detailsResult.success || !detailsResult.invoice) {
+        return {
+          success: false,
+          message: '❌ Não foi possível carregar os detalhes da fatura.',
+        };
+      }
+
+      const details = detailsResult.invoice;
+
+      // Formatar mensagem
+      let message = `💳 *Fatura ${targetCard.name}*\n\n`;
+      message += `📅 *Período:* ${this.formatMonthYear(details.yearMonth)}\n`;
+      message += `💰 *Total:* R$ ${(details.amountTotal / 100).toFixed(2)}\n`;
+      message += `📆 *Vencimento:* ${DateUtil.formatBR(details.dueDate)}\n`;
+      message += `📊 *Status:* ${this.translateStatus(details.status)}\n\n`;
+      message += '───────────────────\n\n';
+
+      // Listar transações (primeiras 5)
+      if (details.transactions && details.transactions.length > 0) {
+        const displayCount = Math.min(details.transactions.length, 5);
+        message += `📋 *Transações (${details.transactions.length}):*\n\n`;
+
+        details.transactions.slice(0, displayCount).forEach((t: TransactionsRelations, index: number) => {
+          const title = t.description || t.subCategory?.name || t.category?.name || 'Sem descrição';
+          const amountInReais = Math.abs(t.amount) / 100;
+
+          message += `${index + 1}. ${title}\n`;
+          message += `   🔴 R$ ${amountInReais.toFixed(2)}\n`;
+          message += `   📅 ${DateUtil.formatBR(t.dueDate)}\n\n`;
+        });
+
+        if (details.transactions.length > 5) {
+          message += `_... e mais ${details.transactions.length - 5} transação(ões)_\n\n`;
+        }
+      } else {
+        message += '📭 Nenhuma transação nesta fatura.\n\n';
+      }
+
+      message += `💡 _Use "minhas faturas" para ver todas as faturas_`;
+
+      return {
+        success: true,
+        message,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Erro ao buscar fatura por nome do cartão:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao buscar fatura.',
       };
     }
   }

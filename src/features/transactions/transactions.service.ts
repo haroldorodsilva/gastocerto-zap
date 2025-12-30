@@ -438,7 +438,55 @@ export class TransactionsService {
         };
       }
 
-      // 3g.2. Listar faturas
+      // 3g.2. Definir cartão padrão
+      if (intentResult.intent === 'SET_DEFAULT_CREDIT_CARD') {
+        this.logger.log(`✅ Delegando para CreditCardService.setDefaultCreditCard`);
+        const result = await this.creditCardService.setDefaultCreditCard(user, text);
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        }, platformId);
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.3. Mostrar cartão padrão
+      if (intentResult.intent === 'SHOW_DEFAULT_CREDIT_CARD') {
+        this.logger.log(`✅ Delegando para CreditCardService.showDefaultCreditCard`);
+        const result = await this.creditCardService.showDefaultCreditCard(user);
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        }, platformId);
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.4. Ver fatura por nome do cartão
+      if (intentResult.intent === 'SHOW_INVOICE_BY_CARD_NAME') {
+        this.logger.log(`✅ Delegando para CreditCardService.showInvoiceByCardName`);
+        const result = await this.creditCardService.showInvoiceByCardName(user, text);
+
+        this.emitReply(phoneNumber, result.message, platform, 'INTENT_RESPONSE', {
+          success: result.success,
+        }, platformId);
+
+        return {
+          success: result.success,
+          message: result.message,
+          requiresConfirmation: false,
+        };
+      }
+
+      // 3g.5. Listar faturas
       if (intentResult.intent === 'LIST_INVOICES') {
         this.logger.log(`✅ Delegando para CreditCardService.listInvoices`);
         const result = await this.creditCardService.listInvoices(user);
@@ -454,7 +502,7 @@ export class TransactionsService {
         };
       }
 
-      // 3g.3. Detalhes de fatura (context-aware)
+      // 3g.6. Detalhes de fatura (context-aware)
       if (intentResult.intent === 'SHOW_INVOICE_DETAILS') {
         this.logger.log(`✅ Delegando para CreditCardService.showInvoiceDetails`);
         // TODO: Extrair número da fatura da mensagem (ex: "ver fatura 1")
@@ -478,7 +526,7 @@ export class TransactionsService {
         };
       }
 
-      // 3g.4. Pagar fatura (context-aware)
+      // 3g.7. Pagar fatura (context-aware)
       if (intentResult.intent === 'PAY_INVOICE') {
         this.logger.log(`✅ Delegando para CreditCardService.payInvoice`);
         // TODO: Extrair número da fatura da mensagem (ex: "pagar fatura 1")

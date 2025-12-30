@@ -65,6 +65,15 @@ export interface TransactionData {
     confidence: number;
     specificDay?: number;
   };
+  
+  // 📦 Campos para transações avançadas (fixas, parceladas, cartão)
+  isFixed?: boolean;
+  fixedFrequency?: 'MONTHLY' | 'WEEKLY' | 'ANNUAL' | 'BIENNIAL';
+  installments?: number;
+  installmentNumber?: number;
+  creditCardId?: string;
+  paymentStatus?: 'PENDING' | 'DONE';
+  invoiceMonth?: string; // Mês da fatura (YYYY-MM)
 }
 
 /**

@@ -54,6 +54,35 @@ export class CreateTransactionConfirmationDto {
 
   @IsOptional()
   extractedData?: any; // Dados brutos da IA
+
+  // ✨ NOVOS CAMPOS - Transações Avançadas
+  @IsBoolean()
+  @IsOptional()
+  isFixed?: boolean; // Transação recorrente/fixa
+
+  @IsString()
+  @IsOptional()
+  fixedFrequency?: 'MONTHLY' | 'WEEKLY' | 'ANNUAL' | 'BIENNIAL'; // Frequência da recorrência
+
+  @IsNumber()
+  @IsOptional()
+  installments?: number; // Número total de parcelas
+
+  @IsNumber()
+  @IsOptional()
+  installmentNumber?: number; // Número da parcela atual (1, 2, 3...)
+
+  @IsString()
+  @IsOptional()
+  creditCardId?: string; // ID do cartão de crédito usado
+
+  @IsString()
+  @IsOptional()
+  paymentStatus?: 'PENDING' | 'DONE'; // Status de pagamento
+
+  @IsString()
+  @IsOptional()
+  invoiceMonth?: string; // Mês da fatura (YYYY-MM) para cartão de crédito
 }
 
 /**

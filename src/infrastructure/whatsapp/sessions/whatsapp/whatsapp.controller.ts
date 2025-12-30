@@ -18,6 +18,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SessionsService } from '../sessions.service';
 import { SessionManagerService } from '../session-manager.service';
 import { WhatsAppSessionManager } from '../whatsapp-session-manager.service';
+import { WhatsAppChatCacheService } from '../whatsapp-chat-cache.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import {
   CreateSessionDto,
@@ -44,6 +45,7 @@ export class WhatsAppController {
     private readonly sessionsService: SessionsService,
     private readonly sessionManager: SessionManagerService,
     private readonly whatsappSessionManager: WhatsAppSessionManager,
+    private readonly chatCache: WhatsAppChatCacheService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -95,6 +97,60 @@ export class WhatsAppController {
         updatedAt: session.updatedAt,
       };
     });
+  }
+
+  /**
+   * Lista sessões ativas
+   * GET /whatsapp/active/list
+   */
+  @Get('active/list')
+  async getActiveSessions(): Promise<SessionResponseDto[]> {
+    const sessions = await this.sessionsService.getActiveSessions();
+
+    return sessions.map((session) => {
+      // ✅ Verificar se está realmente conectada em memória
+      const isReallyConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
+
+      return {
+        id: session.id,
+        sessionId: session.sessionId,
+        phoneNumber: session.phoneNumber,
+        name: session.name || undefined,
+        // ✅ Usar status real da memória
+        status: isReallyConnected ? 'CONNECTED' : 'DISCONNECTED',
+        isActive: session.isActive,
+        lastSeen: session.lastSeen || undefined,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * Estatísticas de sessões
+   * GET /whatsapp/stats/summary
+   */
+  @Get('stats/summary')
+  async getSessionStats() {
+    const [total, byStatus, active, connected] = await Promise.all([
+      this.sessionsService.countSessions(),
+      this.sessionsService.countByStatus(),
+      this.sessionsService.getActiveSessions(),
+      this.sessionsService.getConnectedSessions(),
+    ]);
+
+    // ✅ Contar apenas sessões realmente conectadas em memória
+    const reallyConnected = this.whatsappSessionManager.getActiveSessionIds().length;
+
+    return {
+      total,
+      active: active.length,
+      // ✅ Usar contagem real da memória
+      connected: reallyConnected,
+      // Status do banco (pode estar desatualizado)
+      dbConnected: connected.length,
+      byStatus,
+    };
   }
 
   /**
@@ -222,7 +278,7 @@ export class WhatsAppController {
     try {
       const session = await this.sessionsService.getSessionById(id);
       await this.sessionManager.stopSession(session.sessionId);
-    } catch (error) {
+    } catch {
       // Ignora erro se sessão não estiver rodando
     }
 
@@ -284,7 +340,7 @@ export class WhatsAppController {
     ) {
       throw new BadRequestException(
         `Só é possível regenerar QR em estado CONNECTING, QR_PENDING ou INACTIVE. ` +
-        `Estado atual: ${session.status}`
+          `Estado atual: ${session.status}`,
       );
     }
 
@@ -296,7 +352,7 @@ export class WhatsAppController {
       }
 
       // Aguardar um pouco para limpar state
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Reiniciar sessão para gerar novo QR
       await this.sessionManager.startSession(session.sessionId);
@@ -314,7 +370,7 @@ export class WhatsAppController {
             this.eventEmitter.off('session.qr', qrHandler);
             resolve({
               success: true,
-              qr: data.qr
+              qr: data.qr,
             });
           }
         };
@@ -323,9 +379,7 @@ export class WhatsAppController {
       });
     } catch (error) {
       this.logger.error(`Erro ao regenerar QR para sessão ${id}:`, error);
-      throw new BadRequestException(
-        `Erro ao regenerar QR Code: ${error.message}`
-      );
+      throw new BadRequestException(`Erro ao regenerar QR Code: ${error.message}`);
     }
   }
 
@@ -367,56 +421,510 @@ export class WhatsAppController {
   }
 
   /**
-   * Lista sessões ativas
-   * GET /sessions/active/list
+   * Obtém metadados da sessão ativa (perfil, status)
+   * GET /whatsapp/:id/metadata
    */
-  @Get('active/list')
-  async getActiveSessions(): Promise<SessionResponseDto[]> {
-    const sessions = await this.sessionsService.getActiveSessions();
-
-    return sessions.map((session) => {
-      // ✅ Verificar se está realmente conectada em memória
-      const isReallyConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
-
-      return {
-        id: session.id,
-        sessionId: session.sessionId,
-        phoneNumber: session.phoneNumber,
-        name: session.name || undefined,
-        // ✅ Usar status real da memória
-        status: isReallyConnected ? 'CONNECTED' : 'DISCONNECTED',
-        isActive: session.isActive,
-        lastSeen: session.lastSeen || undefined,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      };
-    });
+  @Get(':id/metadata')
+  async getSessionMetadata(@Param('id') id: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    return await this.whatsappSessionManager.getSessionMetadata(session.sessionId);
   }
 
   /**
-   * Estatísticas de sessões
-   * GET /sessions/stats/summary
+   * Busca informações de um contato específico
+   * GET /whatsapp/:id/contacts/:phoneNumber
    */
-  @Get('stats/summary')
-  async getSessionStats() {
-    const [total, byStatus, active, connected] = await Promise.all([
-      this.sessionsService.countSessions(),
-      this.sessionsService.countByStatus(),
-      this.sessionsService.getActiveSessions(),
-      this.sessionsService.getConnectedSessions(),
-    ]);
+  @Get(':id/contacts/:phoneNumber')
+  async getContactProfile(@Param('id') id: string, @Param('phoneNumber') phoneNumber: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    return await this.whatsappSessionManager.getContactProfile(session.sessionId, phoneNumber);
+  }
 
-    // ✅ Contar apenas sessões realmente conectadas em memória
-    const reallyConnected = this.whatsappSessionManager.getActiveSessionIds().length;
+  /**
+   * Verifica se um número existe no WhatsApp
+   * GET /whatsapp/:id/check-number/:phoneNumber
+   */
+  @Get(':id/check-number/:phoneNumber')
+  async checkNumberExists(@Param('id') id: string, @Param('phoneNumber') phoneNumber: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const exists = await this.whatsappSessionManager.checkNumberExists(
+      session.sessionId,
+      phoneNumber,
+    );
+    return {
+      phoneNumber,
+      exists,
+      timestamp: new Date(),
+    };
+  }
+
+  /**
+   * Envia mensagem manual para um número específico
+   * POST /whatsapp/:id/send-message
+   */
+  @Post(':id/send-message')
+  @HttpCode(HttpStatus.OK)
+  async sendManualMessage(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      to: string;
+      text?: string;
+      caption?: string;
+      image?: string;
+      document?: { url: string; mimetype: string; fileName: string };
+    },
+  ) {
+    const session = await this.sessionsService.getSessionById(id);
+
+    if (!body.text && !body.image && !body.document) {
+      throw new BadRequestException('Provide at least text, image or document');
+    }
+
+    const result = await this.whatsappSessionManager.sendAdvancedMessage(
+      session.sessionId,
+      body.to,
+      {
+        text: body.text,
+        caption: body.caption,
+        image: body.image,
+        document: body.document,
+      },
+    );
+
+    if (!result.success) {
+      throw new BadRequestException(result.error || 'Failed to send message');
+    }
+
+    // Emitir evento de mensagem enviada via WebSocket
+    this.eventEmitter.emit('session.message.sent', {
+      sessionId: session.sessionId,
+      to: body.to,
+      messageId: result.messageId,
+      text: body.text,
+      timestamp: new Date(),
+    });
 
     return {
-      total,
-      active: active.length,
-      // ✅ Usar contagem real da memória
-      connected: reallyConnected,
-      // Status do banco (pode estar desatualizado)
-      dbConnected: connected.length,
-      byStatus,
+      success: true,
+      messageId: result.messageId,
+      to: body.to,
+      timestamp: new Date(),
+    };
+  }
+
+  /**
+   * Lista todos os contatos da sessão
+   * GET /whatsapp/:id/contacts
+   */
+  @Get(':id/contacts')
+  async getContacts(@Param('id') id: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const contacts = await this.whatsappSessionManager.getContacts(session.sessionId);
+    return {
+      sessionId: session.sessionId,
+      total: contacts.length,
+      contacts,
+    };
+  }
+
+  /**
+   * Lista todos os chats ativos (incluindo grupos)
+   * GET /whatsapp/:id/chats
+   *
+   * Busca do cache Redis primeiro (rápido), se não encontrar busca do WhatsApp
+   */
+  @Get(':id/chats')
+  async getChats(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('source') source?: 'cache' | 'whatsapp',
+  ) {
+    const session = await this.sessionsService.getSessionById(id);
+
+    // Se source=whatsapp, força busca direta
+    if (source === 'whatsapp') {
+      const chats = await this.whatsappSessionManager.getChats(session.sessionId);
+      return {
+        sessionId: session.sessionId,
+        source: 'whatsapp',
+        total: chats.length,
+        chats,
+      };
+    }
+
+    // Tentar buscar do cache primeiro
+    const cachedChats = await this.chatCache.getChats(
+      session.sessionId,
+      limit ? parseInt(limit) : 50,
+    );
+
+    // Se encontrou no cache, retorna
+    if (cachedChats.length > 0) {
+      return {
+        sessionId: session.sessionId,
+        source: 'cache',
+        ttl: 14400,
+        total: cachedChats.length,
+        chats: cachedChats,
+      };
+    }
+
+    // Não encontrou no cache, buscar do WhatsApp e cachear
+    const chats = await this.whatsappSessionManager.getChats(session.sessionId);
+
+    // Salvar no cache para próximas requests
+    for (const chat of chats) {
+      await this.chatCache.cacheChat(session.sessionId, {
+        chatId: chat.id,
+        name: chat.name,
+        isGroup: chat.isGroup,
+        lastMessageTimestamp: chat.lastMessageTimestamp || Date.now(),
+        lastMessageText: undefined, // lastMessage não está disponível no tipo retornado
+        unreadCount: chat.unreadCount || 0,
+      });
+    }
+
+    return {
+      sessionId: session.sessionId,
+      source: 'whatsapp',
+      total: chats.length,
+      chats,
+    };
+  }
+
+  /**
+   * Busca metadados de um grupo específico
+   * GET /whatsapp/:id/groups/:groupId
+   */
+  @Get(':id/groups/:groupId')
+  async getGroupMetadata(@Param('id') id: string, @Param('groupId') groupId: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    return await this.whatsappSessionManager.getGroupMetadata(session.sessionId, groupId);
+  }
+
+  /**
+   * Lista mensagens de um chat específico
+   * GET /whatsapp/:id/chats/:chatId/messages
+   *
+   * Busca do cache Redis primeiro (rápido), se não encontrar busca do WhatsApp
+   */
+  @Get(':id/chats/:chatId/messages')
+  async getChatMessages(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @Query('limit') limit?: string,
+    @Query('source') source?: 'cache' | 'whatsapp',
+  ) {
+    const session = await this.sessionsService.getSessionById(id);
+    const messageLimit = limit ? parseInt(limit) : 50;
+
+    // Se source=whatsapp, força busca direta
+    if (source === 'whatsapp') {
+      const messages = await this.whatsappSessionManager.getChatMessages(
+        session.sessionId,
+        chatId,
+        messageLimit,
+      );
+      return {
+        sessionId: session.sessionId,
+        chatId,
+        source: 'whatsapp',
+        total: messages.length,
+        messages,
+      };
+    }
+
+    // Tentar buscar do cache primeiro
+    const cachedMessages = await this.chatCache.getChatMessages(
+      session.sessionId,
+      chatId,
+      messageLimit,
+    );
+
+    // Se encontrou no cache, retorna
+    if (cachedMessages.length > 0) {
+      // Marcar como lido ao buscar mensagens
+      await this.chatCache.resetUnreadCount(session.sessionId, chatId);
+
+      return {
+        sessionId: session.sessionId,
+        chatId,
+        source: 'cache',
+        ttl: 14400,
+        total: cachedMessages.length,
+        messages: cachedMessages,
+      };
+    }
+
+    // Não encontrou no cache, buscar do WhatsApp
+    const messages = await this.whatsappSessionManager.getChatMessages(
+      session.sessionId,
+      chatId,
+      messageLimit,
+    );
+
+    return {
+      sessionId: session.sessionId,
+      chatId,
+      source: 'whatsapp',
+      total: messages.length,
+      messages,
+    };
+  }
+
+  /**
+   * Limpa o cache de uma sessão
+   * DELETE /whatsapp/:id/cache
+   */
+  @Delete(':id/cache')
+  @HttpCode(HttpStatus.OK)
+  async clearSessionCache(@Param('id') id: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    await this.chatCache.clearSessionCache(session.sessionId);
+
+    return {
+      success: true,
+      message: `Cache cleared for session ${session.sessionId}`,
+    };
+  }
+
+  /**
+   * Sincroniza chats para o cache
+   * POST /whatsapp/:id/sync-cache
+   */
+  @Post(':id/sync-cache')
+  @HttpCode(HttpStatus.OK)
+  async syncChatsToCache(@Param('id') id: string) {
+    const session = await this.sessionsService.getSessionById(id);
+
+    // Buscar chats diretamente do WhatsApp
+    const chats = await this.whatsappSessionManager.getChats(session.sessionId);
+
+    // Salvar cada chat no cache
+    let cached = 0;
+    for (const chat of chats) {
+      await this.chatCache.cacheChat(session.sessionId, {
+        chatId: chat.id,
+        name: chat.name,
+        isGroup: chat.isGroup,
+        lastMessageTimestamp: chat.lastMessageTimestamp || Date.now(),
+        lastMessageText: undefined, // lastMessage não está disponível no tipo retornado
+        unreadCount: chat.unreadCount || 0,
+      });
+      cached++;
+    }
+
+    return {
+      success: true,
+      sessionId: session.sessionId,
+      totalChats: chats.length,
+      cached,
+      message: `${cached} chats synchronized to cache`,
+    };
+  }
+
+  /**
+   * Marca mensagens de um chat como lidas (reseta contador)
+   * POST /whatsapp/:id/chats/:chatId/mark-read
+   */
+  @Post(':id/chats/:chatId/mark-read')
+  @HttpCode(HttpStatus.OK)
+  async markChatAsRead(@Param('id') id: string, @Param('chatId') chatId: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    await this.chatCache.resetUnreadCount(session.sessionId, chatId);
+
+    return {
+      success: true,
+      sessionId: session.sessionId,
+      chatId,
+      message: 'Chat marked as read',
+    };
+  }
+
+  /**
+   * Atualiza configurações da sessão
+   * PATCH /whatsapp/:id/settings
+   */
+  @Put(':id/settings')
+  async updateSessionSettings(
+    @Param('id') id: string,
+    @Body()
+    settings: {
+      name?: string;
+      autoStart?: boolean;
+      webhookUrl?: string;
+    },
+  ) {
+    const session = await this.sessionsService.updateSession(id, settings);
+
+    return {
+      success: true,
+      session: {
+        id: session.id,
+        sessionId: session.sessionId,
+        name: session.name,
+      },
+    };
+  }
+
+  /**
+   * Status detalhado da sessão (inclui cache e conexão)
+   * GET /whatsapp/:id/status/detailed
+   */
+  @Get(':id/status/detailed')
+  async getDetailedStatus(@Param('id') id: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const isConnected = this.whatsappSessionManager.isSessionConnected(session.sessionId);
+
+    // Buscar estatísticas do cache
+    const cachedChats = await this.chatCache.getChats(session.sessionId, 1000);
+
+    let totalCachedMessages = 0;
+    for (const chat of cachedChats) {
+      const messages = await this.chatCache.getChatMessages(session.sessionId, chat.chatId, 1000);
+      totalCachedMessages += messages.length;
+    }
+
+    return {
+      session: {
+        id: session.id,
+        sessionId: session.sessionId,
+        phoneNumber: session.phoneNumber,
+        name: session.name,
+        status: isConnected ? 'CONNECTED' : session.status,
+        isActive: session.isActive,
+        lastSeen: session.lastSeen,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+      connection: {
+        isConnected,
+        inMemory: this.sessionManager.getSession(session.sessionId) !== undefined,
+      },
+      cache: {
+        totalChats: cachedChats.length,
+        totalMessages: totalCachedMessages,
+        ttl: 14400, // 4 horas
+        chatsWithUnread: cachedChats.filter((c) => c.unreadCount > 0).length,
+      },
+    };
+  }
+
+  /**
+   * Deleta uma mensagem específica
+   * DELETE /whatsapp/:id/chats/:chatId/messages/:messageId
+   */
+  @Delete(':id/chats/:chatId/messages/:messageId')
+  @HttpCode(HttpStatus.OK)
+  async deleteMessage(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    const session = await this.sessionsService.getSessionById(id);
+    const success = await this.whatsappSessionManager.deleteMessage(
+      session.sessionId,
+      messageId,
+      chatId,
+    );
+
+    return {
+      success,
+      sessionId: session.sessionId,
+      chatId,
+      messageId,
+      message: 'Message deleted successfully',
+    };
+  }
+
+  /**
+   * Limpa todas as mensagens de um chat
+   * DELETE /whatsapp/:id/chats/:chatId/messages
+   */
+  @Delete(':id/chats/:chatId/messages')
+  @HttpCode(HttpStatus.OK)
+  async clearChat(@Param('id') id: string, @Param('chatId') chatId: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const success = await this.whatsappSessionManager.clearChat(session.sessionId, chatId);
+
+    // Limpar cache também
+    await this.chatCache.clearSessionCache(session.sessionId);
+
+    return {
+      success,
+      sessionId: session.sessionId,
+      chatId,
+      message: 'Chat cleared successfully',
+    };
+  }
+
+  /**
+   * Exporta mensagens de um chat (JSON)
+   * POST /whatsapp/:id/chats/:chatId/export
+   */
+  @Post(':id/chats/:chatId/export')
+  @HttpCode(HttpStatus.OK)
+  async exportChat(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const session = await this.sessionsService.getSessionById(id);
+    const messages = await this.whatsappSessionManager.exportChat(
+      session.sessionId,
+      chatId,
+      limit ? parseInt(limit) : 100,
+    );
+
+    return {
+      success: true,
+      sessionId: session.sessionId,
+      chatId,
+      total: messages.length,
+      messages,
+      exportedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Bloqueia um contato
+   * POST /whatsapp/:id/contacts/:phoneNumber/block
+   */
+  @Post(':id/contacts/:phoneNumber/block')
+  @HttpCode(HttpStatus.OK)
+  async blockContact(@Param('id') id: string, @Param('phoneNumber') phoneNumber: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const success = await this.whatsappSessionManager.blockContact(session.sessionId, phoneNumber);
+
+    return {
+      success,
+      sessionId: session.sessionId,
+      phoneNumber,
+      status: 'blocked',
+      message: `Contact ${phoneNumber} blocked successfully`,
+    };
+  }
+
+  /**
+   * Desbloqueia um contato
+   * POST /whatsapp/:id/contacts/:phoneNumber/unblock
+   */
+  @Post(':id/contacts/:phoneNumber/unblock')
+  @HttpCode(HttpStatus.OK)
+  async unblockContact(@Param('id') id: string, @Param('phoneNumber') phoneNumber: string) {
+    const session = await this.sessionsService.getSessionById(id);
+    const success = await this.whatsappSessionManager.unblockContact(
+      session.sessionId,
+      phoneNumber,
+    );
+
+    return {
+      success,
+      sessionId: session.sessionId,
+      phoneNumber,
+      status: 'unblocked',
+      message: `Contact ${phoneNumber} unblocked successfully`,
     };
   }
 }

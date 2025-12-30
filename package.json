@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:complete-flow": "ts-node -r tsconfig-paths/register scripts/test-complete-flow.ts",
     "test:websocket-client": "ts-node -r tsconfig-paths/register scripts/test-websocket-client.ts",
+    "test:whatsapp-admin": "ts-node -r tsconfig-paths/register scripts/test-whatsapp-admin.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

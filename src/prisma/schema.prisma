@@ -101,8 +101,9 @@ model UserCache {
   isActive              Boolean @default(true) // 🆕 Usuário ativo (conta não desativada)
 
   // 🆕 Gerenciamento de múltiplas contas
-  activeAccountId String? // ID da conta ativa no momento (usado para todas operações)
-  accounts        Json    @default("[]") // Array de contas: [{ id, name, type, isPrimary }]
+  activeAccountId     String? // ID da conta ativa no momento (usado para todas operações)
+  accounts            Json    @default("[]") // Array de contas: [{ id, name, type, isPrimary }]
+  defaultCreditCardId String? // ✨ NOVO: ID do cartão de crédito padrão
 
   categories               Json                      @default("[]")
   preferences              Json?
@@ -147,10 +148,19 @@ model TransactionConfirmation {
   ragSearchLogId String? // ID do log de busca RAG (se usou RAG)
 
   // Campos para controle de envio para API
-  apiSent       Boolean   @default(false) // Se foi enviado para API GastoCerto
-  apiSentAt     DateTime? // Quando foi enviado com sucesso
-  apiError      String? // Última mensagem de erro da API
-  apiRetryCount Int       @default(0) // Número de tentativas de envio
+  apiSent Boolean @default(false) // Se foi enviado para API GastoCerto
+
+  // ✨ NOVOS CAMPOS - Transações Avançadas
+  isFixed           Boolean   @default(false) // Transação recorrente/fixa
+  fixedFrequency    String? // MONTHLY, WEEKLY, ANNUAL, BIENNIAL
+  installments      Int? // Número total de parcelas
+  installmentNumber Int       @default(1) // Número da parcela atual
+  creditCardId      String? // ID do cartão de crédito usado
+  paymentStatus     String    @default("DONE") // PENDING ou DONE
+  invoiceMonth      String? // Mês da fatura (YYYY-MM) para cartão de crédito
+  apiSentAt         DateTime? // Quando foi enviado com sucesso
+  apiError          String? // Última mensagem de erro da API
+  apiRetryCount     Int       @default(0) // Número de tentativas de envio
 
   createdAt DateTime @default(now())
   expiresAt DateTime
@@ -232,7 +242,7 @@ model RAGSearchLog {
   queryNormalized String // Query normalizada (lowercase, sem acentos)
   matches         Json // Array de matches encontrados com scores
   bestMatch       String? // Nome da melhor categoria encontrada
-  bestScore       Decimal? @db.Decimal(5, 4) // Score do melhor match (0.0000 - 1.0000)
+  bestScore       Decimal? @db.Decimal(6, 4) // Score do melhor match (0.0000 - 99.9999)
   threshold       Decimal  @db.Decimal(5, 4) // Threshold usado na busca
   success         Boolean // true se encontrou match >= threshold
   ragMode         String   @default("BM25") // "BM25" ou "AI" (embeddings)

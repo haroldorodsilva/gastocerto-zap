@@ -569,19 +569,28 @@ export class RAGService {
         const normalizedSubCat = this.normalize(category.subCategory.name);
         const subCatOnlyTokens = this.tokenize(normalizedSubCat);
 
-        // Verificar se TODOS os tokens da subcategoria aparecem na query
-        const allTokensMatch = subCatOnlyTokens.every((sct) => queryTokens.includes(sct));
+        // 🚨 CORREÇÃO: Verificar se tokens têm tamanho mínimo (>= 3 chars) para evitar matches espúrios
+        // Exemplo: "Gás" normaliza para "gas" (3 chars OK), mas "cartão" contém "a" que não é suficiente
+        const validSubCatTokens = subCatOnlyTokens.filter((t) => t.length >= 3);
 
-        if (
-          normalizedQuery.includes(normalizedSubCat) ||
-          normalizedSubCat.includes(normalizedQuery)
-        ) {
+        // Verificar se TODOS os tokens válidos da subcategoria aparecem na query
+        const allTokensMatch =
+          validSubCatTokens.length > 0 &&
+          validSubCatTokens.every((sct) => queryTokens.includes(sct));
+
+        // Match direto: subcategoria completa aparece na query OU query aparece na subcategoria
+        const isDirectMatch =
+          (normalizedQuery.includes(normalizedSubCat) ||
+            normalizedSubCat.includes(normalizedQuery)) &&
+          normalizedSubCat.length >= 3; // Mínimo 3 caracteres para evitar matches muito genéricos
+
+        if (isDirectMatch) {
           score += 10.0; // Boost GIGANTE para match direto de subcategoria
           this.logger.debug(
             `🔥 MATCH DIRETO SUBCATEGORIA: "${category.subCategory.name}" na query (boost +10.0)`,
           );
-        } else if (allTokensMatch && subCatOnlyTokens.length > 0) {
-          score += 8.0; // Boost alto se todos tokens da subcategoria estão presentes
+        } else if (allTokensMatch) {
+          score += 8.0; // Boost alto se todos tokens válidos da subcategoria estão presentes
           this.logger.debug(
             `🔥 TOKENS SUBCATEGORIA PRESENTES: "${category.subCategory.name}" (boost +8.0)`,
           );
@@ -991,6 +1000,8 @@ export class RAGService {
    * Deleta logs de busca RAG por IDs
    */
   async deleteSearchLogs(ids: string[]): Promise<{ deletedCount: number }> {
+    this.logger.log(`🗑️ [RAG] Deletando ${ids.length} logs...`);
+    
     const result = await this.prisma.rAGSearchLog.deleteMany({
       where: {
         id: {
@@ -999,6 +1010,7 @@ export class RAGService {
       },
     });
 
+    this.logger.log(`✅ [RAG] Deletados ${result.count} logs do banco`);
     return { deletedCount: result.count };
   }
 

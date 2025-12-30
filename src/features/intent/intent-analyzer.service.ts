@@ -27,6 +27,9 @@ export enum MessageIntent {
   SHOW_ACTIVE_ACCOUNT = 'SHOW_ACTIVE_ACCOUNT', // Mostrar conta ativa
   PAY_BILL = 'PAY_BILL', // Pagar fatura/conta
   LIST_CREDIT_CARDS = 'LIST_CREDIT_CARDS', // Listar cartões de crédito
+  SET_DEFAULT_CREDIT_CARD = 'SET_DEFAULT_CREDIT_CARD', // Definir cartão padrão
+  SHOW_DEFAULT_CREDIT_CARD = 'SHOW_DEFAULT_CREDIT_CARD', // Mostrar cartão padrão
+  SHOW_INVOICE_BY_CARD_NAME = 'SHOW_INVOICE_BY_CARD_NAME', // Ver fatura por nome do cartão
   LIST_INVOICES = 'LIST_INVOICES', // Listar faturas de cartão
   SHOW_INVOICE_DETAILS = 'SHOW_INVOICE_DETAILS', // Detalhes de uma fatura
   PAY_INVOICE = 'PAY_INVOICE', // Pagar fatura de cartão (invoice)
@@ -122,7 +125,37 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 6.2. Listar faturas de cartão
+    // 6.2. Definir cartão padrão
+    if (this.isSetDefaultCreditCardRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: SET_DEFAULT_CREDIT_CARD (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.SET_DEFAULT_CREDIT_CARD,
+        confidence: 0.95,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.3. Mostrar cartão padrão
+    if (this.isShowDefaultCreditCardRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: SHOW_DEFAULT_CREDIT_CARD (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.SHOW_DEFAULT_CREDIT_CARD,
+        confidence: 0.95,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.4. Ver fatura por nome do cartão
+    if (this.isShowInvoiceByCardNameRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: SHOW_INVOICE_BY_CARD_NAME (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.SHOW_INVOICE_BY_CARD_NAME,
+        confidence: 0.95,
+        shouldProcess: true,
+      };
+    }
+
+    // 6.5. Listar faturas de cartão
     if (this.isListInvoicesRequest(normalizedText)) {
       this.logger.log(`✅ Intent: LIST_INVOICES (confidence: 0.95)`);
       return {
@@ -132,7 +165,7 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 6.3. Ver detalhes de fatura
+    // 6.6. Ver detalhes de fatura
     if (this.isShowInvoiceDetailsRequest(normalizedText)) {
       this.logger.log(`✅ Intent: SHOW_INVOICE_DETAILS (confidence: 0.90)`);
       return {
@@ -142,7 +175,7 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 6.4. Pagar fatura de cartão (invoice)
+    // 6.7. Pagar fatura de cartão (invoice)
     if (this.isPayInvoiceRequest(normalizedText)) {
       this.logger.log(`✅ Intent: PAY_INVOICE (confidence: 0.90)`);
       return {
@@ -807,6 +840,70 @@ export class IntentAnalyzerService {
       'lista de cartoes',
     ];
     return listCardsKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para definir cartão padrão
+   */
+  private isSetDefaultCreditCardRequest(text: string): boolean {
+    const setCardKeywords = [
+      'usar cartao',
+      'usar cartão',
+      'definir cartao',
+      'definir cartão',
+      'trocar cartao',
+      'trocar cartão',
+      'mudar cartao',
+      'mudar cartão',
+      'cartao padrao',
+      'cartão padrão',
+      'cartao default',
+      'cartão default',
+    ];
+    return setCardKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para ver cartão padrão
+   */
+  private isShowDefaultCreditCardRequest(text: string): boolean {
+    const showCardKeywords = [
+      'qual cartao',
+      'qual cartão',
+      'cartao atual',
+      'cartão atual',
+      'cartao ativo',
+      'cartão ativo',
+      'cartao padrao',
+      'cartão padrão',
+      'meu cartao',
+      'meu cartão',
+    ];
+    // Evitar match com "qual cartao pagar" ou "qual cartao usar"
+    if (text.includes('pagar') || text.includes('usar') || text.includes('trocar')) {
+      return false;
+    }
+    return showCardKeywords.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação para ver fatura por nome do cartão
+   * Ex: "ver fatura nubank", "fatura itau", "fatura do inter"
+   */
+  private isShowInvoiceByCardNameRequest(text: string): boolean {
+    const invoiceKeywords = ['fatura', 'faturas'];
+    const hasInvoiceKeyword = invoiceKeywords.some((k) => text.includes(k));
+    
+    // Verificar se não é comando de lista genérica
+    const isGenericList = text.includes('minhas faturas') || 
+                          text.includes('listar faturas') ||
+                          text.includes('todas as faturas') ||
+                          /ver fatura \d/.test(text) || // "ver fatura 1"
+                          /pagar fatura \d/.test(text); // "pagar fatura 1"
+    
+    // Se tem "fatura" mas não é lista genérica, pode ser busca por nome
+    // Ex: "fatura nubank", "ver fatura itau", "fatura do inter"
+    return hasInvoiceKeyword && !isGenericList && text.length > 6;
   }
 
   /**
