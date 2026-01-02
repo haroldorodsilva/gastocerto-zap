@@ -1673,6 +1673,12 @@ export class TransactionRegistrationService {
       }
 
       // 4. Preparar DTO para API
+      const description = confirmation.description ||
+        data?.description ||
+        confirmation.extractedData?.description;
+      
+      const merchant = confirmation.extractedData?.merchant || data?.merchant;
+      
       const dto: CreateGastoCertoTransactionDto = {
         userId: user.gastoCertoId,
         accountId, // Adicionar conta default
@@ -1680,15 +1686,11 @@ export class TransactionRegistrationService {
         amount: Number(confirmation.amount),
         categoryId,
         subCategoryId,
-        description:
-          confirmation.description ||
-          data?.description ||
-          confirmation.extractedData?.description ||
-          null,
+        ...(description && { description }), // Só incluir se tiver valor
         date: confirmation.date
           ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
           : DateUtil.formatToISO(DateUtil.today()),
-        merchant: confirmation.extractedData?.merchant || data?.merchant,
+        ...(merchant && { merchant }), // Só incluir se tiver valor
         source: confirmation.platform || 'whatsapp', // Usar platform da confirmação
       };
 
@@ -1704,6 +1706,12 @@ export class TransactionRegistrationService {
           transactionId: response.transaction?.id || 'unknown',
         };
       } else {
+        // Log detalhado do erro da API
+        this.logger.error(
+          `❌ [API ERROR] Erro ao enviar transação para GastoCerto API:`,
+          JSON.stringify(response, null, 2),
+        );
+        
         const errorMsg =
           typeof response.error === 'string'
             ? response.error
@@ -1715,7 +1723,19 @@ export class TransactionRegistrationService {
         };
       }
     } catch (error: any) {
-      this.logger.error(`❌ Erro ao enviar transação:`, error);
+      this.logger.error(
+        `❌ [EXCEPTION] Exceção ao enviar transação:`,
+        JSON.stringify(
+          {
+            message: error.message,
+            stack: error.stack,
+            name: error.name,
+            response: error.response?.data || error.response,
+          },
+          null,
+          2,
+        ),
+      );
       return {
         success: false,
         error: error.message || 'Erro ao enviar transação',

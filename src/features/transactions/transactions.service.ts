@@ -19,7 +19,7 @@ export interface ProcessMessageResult {
   requiresConfirmation: boolean;
   confirmationId?: string;
   autoRegistered?: boolean;
-  platform?: 'whatsapp' | 'telegram';
+  platform?: 'whatsapp' | 'telegram' | 'webchat';
 }
 
 /**
@@ -62,7 +62,7 @@ export class TransactionsService {
   private emitReply(
     phoneNumber: string,
     message: string,
-    platform: 'whatsapp' | 'telegram',
+    platform: 'whatsapp' | 'telegram' | 'webchat',
     context: 'INTENT_RESPONSE' | 'CONFIRMATION_REQUEST' | 'TRANSACTION_RESULT' | 'ERROR',
     metadata?: any,
     platformId?: string,
@@ -89,7 +89,7 @@ export class TransactionsService {
     phoneNumber: string,
     text: string,
     messageId: string,
-    platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
@@ -607,7 +607,7 @@ export class TransactionsService {
     imageBuffer: Buffer,
     mimeType: string,
     messageId: string,
-    platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
@@ -697,7 +697,7 @@ export class TransactionsService {
     audioBuffer: Buffer,
     mimeType: string,
     messageId: string,
-    platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {

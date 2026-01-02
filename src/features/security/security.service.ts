@@ -90,7 +90,7 @@ export class SecurityService {
   async validateUserMessage(
     phoneNumber: string,
     message: string,
-    platform: 'whatsapp' | 'telegram' = 'whatsapp',
+    platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
   ): Promise<ValidationResult> {
     // Buscar configurações (cache 5min)
     const settings = await this.getSecuritySettings();

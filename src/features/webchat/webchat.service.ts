@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { TransactionsService } from '@features/transactions/transactions.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
+import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { WebChatResponse } from './webchat.controller';
+import { UploadResponse } from './dto/upload.dto';
+import type { Multer } from 'multer';
 
 /**
  * WebChatService
@@ -24,33 +27,99 @@ export class WebChatService {
     private readonly transactionsService: TransactionsService,
     private readonly userCacheService: UserCacheService,
     private readonly messageLearningService: MessageLearningService,
+    private readonly gastoCertoApi: GastoCertoApiService,
   ) {}
 
   /**
-   * Processa mensagem do chat web
+   * Remove emojis e ícones de uma mensagem
+   * Preserva quebras de linha (\n) para exibição correta no chat
    */
-  async processMessage(userId: string, messageText: string): Promise<WebChatResponse> {
-    this.logger.log(`📝 [WebChat] Processando mensagem do usuário ${userId}`);
+  private removeEmojis(text: string): string {
+    // Remove emojis unicode
+    return text
+      .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Emoticons
+      .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // Símbolos e pictogramas
+      .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // Transporte e símbolos de mapa
+      .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // Bandeiras
+      .replace(/[\u{2600}-\u{26FF}]/gu, '') // Símbolos diversos
+      .replace(/[\u{2700}-\u{27BF}]/gu, '') // Dingbats
+      .replace(/[\u{1F900}-\u{1F9FF}]/gu, '') // Símbolos e pictogramas suplementares
+      .replace(/[\u{1FA00}-\u{1FA6F}]/gu, '') // Símbolos estendidos-A
+      .replace(/[\u{1FA70}-\u{1FAFF}]/gu, '') // Símbolos estendidos-B
+      .replace(/[\u{FE00}-\u{FE0F}]/gu, '') // Seletores de variação
+      .replace(/[\u{200D}]/gu, '') // Zero width joiner
+      .replace(/[ \t]+/g, ' ') // Normalizar espaços horizontais (preserva \n)
+      .replace(/\n{3,}/g, '\n\n') // Limitar múltiplas quebras de linha a no máximo 2
+      .trim();
+  }
+
+  /**
+   * Processa mensagem do chat web
+   * @param userId - ID do usuário no GastoCerto (extraído do JWT)
+   * @param messageText - Mensagem enviada pelo usuário
+   * @param accountId - ID da conta/perfil ativo (opcional, do header x-account)
+   */
+  async processMessage(
+    userId: string,
+    messageText: string,
+    accountId?: string,
+  ): Promise<WebChatResponse> {
+    this.logger.log(
+      `📝 [WebChat] Processando mensagem - userId: ${userId}, accountId: ${accountId || 'default'}`,
+    );
 
     try {
       // 1. Buscar usuário pelo gastoCertoId
-      const user = await this.userCacheService.getUserByGastoCertoId(userId);
+      let user = await this.userCacheService.getUserByGastoCertoId(userId);
 
+      // 2. Se não existir, criar automaticamente (usuário já está autenticado via JWT)
       if (!user) {
-        this.logger.warn(`⚠️ [WebChat] Usuário ${userId} não encontrado no cache`);
-        return {
-          success: false,
-          messageType: 'error',
-          message:
-            '❌ Usuário não encontrado. Por favor, complete seu cadastro via WhatsApp primeiro.',
-          formatting: {
-            emoji: '❌',
-            color: 'error',
-          },
-        };
+        this.logger.log(
+          `🆕 [WebChat] Usuário ${userId} não encontrado no cache. Criando registro automaticamente...`,
+        );
+
+        try {
+          // Buscar dados do usuário na API do GastoCerto
+          const apiUser = await this.gastoCertoApi.getUserById(userId);
+
+          if (!apiUser) {
+            this.logger.error(`❌ [WebChat] Usuário ${userId} não encontrado na API GastoCerto`);
+            return {
+              success: false,
+              messageType: 'error',
+              message: this.removeEmojis(
+                '❌ Erro ao criar seu perfil. Tente novamente mais tarde.',
+              ),
+              formatting: {
+                color: 'error',
+              },
+            };
+          }
+
+          // Definir phoneNumber único para webchat
+          apiUser.phoneNumber = `webchat-${userId}`;
+
+          // Criar cache do usuário
+          user = await this.userCacheService.createUserCache(apiUser);
+
+          this.logger.log(
+            `✅ [WebChat] Usuário criado automaticamente: ${user.name} (${user.gastoCertoId})`,
+          );
+        } catch (createError) {
+          this.logger.error(`❌ [WebChat] Erro ao criar usuário ${userId}:`, createError);
+          return {
+            success: false,
+            messageType: 'error',
+            message: this.removeEmojis('❌ Erro ao criar seu perfil. Tente novamente mais tarde.'),
+            formatting: {
+              color: 'error',
+            },
+          };
+        }
       }
 
-      const phoneNumber = user.phoneNumber;
+      // Usar phoneNumber se existir, senão usar identificador único do webchat
+      const phoneNumber = user.phoneNumber || `webchat-${userId}`;
       this.logger.log(`✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber})`);
 
       // 2. Verificar se há contexto de aprendizado pendente
@@ -75,7 +144,7 @@ export class WebChatService {
               learningResult.originalText,
               `webchat-${Date.now()}`,
               user,
-              'whatsapp', // Usar whatsapp como fallback para compatibilidade
+              'webchat', // WebChat é uma plataforma própria
             );
 
             return this.formatTransactionResponse(transactionResult, learningResult.message);
@@ -93,7 +162,7 @@ export class WebChatService {
         phoneNumber,
         messageText,
         `webchat-${Date.now()}`,
-        'whatsapp', // Usar whatsapp como platform para compatibilidade
+        'webchat', // WebChat é uma plataforma própria
       );
 
       return this.formatTransactionResponse(result);
@@ -109,20 +178,16 @@ export class WebChatService {
   private formatTransactionResponse(result: any, additionalMessage?: string): WebChatResponse {
     // Detectar tipo de resposta baseado no resultado
     let messageType: WebChatResponse['messageType'] = 'info';
-    let emoji = '💬';
     let color: 'success' | 'warning' | 'info' | 'error' = 'info';
 
     if (result.requiresConfirmation) {
       messageType = 'confirmation';
-      emoji = '❓';
       color = 'warning';
     } else if (result.success) {
       messageType = 'transaction';
-      emoji = '✅';
       color = 'success';
     } else if (!result.success && result.message.includes('❌')) {
       messageType = 'error';
-      emoji = '❌';
       color = 'error';
     }
 
@@ -154,10 +219,9 @@ export class WebChatService {
     return {
       success: result.success,
       messageType,
-      message: finalMessage,
+      message: this.removeEmojis(finalMessage),
       data: Object.keys(data).length > 0 ? data : undefined,
       formatting: {
-        emoji,
         color,
         highlight: this.extractHighlights(finalMessage),
       },
@@ -178,10 +242,9 @@ export class WebChatService {
     return {
       success: result.success,
       messageType: 'learning',
-      message: result.message,
+      message: this.removeEmojis(result.message),
       data: Object.keys(data).length > 0 ? data : undefined,
       formatting: {
-        emoji: '🎓',
         color: 'info',
         highlight: this.extractHighlights(result.message),
       },
@@ -231,5 +294,190 @@ export class WebChatService {
     }
 
     return [...new Set(highlights)]; // Remove duplicatas
+  }
+
+  /**
+   * Processa upload de imagem (nota fiscal, comprovante)
+   * USA O MESMO FLUXO que WhatsApp/Telegram via TransactionsService
+   */
+  async processImageUpload(
+    userId: string,
+    file: Multer.File,
+    _additionalMessage?: string,
+    _accountId?: string,
+  ): Promise<UploadResponse> {
+    this.logger.log(
+      `📷 [WebChat] Processando imagem - userId: ${userId}, fileName: ${file.originalname}`,
+    );
+
+    try {
+      // Validar que o buffer existe
+      if (!file.buffer) {
+        this.logger.error(
+          `❌ [WebChat] Buffer da imagem está undefined - fileName: ${file.originalname}`,
+        );
+        return {
+          success: false,
+          messageType: 'error',
+          message: this.removeEmojis(
+            'Erro ao processar imagem. Arquivo não foi carregado corretamente.',
+          ),
+          formatting: { color: 'error' },
+        };
+      }
+
+      // 1. Buscar ou criar usuário
+      let user = await this.userCacheService.getUserByGastoCertoId(userId);
+      if (!user) {
+        this.logger.log(`🆕 [WebChat] Criando usuário ${userId} automaticamente...`);
+        const apiUser = await this.gastoCertoApi.getUserById(userId);
+        if (!apiUser) {
+          throw new Error('Usuário não encontrado na API GastoCerto');
+        }
+        apiUser.phoneNumber = `webchat-${userId}`;
+        await this.userCacheService.createUserCache(apiUser);
+        user = await this.userCacheService.getUserByGastoCertoId(userId);
+      }
+
+      // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
+      const phoneNumber = `webchat-${userId}`;
+      const imageBuffer = file.buffer;
+      const mimeType = file.mimetype;
+      const messageId = `webchat-${Date.now()}`;
+
+      // Log detalhado para debug
+      this.logger.log(
+        `📊 [WebChat] Detalhes da imagem - Size: ${(imageBuffer.length / 1024).toFixed(2)} KB, MimeType: ${mimeType}, OriginalName: ${file.originalname}`,
+      );
+
+      const result = await this.transactionsService.processImageMessage(
+        phoneNumber,
+        imageBuffer,
+        mimeType,
+        messageId,
+        'webchat', // WebChat é uma plataforma própria
+        phoneNumber, // platformId para replies
+      );
+
+      // 3. Formatar resposta para frontend (remover emojis)
+      return {
+        success: result.success,
+        messageType: this.mapMessageType(result),
+        message: this.removeEmojis(result.message),
+        data: {
+          fileName: file.originalname,
+          fileSize: file.size,
+          requiresConfirmation: result.requiresConfirmation,
+          confirmationId: result.confirmationId,
+        },
+        formatting: {
+          color: result.success ? 'success' : 'error',
+        },
+      };
+    } catch (error) {
+      this.logger.error(`❌ [WebChat] Erro ao processar imagem:`, error);
+      return {
+        success: false,
+        messageType: 'error',
+        message: this.removeEmojis('Erro ao processar imagem. Tente novamente.'),
+        formatting: { color: 'error' },
+      };
+    }
+  }
+
+  /**
+   * Processa upload de áudio (mensagem de voz)
+   * USA O MESMO FLUXO que WhatsApp/Telegram via TransactionsService
+   */
+  async processAudioUpload(
+    userId: string,
+    file: Multer.File,
+    _additionalMessage?: string,
+    _accountId?: string,
+  ): Promise<UploadResponse> {
+    this.logger.log(
+      `🎤 [WebChat] Processando áudio - userId: ${userId}, fileName: ${file.originalname}`,
+    );
+
+    try {
+      // Validar que o buffer existe
+      if (!file.buffer) {
+        this.logger.error(
+          `❌ [WebChat] Buffer do áudio está undefined - fileName: ${file.originalname}`,
+        );
+        return {
+          success: false,
+          messageType: 'error',
+          message: this.removeEmojis(
+            'Erro ao processar áudio. Arquivo não foi carregado corretamente.',
+          ),
+          formatting: { color: 'error' },
+        };
+      }
+
+      // 1. Buscar ou criar usuário
+      let user = await this.userCacheService.getUserByGastoCertoId(userId);
+      if (!user) {
+        this.logger.log(`🆕 [WebChat] Criando usuário ${userId} automaticamente...`);
+        const apiUser = await this.gastoCertoApi.getUserById(userId);
+        if (!apiUser) {
+          throw new Error('Usuário não encontrado na API GastoCerto');
+        }
+        apiUser.phoneNumber = `webchat-${userId}`;
+        await this.userCacheService.createUserCache(apiUser);
+        user = await this.userCacheService.getUserByGastoCertoId(userId);
+      }
+
+      // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
+      const phoneNumber = `webchat-${userId}`;
+      const audioBuffer = file.buffer;
+      const mimeType = file.mimetype;
+      const messageId = `webchat-${Date.now()}`;
+
+      const result = await this.transactionsService.processAudioMessage(
+        phoneNumber,
+        audioBuffer,
+        mimeType,
+        messageId,
+        'webchat', // WebChat é uma plataforma própria
+        phoneNumber, // platformId para replies
+      );
+
+      // 3. Formatar resposta para frontend (remover emojis)
+      return {
+        success: result.success,
+        messageType: this.mapMessageType(result),
+        message: this.removeEmojis(result.message),
+        data: {
+          fileName: file.originalname,
+          fileSize: file.size,
+          requiresConfirmation: result.requiresConfirmation,
+          confirmationId: result.confirmationId,
+        },
+        formatting: {
+          color: result.success ? 'success' : 'error',
+        },
+      };
+    } catch (error) {
+      this.logger.error(`❌ [WebChat] Erro ao processar áudio:`, error);
+      return {
+        success: false,
+        messageType: 'error',
+        message: this.removeEmojis('Erro ao processar áudio. Tente novamente.'),
+        formatting: { color: 'error' },
+      };
+    }
+  }
+
+  /**
+   * Mapeia resultado de ProcessMessageResult para messageType do frontend
+   */
+  private mapMessageType(
+    result: any,
+  ): 'transaction' | 'confirmation' | 'learning' | 'info' | 'error' {
+    if (!result.success) return 'error';
+    if (result.requiresConfirmation) return 'confirmation';
+    if (result.success && result.message.includes('registrada')) return 'transaction';
+    return 'info';
   }
 }

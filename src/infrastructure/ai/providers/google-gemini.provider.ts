@@ -149,6 +149,26 @@ export class GoogleGeminiProvider implements IAIProvider {
         `[Gemini Vision] Analisando imagem (${(imageBuffer.length / 1024).toFixed(2)} KB)`,
       );
 
+      // Normalizar mimeType para formato aceito pelo Gemini
+      let normalizedMimeType = mimeType.toLowerCase();
+      
+      // Mapear tipos comuns para formatos aceitos pelo Gemini
+      const mimeTypeMap: Record<string, string> = {
+        'image/jpg': 'image/jpeg',
+        'image/jpe': 'image/jpeg',
+        'application/pdf': 'application/pdf',
+      };
+      
+      normalizedMimeType = mimeTypeMap[normalizedMimeType] || normalizedMimeType;
+      
+      // Validar que é um tipo suportado
+      const supportedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+      if (!supportedTypes.includes(normalizedMimeType)) {
+        throw new Error(`Tipo de imagem não suportado: ${mimeType}. Tipos aceitos: JPG, PNG, WEBP, HEIC, HEIF, PDF`);
+      }
+
+      this.logger.log(`[Gemini Vision] MimeType normalizado: ${mimeType} → ${normalizedMimeType}`);
+
       const base64Image = imageBuffer.toString('base64');
 
       const prompt = `${IMAGE_ANALYSIS_SYSTEM_PROMPT}\n\n${IMAGE_ANALYSIS_USER_PROMPT}`;
@@ -165,7 +185,7 @@ export class GoogleGeminiProvider implements IAIProvider {
                   { text: prompt },
                   {
                     inline_data: {
-                      mime_type: mimeType,
+                      mime_type: normalizedMimeType,
                       data: base64Image,
                     },
                   },
@@ -181,6 +201,8 @@ export class GoogleGeminiProvider implements IAIProvider {
       );
 
       if (!response.ok) {
+        const errorBody = await response.text();
+        this.logger.error(`[Gemini] API Error Response: ${errorBody}`);
         throw new Error(`Gemini API error: ${response.statusText}`);
       }
 
