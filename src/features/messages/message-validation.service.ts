@@ -82,7 +82,31 @@ export class MessageValidationService {
     try {
       this.logger.debug(`🔍 [${platform}] Validating user: ${platformId}`);
 
-      // 1. PRIMEIRO: Verificar se está em processo de onboarding
+      // 1. PRIMEIRO: Buscar usuário no cache
+      const user = await this.fetchUser(platformId, platform);
+
+      // 2. Se usuário existe e está OK, limpar sessões órfãs e prosseguir
+      if (user && user.isActive && !user.isBlocked) {
+        // Verificar se tem sessão de onboarding ativa (sessão órfã)
+        const hasOrphanSession = await this.onboardingService.isUserOnboarding(platformId);
+
+        if (hasOrphanSession) {
+          this.logger.warn(
+            `⚠️ [${platform}] User ${platformId} has active session but is already registered - cleaning up`,
+          );
+          // Limpar sessão órfã
+          await this.cleanupOrphanSession(platformId);
+        }
+
+        this.logger.log(`✅ [${platform}] User ${user.name} validated successfully`);
+        return {
+          isValid: true,
+          action: ValidationAction.PROCEED,
+          user,
+        };
+      }
+
+      // 3. DEPOIS: Verificar se está em processo de onboarding
       const isOnboarding = await this.onboardingService.isUserOnboarding(platformId);
 
       if (isOnboarding) {
@@ -93,10 +117,7 @@ export class MessageValidationService {
         };
       }
 
-      // 2. Buscar usuário no cache (método depende da plataforma)
-      const user = await this.fetchUser(platformId, platform);
-
-      // 3. Se usuário não existe, iniciar onboarding (exceto web)
+      // 4. Se usuário não existe, iniciar onboarding (exceto web)
       if (!user) {
         this.logger.log(`⭐ [${platform}] New user detected: ${platformId}`);
 
@@ -364,6 +385,27 @@ export class MessageValidationService {
     } catch (error) {
       this.logger.error(`Error fetching user ${platformId} from ${platform}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * Limpa sessões de onboarding órfãs para usuários já registrados
+   */
+  private async cleanupOrphanSession(platformId: string): Promise<void> {
+    try {
+      await this.onboardingService['onboardingState']['prisma'].onboardingSession.updateMany({
+        where: {
+          platformId,
+          completed: false,
+        },
+        data: {
+          completed: true,
+          updatedAt: new Date(),
+        },
+      });
+      this.logger.log(`✅ Orphan session cleaned up for ${platformId}`);
+    } catch (error) {
+      this.logger.error(`Error cleaning up orphan session for ${platformId}:`, error);
     }
   }
 }

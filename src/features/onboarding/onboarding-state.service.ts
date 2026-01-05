@@ -234,32 +234,17 @@ export class OnboardingStateService {
 
       // Verificar expiração
       if (this.isExpired(session)) {
-        this.logger.log(`Sessão expirada, reativando: ${phoneNumber}`);
-
-        // Reativar sessão com nova data de expiração
-        const reactivatedSession = await this.prisma.onboardingSession.update({
-          where: { id: session.id },
-          data: {
-            expiresAt: new Date(Date.now() + this.TIMEOUT_MS),
-            updatedAt: new Date(),
-          },
-        });
-
-        // Retornar mensagem do step atual com aviso de reativação
-        const stepMessage = this.getStepMessage(
-          reactivatedSession.currentStep,
-          reactivatedSession.data as OnboardingData,
+        this.logger.warn(
+          `⚠️ Sessão expirada para ${phoneNumber} - deletando e recomeçando onboarding`,
         );
 
-        return {
-          completed: false,
-          currentStep: reactivatedSession.currentStep,
-          message:
-            '⏱️ Opa! Seu cadastro ficou parado por um tempo e expirou.\n\n' +
-            'Mas sem problemas! Vamos continuar de onde paramos. 😊\n\n' +
-            stepMessage,
-          data: reactivatedSession.data as OnboardingData,
-        };
+        // Deletar sessão expirada ao invés de reativar
+        await this.prisma.onboardingSession.delete({
+          where: { id: session.id },
+        });
+
+        // Iniciar novo onboarding do zero
+        return this.startOnboarding(phoneNumber, (session.data as any)?.platform);
       }
 
       // Processar baseado no step atual
@@ -579,10 +564,15 @@ export class OnboardingStateService {
       };
     }
 
-    // Se parecer um código (6 dígitos)
-    if (/^\d{6}$/.test(message)) {
+    // Normalizar mensagem para extrair código (remove espaços e não-dígitos)
+    const cleanedCode = message.replace(/\D/g, '');
+
+    // Se parecer um código (6 dígitos após limpeza)
+    if (/^\d{6}$/.test(cleanedCode)) {
+      this.logger.log(`✅ Código válido detectado: ${cleanedCode}`);
+      
       // Avançar para verificação
-      const updatedData = { ...data, verificationCode: message };
+      const updatedData = { ...data, verificationCode: cleanedCode };
       await this.updateSessionById(session.id, {
         currentStep: OnboardingStep.VERIFY_CODE,
         data: updatedData as any,
@@ -593,6 +583,21 @@ export class OnboardingStateService {
         currentStep: OnboardingStep.VERIFY_CODE,
         message: '🔍 Verificando código...',
         data: updatedData,
+      };
+    }
+    
+    // Se tentou enviar um código mas formato está errado
+    if (/\d{5,7}/.test(cleanedCode)) {
+      this.logger.warn(`⚠️ Código com formato incorreto: "${message}" (limpo: "${cleanedCode}")`);
+      return {
+        completed: false,
+        currentStep: OnboardingStep.REQUEST_VERIFICATION_CODE,
+        message:
+          `⚠️ *Formato incorreto*\n\n` +
+          `O código deve ter exatamente 6 dígitos.\n` +
+          `Você digitou: ${message}\n\n` +
+          `Por favor, digite novamente o código de 6 dígitos.`,
+        data,
       };
     }
 

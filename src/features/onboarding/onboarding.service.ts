@@ -392,7 +392,7 @@ export class OnboardingService {
 
       // ⚠️ CORREÇÃO: Para usuários existentes, usar telefone da API
       // Para novos usuários, usar realPhoneNumber coletado no onboarding
-      const phoneToValidate = data.phoneNumber || data.realPhoneNumber;
+      let phoneToValidate = data.phoneNumber || data.realPhoneNumber;
 
       if (!phoneToValidate) {
         this.logger.error(`❌ ERRO: Nenhum telefone disponível para validação!`);
@@ -408,7 +408,22 @@ export class OnboardingService {
         };
       }
 
-      this.logger.log(`✅ Telefone para validação: ${phoneToValidate}`);
+      // Normalizar telefone: remover tudo exceto dígitos
+      phoneToValidate = phoneToValidate.replace(/\D/g, '');
+      
+      // Garantir que tem pelo menos 10 dígitos (DDD + número)
+      if (phoneToValidate.length < 10) {
+        this.logger.error(`❌ ERRO: Telefone inválido após normalização: ${phoneToValidate}`);
+        return {
+          success: false,
+          message:
+            '❌ *Telefone inválido*\n\n' +
+            'O telefone fornecido está incompleto.\n\n' +
+            'Por favor, digite *"recomeçar"* para iniciar novamente.',
+        };
+      }
+
+      this.logger.log(`✅ Telefone normalizado para validação: ${phoneToValidate}`);
 
       // Validar código na API
       const result = await this.gastoCertoApi.validateAuthCode({
@@ -443,15 +458,27 @@ export class OnboardingService {
             `Digite uma mensagem como "Gastei R$ 20 no mercado" para começar ou digite ajuda para ver o que posso fazer por você.`,
         };
       } else {
+        // Log detalhado do erro
+        this.logger.error(`❌ Validação falhou - result.success: ${result.success}`);
+        this.logger.error(`❌ result.message: ${result.message || 'Nenhuma mensagem'}`);
+        this.logger.error(`❌ Código tentado: ${data.verificationCode}`);
+        this.logger.error(`❌ Email: ${data.email}, Telefone: ${phoneToValidate}`);
+        
+        // Mensagem de erro mais detalhada
+        const errorMessage = result.message || 'Código incorreto';
+        
         return {
           success: false,
           message:
-            `❌ *Código inválido*\n\n` +
-            `O código que você digitou não está correto.\n\n` +
+            `❌ *Falha na validação*\n\n` +
+            `${errorMessage}\n\n` +
             `💡 *Você pode:*\n` +
             `• Digite o código de 6 dígitos novamente\n` +
             `• Digite *"reenviar"* para receber um novo código\n` +
-            `• Digite *"corrigir email"* se o email está errado`,
+            `• Digite *"corrigir email"* se o email está errado\n\n` +
+            `⚠️ *Dados enviados:*\n` +
+            `Email: ${data.email}\n` +
+            `Telefone: ${phoneToValidate}`,
         };
       }
     } catch (error) {

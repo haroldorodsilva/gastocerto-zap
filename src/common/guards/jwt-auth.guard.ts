@@ -35,6 +35,9 @@ export class JwtAuthGuard implements CanActivate {
 
     // Extrai token do Authorization header
     const authHeader = request.headers.authorization as string;
+
+    this.logger.debug(`[JWT Guard] Authorization header: ${authHeader ? 'Present' : 'Missing'}`);
+
     const token = this.jwtValidationService.extractTokenFromHeader(authHeader);
 
     if (!token) {
@@ -42,11 +45,13 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing or invalid authorization token');
     }
 
+    this.logger.debug(`[JWT Guard] Token extracted, validating with gastocerto-api...`);
+
     // Valida token com gastocerto-api
     const user = await this.jwtValidationService.validateToken(token);
 
     if (!user) {
-      this.logger.warn('Invalid or expired token');
+      this.logger.warn('Invalid or expired token - API validation failed');
       throw new UnauthorizedException('Invalid or expired token');
     }
 

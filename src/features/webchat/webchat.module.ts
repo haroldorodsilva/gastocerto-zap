@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { WebChatController } from './webchat.controller';
+import { AuthTestController } from './auth-test.controller';
 import { WebChatService } from './webchat.service';
 import { TransactionsModule } from '@features/transactions/transactions.module';
 import { UsersModule } from '@features/users/users.module';
@@ -21,7 +22,7 @@ import { CommonModule } from '@common/common.module';
       },
     }),
   ],
-  controllers: [WebChatController],
+  controllers: [WebChatController, AuthTestController],
   providers: [WebChatService],
   exports: [WebChatService],
 })
