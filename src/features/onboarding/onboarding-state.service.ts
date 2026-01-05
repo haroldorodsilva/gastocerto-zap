@@ -380,17 +380,21 @@ export class OnboardingStateService {
       currentStep: OnboardingStep.REQUEST_PHONE,
       message:
         '📞 *Quase lá!*\n\n' +
-        'Para finalizarmos, preciso do seu número de telefone.\n\n' +
+        'Para finalizarmos, preciso do seu *número de telefone*.\n\n' +
         '🔒 *Seu telefone estará seguro!*\n' +
         'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
-        'ℹ️ Se preferir *pular esta etapa*, digite "pular".',
+        '💡 Você também pode digitar seu número no formato:\n' +
+        '   • (11) 98765-4321\n' +
+        '   • 11987654321\n' +
+        '   • 5511987654321',
       data,
     };
   }
 
   /**
    * Processa solicitação de telefone (Telegram)
-   * Aceita compartilhamento de contato ou comando "pular"
+   * Aceita compartilhamento de contato ou número digitado manualmente
+   * TELEFONE É OBRIGATÓRIO - não permite mais pular
    */
   private async handlePhoneRequest(
     session: OnboardingSession,
@@ -422,19 +426,18 @@ export class OnboardingStateService {
       };
     }
 
-    // Verificar se usuário pulou o telefone
+    // Telefone é obrigatório - não aceita mais pular
     if (intent.matched && intent.intent === 'skip') {
-      this.logger.log('Usuário pulou compartilhamento de telefone');
-
-      const updated = await this.updateSessionById(session.id, {
-        currentStep: OnboardingStep.CHECK_EXISTING_USER,
-        data: data as any,
-      });
-
+      this.logger.log('Usuário tentou pular telefone - não permitido');
       return {
         completed: false,
-        currentStep: OnboardingStep.CHECK_EXISTING_USER,
-        message: '⏳ Verificando seu cadastro...',
+        currentStep: OnboardingStep.REQUEST_PHONE,
+        message:
+          '⚠️ *Telefone obrigatório*\n\n' +
+          'Precisamos do seu telefone para completar o cadastro.\n\n' +
+          '📞 Use o botão "Compartilhar Telefone" abaixo\n' +
+          'ou digite seu número.\n\n' +
+          '💡 Exemplo: (11) 98765-4321',
         data,
       };
     }
@@ -469,8 +472,11 @@ export class OnboardingStateService {
           '1️⃣ Clique no botão 📞 "Compartilhar Telefone" abaixo\n' +
           '2️⃣ O Telegram pedirá permissão - clique em "OK"\n' +
           '3️⃣ Seu telefone será enviado de forma segura\n\n' +
-          '🔒 *Seu número estará protegido!*\n\n' +
-          'Ou digite *"pular"* para continuar sem telefone.',
+          '� *Ou digite seu número manualmente:*\n' +
+          '   • (11) 98765-4321\n' +
+          '   • 11987654321\n' +
+          '   • 5511987654321\n\n' +
+          '🔒 *Seu número estará protegido!*',
         data,
       };
     }
@@ -507,14 +513,19 @@ export class OnboardingStateService {
       };
     }
 
-    // Se recebeu texto mas não é "pular", explicar novamente
+    // Se recebeu texto inválido, explicar novamente
     return {
       completed: false,
       currentStep: OnboardingStep.REQUEST_PHONE,
       message:
-        '📞 Por favor, use o *botão "Compartilhar telefone"* abaixo.\n\n' +
-        'Digite *"ajuda"* para ver como funciona.\n' +
-        'Ou digite *"pular"* se preferir continuar sem informar o telefone.',
+        '❌ *Não consegui entender*\n\n' +
+        '📞 Use o *botão "Compartilhar telefone"* abaixo\n' +
+        'ou digite um número de telefone válido.\n\n' +
+        '💡 Exemplos válidos:\n' +
+        '   • (11) 98765-4321\n' +
+        '   • 11 98765-4321\n' +
+        '   • 5511987654321\n\n' +
+        'Digite *"ajuda"* para mais informações.',
       data,
     };
   }
@@ -885,10 +896,13 @@ export class OnboardingStateService {
       case OnboardingStep.REQUEST_PHONE:
         return (
           '📞 Quase lá!\n\n' +
-          'Para finalizarmos, preciso do seu número de telefone.\n\n' +
+          'Para finalizarmos, preciso do seu *número de telefone*.\n\n' +
           '🔒 Seu telefone estará seguro!\n' +
           'Use o botão abaixo para compartilhá-lo de forma segura.\n\n' +
-          'ℹ️ Se preferir pular esta etapa, digite "pular".'
+          '💡 Você também pode digitar seu número no formato:\n' +
+          '   • (11) 98765-4321\n' +
+          '   • 11987654321\n' +
+          '   • 5511987654321'
         );
 
       case OnboardingStep.REQUEST_VERIFICATION_CODE:

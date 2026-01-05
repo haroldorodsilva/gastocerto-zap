@@ -78,5 +78,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 ENTRYPOINT ["/sbin/tini", "--"]
 
 # Start application
-# Note: Seed is skipped in production - run manually via Prisma Studio or SQL if needed
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+# Run database migrations before starting the app (app won't start if migration fails)
+CMD ["sh", "-c", "npm run db:deploy && node dist/main.js"]
