@@ -138,8 +138,9 @@ export class MultiPlatformSessionService implements OnModuleInit {
       });
 
       this.logger.log(`✅ Telegram session ${sessionId} started successfully`);
-    } catch (error) {
-      this.logger.error(`Failed to start Telegram session ${sessionId}:`, error);
+    } catch (error: any) {
+      const errorMsg = error.message || String(error);
+      this.logger.error(`Failed to start Telegram session ${sessionId}: ${errorMsg}`);
       throw error;
     }
   }
@@ -298,13 +299,16 @@ export class MultiPlatformSessionService implements OnModuleInit {
         message,
       });
       this.logger.log(`✅ [MultiPlatformSessionService] Event emitted successfully`);
-    } catch (error) {
-      this.logger.error(`Failed to check session status for ${sessionId}:`, error);
+    } catch (error: any) {
+      const errorMsg = error.message || String(error);
+      this.logger.error(`Failed to check session status for ${sessionId}: ${errorMsg}`);
     }
   }
 
   private handleError(sessionId: string, error: Error): void {
-    this.logger.error(`❌ Error in session ${sessionId}:`, error);
+    // Log apenas mensagem essencial do erro
+    const errorMsg = error.message || String(error);
+    this.logger.error(`❌ Error in session ${sessionId}: ${errorMsg}`);
     this.eventEmitter.emit('session.error', { sessionId, error });
   }
 }

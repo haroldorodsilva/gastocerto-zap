@@ -6,6 +6,7 @@ import { RedisService } from './services/redis.service';
 import { TemporalParserService } from './services/temporal-parser.service';
 import { ServiceAuthGuard } from './guards/service-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { JwtUserGuard } from './guards/jwt-user.guard';
 import { DualAuthGuard } from './guards/dual-auth.guard';
 
 /**
@@ -16,7 +17,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
  * - UserRateLimiterService: Rate limiting para proteção contra spam
  * - RedisService: Cliente Redis para cache e rate limiting
  * - TemporalParserService: Parser NLP para expressões temporais
- * - Guards: ServiceAuth, JwtAuth, DualAuth
+ * - Guards: ServiceAuth, JwtAuth (admin), JwtUser (any role), DualAuth
  */
 @Global()
 @Module({
@@ -28,6 +29,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
     TemporalParserService,
     ServiceAuthGuard,
     JwtAuthGuard,
+    JwtUserGuard,
     DualAuthGuard,
   ],
   exports: [
@@ -38,6 +40,7 @@ import { DualAuthGuard } from './guards/dual-auth.guard';
     TemporalParserService,
     ServiceAuthGuard,
     JwtAuthGuard,
+    JwtUserGuard,
     DualAuthGuard,
   ],
 })

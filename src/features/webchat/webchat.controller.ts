@@ -24,7 +24,7 @@ import {
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { JwtUserGuard } from '@common/guards/jwt-user.guard';
 import { AuthenticatedUser } from '@common/interfaces/jwt.interface';
 import { UploadFileDto, UploadResponse } from './dto/upload.dto';
 import type { Multer } from 'multer';
@@ -68,7 +68,7 @@ export interface WebChatResponse {
 
 @ApiTags('Web Chat')
 @Controller('webchat')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtUserGuard)
 @ApiBearerAuth()
 export class WebChatController {
   private readonly logger = new Logger(WebChatController.name);
