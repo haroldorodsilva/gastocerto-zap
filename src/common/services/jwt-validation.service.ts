@@ -82,6 +82,15 @@ export class JwtValidationService {
         },
       );
 
+      // Log da resposta da API
+      this.logger.log(
+        `[validate-token] Response: ${JSON.stringify({
+          status: response.status,
+          valid: response.data.valid,
+          payload: response.data.payload,
+        })}`,
+      );
+
       if (!response.data.valid || !response.data.payload) {
         this.logger.warn('Invalid token response from API');
         return null;
@@ -90,12 +99,22 @@ export class JwtValidationService {
       const { payload } = response.data;
 
       // Busca dados completos do usuário
+      this.logger.debug(`Fetching user data for: ${payload.sub}`);
       const user = await this.getUserById(payload.sub);
 
       if (!user) {
         this.logger.warn(`User not found: ${payload.sub}`);
         return null;
       }
+
+      this.logger.log(
+        `[getUserById] Response: ${JSON.stringify({
+          userId: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        })}`,
+      );
 
       // Valida role
       if (!['ADMIN', 'MASTER'].includes(user.role)) {
@@ -119,17 +138,31 @@ export class JwtValidationService {
         this.logger.error(`Error validating token: ${error.message}`);
       }
       return null;
-    }
-  }
-
-  /**
-   * Busca dados completos do usuário por ID
-   */
-  private async getUserById(userId: string): Promise<AuthenticatedUser | null> {
-    try {
-      const hmacHeaders = this.serviceAuthService.generateAuthHeaders();
+    }this.logger.log(
+        `[getUserById] Request: ${JSON.stringify({
+          url: `${this.apiUrl}/external/users/${userId}`,
+          headers: hmacHeaders,
+        })}`,
+      );
 
       const response = await axios.get<AuthenticatedUser>(
+        `${this.apiUrl}/external/users/${userId}`,
+        {
+          headers: hmacHeaders,
+          timeout: this.timeout,
+        },
+      );
+
+      this.logger.log(
+        `[getUserById] Response status: ${response.status}, data: ${JSON.stringify(response.data)}`,
+      );
+
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Error fetching user ${userId}: ${error.message}`);
+      if (error.response) {
+        this.logger.error(`Response error: ${JSON.stringify(error.response.data)}`);
+      }
         `${this.apiUrl}/external/users/${userId}`,
         {
           headers: hmacHeaders,
