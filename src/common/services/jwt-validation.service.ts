@@ -138,7 +138,17 @@ export class JwtValidationService {
         this.logger.error(`Error validating token: ${error.message}`);
       }
       return null;
-    }this.logger.log(
+    }
+  }
+
+  /**
+   * Busca dados completos do usuário por ID
+   */
+  private async getUserById(userId: string): Promise<AuthenticatedUser | null> {
+    try {
+      const hmacHeaders = this.serviceAuthService.generateAuthHeaders();
+
+      this.logger.log(
         `[getUserById] Request: ${JSON.stringify({
           url: `${this.apiUrl}/external/users/${userId}`,
           headers: hmacHeaders,
@@ -163,16 +173,6 @@ export class JwtValidationService {
       if (error.response) {
         this.logger.error(`Response error: ${JSON.stringify(error.response.data)}`);
       }
-        `${this.apiUrl}/external/users/${userId}`,
-        {
-          headers: hmacHeaders,
-          timeout: this.timeout,
-        },
-      );
-
-      return response.data;
-    } catch (error: any) {
-      this.logger.error(`Error fetching user ${userId}: ${error.message}`);
       return null;
     }
   }
