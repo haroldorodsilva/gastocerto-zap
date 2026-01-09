@@ -57,7 +57,8 @@ export class TelegramProvider implements IMessagingProvider {
       this.connected = true;
       this.callbacks.onConnected?.();
     } catch (error) {
-      this.logger.error(`Failed to initialize Telegram bot:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to initialize Telegram bot: ${errorMessage}`);
       this.callbacks.onError?.(error);
       throw error;
     }
@@ -115,10 +116,11 @@ export class TelegramProvider implements IMessagingProvider {
 
         // Se não é timeout ou é última tentativa, falha imediatamente
         if (!isTimeoutError || isLastAttempt) {
-          this.logger.error('Error sending text message:', error);
+          const errorMessage = error.message || error.code || 'Unknown error';
+          this.logger.error(`Error sending text message: ${errorMessage}`);
           return {
             success: false,
-            error: error.message || error.code || 'Unknown error',
+            error: errorMessage,
           };
         }
 
@@ -159,10 +161,11 @@ export class TelegramProvider implements IMessagingProvider {
         messageId: result.message_id.toString(),
       };
     } catch (error) {
-      this.logger.error('Error sending image:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error sending image: ${errorMessage}`);
       return {
         success: false,
-        error: error.message,
+        error: errorMessage,
       };
     }
   }
@@ -189,10 +192,11 @@ export class TelegramProvider implements IMessagingProvider {
         messageId: result.message_id.toString(),
       };
     } catch (error) {
-      this.logger.error('Error sending audio:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error sending audio: ${errorMessage}`);
       return {
         success: false,
-        error: error.message,
+        error: errorMessage,
       };
     }
   }
@@ -230,7 +234,8 @@ export class TelegramProvider implements IMessagingProvider {
       const arrayBuffer = await response.arrayBuffer();
       return Buffer.from(arrayBuffer);
     } catch (error) {
-      this.logger.error('Error downloading media:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error downloading media: ${errorMessage}`);
       return null;
     }
   }
@@ -254,7 +259,8 @@ export class TelegramProvider implements IMessagingProvider {
         lastName: chat.last_name,
       };
     } catch (error) {
-      this.logger.error('Error getting user info:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error getting user info: ${errorMessage}`);
       return null;
     }
   }
@@ -299,7 +305,9 @@ export class TelegramProvider implements IMessagingProvider {
 
     // Polling errors
     this.bot.on('polling_error', (error) => {
-      this.logger.error('Telegram polling error:', error);
+      // Log apenas a mensagem, sem stack trace
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Telegram polling error: ${errorMessage}`);
       this.callbacks.onError?.(error);
     });
   }
@@ -377,7 +385,8 @@ export class TelegramProvider implements IMessagingProvider {
         this.logger.warn('⚠️  [TelegramProvider] No onMessage callback registered!');
       }
     } catch (error) {
-      this.logger.error('Error handling incoming message:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error handling incoming message: ${errorMessage}`);
       this.callbacks.onError?.(error);
     }
   }
