@@ -1264,6 +1264,7 @@ isActive: ${dto.isActive}
         where: {
           id: { in: result.logs.map((l) => l.id) },
         },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           query: true,
