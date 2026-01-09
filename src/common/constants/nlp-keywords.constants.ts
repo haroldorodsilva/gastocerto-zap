@@ -184,3 +184,47 @@ export type ExpenseKeyword = (typeof EXPENSE_KEYWORDS)[number];
  * Tipo helper para palavras de receita
  */
 export type IncomeKeyword = (typeof INCOME_KEYWORDS)[number];
+
+/**
+ * Comandos de WebChat - Perfil/Conta
+ */
+
+/**
+ * Comandos para visualizar perfil atual (PERMITIDO no WebChat)
+ */
+export const WEBCHAT_SHOW_PROFILE_COMMANDS = [
+  'qual perfil',
+  'perfil atual',
+  'meu perfil',
+  'qual conta',
+  'conta atual',
+  'qual o perfil',
+  'perfil ativo',
+] as const;
+
+/**
+ * Comandos de gerenciamento de perfil (BLOQUEADO no WebChat)
+ * Usuário deve usar interface gráfica
+ */
+export const WEBCHAT_MANAGEMENT_COMMANDS = [
+  'listar perfis',
+  'meus perfis',
+  'minhas contas',
+  'ver perfis',
+  'mudar perfil',
+  'trocar perfil',
+  'mudar conta',
+  'trocar conta',
+  'usar perfil',
+  'selecionar perfil',
+] as const;
+
+/**
+ * Tipo helper para comandos de visualização de perfil
+ */
+export type WebChatShowProfileCommand = (typeof WEBCHAT_SHOW_PROFILE_COMMANDS)[number];
+
+/**
+ * Tipo helper para comandos de gerenciamento
+ */
+export type WebChatManagementCommand = (typeof WEBCHAT_MANAGEMENT_COMMANDS)[number];

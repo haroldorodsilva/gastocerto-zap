@@ -58,6 +58,10 @@ export interface WebChatResponse {
       text: string;
       category: string;
     }>;
+    currentAccount?: {
+      id: string;
+      name: string;
+    };
   };
   formatting?: {
     highlight?: string[]; // Partes do texto para destacar
@@ -192,9 +196,7 @@ export class WebChatController {
     // Validar tipo de arquivo
     const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
     if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestException(
-        'Tipo de arquivo não suportado. Use: JPG, PNG ou PDF',
-      );
+      throw new BadRequestException('Tipo de arquivo não suportado. Use: JPG, PNG ou PDF');
     }
 
     // Validar tamanho (max 10MB)
@@ -298,9 +300,7 @@ export class WebChatController {
       'audio/m4a',
     ];
     if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestException(
-        'Tipo de arquivo não suportado. Use: MP3, OGG, WAV ou M4A',
-      );
+      throw new BadRequestException('Tipo de arquivo não suportado. Use: MP3, OGG, WAV ou M4A');
     }
 
     // Validar tamanho (max 20MB)

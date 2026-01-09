@@ -878,6 +878,10 @@ export class RAGService {
     try {
       const bestMatch = matches.length > 0 ? matches[0] : null;
 
+      this.logger.log(
+        `💾 Tentando salvar RAG log: userId=${userId}, query="${query}", matches=${matches.length}, success=${success}`,
+      );
+
       // Salvar no banco de dados com novos campos de tracking
       const log = await this.prisma.rAGSearchLog.create({
         data: {
@@ -916,7 +920,8 @@ export class RAGService {
       return log.id;
     } catch (error) {
       // Não lançar erro - logging não deve quebrar fluxo
-      this.logger.warn(`Erro ao salvar log RAG:`, error);
+      this.logger.error(`❌ Erro ao salvar log RAG (userId: ${userId}, query: "${query}"):`, error);
+      this.logger.error(`Stack trace:`, error.stack);
       return null;
     }
   }

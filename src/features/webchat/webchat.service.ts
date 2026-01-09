@@ -6,6 +6,10 @@ import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { WebChatResponse } from './webchat.controller';
 import { UploadResponse } from './dto/upload.dto';
 import type { Multer } from 'multer';
+import {
+  WEBCHAT_SHOW_PROFILE_COMMANDS,
+  WEBCHAT_MANAGEMENT_COMMANDS,
+} from '@common/constants/nlp-keywords.constants';
 
 /**
  * WebChatService
@@ -140,25 +144,26 @@ export class WebChatService {
 
       // accountId é passado diretamente para as transações sem alterar o banco
 
-      // 2. Barrar comandos de gerenciamento de perfil no webchat
-      // O usuário deve fazer isso via interface gráfica
+      // 2. Comandos de perfil
       const lowerMessage = messageText.toLowerCase().trim();
-      const profileCommands = [
-        'listar perfis',
-        'meus perfis',
-        'minhas contas',
-        'ver perfis',
-        'mudar perfil',
-        'trocar perfil',
-        'mudar conta',
-        'trocar conta',
-        'usar perfil',
-        'selecionar perfil',
-      ];
 
-      const isProfileCommand = profileCommands.some((cmd) => lowerMessage.includes(cmd));
+      // 2.1. Comando para ver perfil atual (permitido)
+      const isShowProfileCommand = WEBCHAT_SHOW_PROFILE_COMMANDS.some((cmd) =>
+        lowerMessage.includes(cmd),
+      );
 
-      if (isProfileCommand) {
+      if (isShowProfileCommand) {
+        this.logger.log(`ℹ️ [WebChat] Comando de visualização de perfil: ${messageText}`);
+        return await this.showCurrentProfile(userId, accountId);
+      }
+
+      // 2.2. Barrar comandos de gerenciamento de perfil no webchat
+      // O usuário deve fazer isso via interface gráfica
+      const isManagementCommand = WEBCHAT_MANAGEMENT_COMMANDS.some((cmd) =>
+        lowerMessage.includes(cmd),
+      );
+
+      if (isManagementCommand) {
         this.logger.log(`🚫 [WebChat] Comando de perfil bloqueado: ${messageText}`);
         return {
           success: false,
@@ -547,5 +552,90 @@ export class WebChatService {
     if (result.requiresConfirmation) return 'confirmation';
     if (result.success && result.message.includes('registrada')) return 'transaction';
     return 'info';
+  }
+
+  /**
+   * Mostra o perfil/conta atual em uso no WebChat
+   * @param userId - ID do usuário no GastoCerto
+   * @param accountId - ID da conta do header (pode ser undefined)
+   */
+  private async showCurrentProfile(userId: string, accountId?: string): Promise<WebChatResponse> {
+    try {
+      // Buscar contas do usuário
+      const accounts = await this.gastoCertoApi.getUserAccounts(userId);
+
+      if (!accounts || accounts.length === 0) {
+        return {
+          success: true,
+          messageType: 'info',
+          message: this.removeEmojis('Você ainda não possui perfis cadastrados.'),
+          formatting: {
+            color: 'info',
+          },
+        };
+      }
+
+      // Se accountId foi fornecido no header, buscar esse perfil
+      if (accountId) {
+        const currentAccount = accounts.find((acc) => acc.id === accountId);
+
+        if (currentAccount) {
+          return {
+            success: true,
+            messageType: 'info',
+            message: this.removeEmojis(
+              `Você está trabalhando no perfil:\n\n` +
+                `${currentAccount.name}\n\n` +
+                `Todas as transações nesta sessão serão registradas neste perfil.`,
+            ),
+            data: {
+              currentAccount: {
+                id: currentAccount.id,
+                name: currentAccount.name,
+              },
+            },
+            formatting: {
+              color: 'info',
+            },
+          };
+        } else {
+          // AccountId no header não encontrado
+          return {
+            success: false,
+            messageType: 'error',
+            message: this.removeEmojis(
+              `Perfil selecionado não encontrado.\n\n` +
+                `Por favor, selecione um perfil válido no menu.`,
+            ),
+            formatting: {
+              color: 'error',
+            },
+          };
+        }
+      }
+
+      // Se não tem accountId no header, informar que precisa selecionar
+      return {
+        success: true,
+        messageType: 'info',
+        message: this.removeEmojis(
+          `Para visualizar o perfil atual, por favor selecione um perfil no menu da interface.\n\n` +
+            `Você possui ${accounts.length} perfil(is) disponível(is).`,
+        ),
+        formatting: {
+          color: 'info',
+        },
+      };
+    } catch (error) {
+      this.logger.error(`❌ [WebChat] Erro ao buscar perfil atual:`, error);
+      return {
+        success: false,
+        messageType: 'error',
+        message: this.removeEmojis('Erro ao buscar informações do perfil.'),
+        formatting: {
+          color: 'error',
+        },
+      };
+    }
   }
 }
