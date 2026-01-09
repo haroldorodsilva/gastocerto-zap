@@ -89,6 +89,7 @@ export class TransactionsService {
    * @param messageId - ID único da mensagem
    * @param platform - Plataforma de origem (whatsapp|telegram|webchat)
    * @param platformId - ID específico da plataforma (chatId, número, etc)
+   * @param accountId - ID da conta a ser usada (contextual por canal)
    */
   async processTextMessage(
     user: UserCache,
@@ -96,12 +97,16 @@ export class TransactionsService {
     messageId: string,
     platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
+    accountId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       const phoneNumber = user.phoneNumber; // Para compatibilidade com código existente
       
+      // Usar accountId passado ou fallback para user.activeAccountId
+      const activeAccountId = accountId || user.activeAccountId;
+      
       this.logger.log(
-        `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform} | UserId: ${user.id}`,
+        `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform} | UserId: ${user.id} | AccountId: ${activeAccountId}`,
       );
 
       // 0. Validação de segurança (prompt injection, mensagens maliciosas)
@@ -127,7 +132,7 @@ export class TransactionsService {
 
       // Log do activeAccountId do cache para debug
       this.logger.log(
-        `👤 User: ${user.phoneNumber} | gastoCertoId: ${user.gastoCertoId} | activeAccountId: ${user.activeAccountId}`,
+        `👤 User: ${user.phoneNumber} | gastoCertoId: ${user.gastoCertoId} | activeAccountId (cache): ${user.activeAccountId} | accountId (usado): ${activeAccountId}`,
       );
 
       // 1.5. VERIFICAR REFERÊNCIA NUMÉRICA DE LISTA ("pagar 5", "pagar item 3")
@@ -573,6 +578,7 @@ export class TransactionsService {
         messageId,
         user,
         platform, // Passar platform da mensagem
+        activeAccountId, // Passar accountId contextual
       );
 
       // 4. Emitir resposta se houver mensagem
@@ -606,10 +612,12 @@ export class TransactionsService {
     messageId: string,
     platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
+    accountId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       const phoneNumber = user.phoneNumber; // Para compatibilidade
-      this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber} | UserId: ${user.id}`);
+      const activeAccountId = accountId || user.activeAccountId;
+      this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber} | UserId: ${user.id} | AccountId: ${activeAccountId}`);
 
 
       // Verificar se há confirmação pendente (bloqueio de contexto)
@@ -656,6 +664,7 @@ export class TransactionsService {
         messageId,
         user,
         platform, // Passar platform da mensagem
+        activeAccountId, // Passar accountId contextual
       );
 
       // Emitir resposta se houver mensagem
@@ -689,10 +698,12 @@ export class TransactionsService {
     messageId: string,
     platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
+    accountId?: string,
   ): Promise<ProcessMessageResult> {
     try {
       const phoneNumber = user.phoneNumber; // Para compatibilidade
-      this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber} | UserId: ${user.id}`);
+      const activeAccountId = accountId || user.activeAccountId;
+      this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber} | UserId: ${user.id} | AccountId: ${activeAccountId}`);
 
 
       // Verificar se há confirmação pendente (bloqueio de contexto)
@@ -739,6 +750,7 @@ export class TransactionsService {
         messageId,
         user,
         platform, // Passar platform da mensagem
+        activeAccountId, // Passar accountId contextual
       );
 
       // Emitir resposta se houver mensagem

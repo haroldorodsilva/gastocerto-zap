@@ -255,6 +255,8 @@ export class WhatsAppMessageHandler {
       // Não é confirmação - processar como nova transação
       this.logger.log(`[WhatsApp] Processing new transaction for user ${user.name}`);
 
+      const accountId = user.activeAccountId; // Usar accountId do cache do usuário
+
       // 🆕 NOVO: Processar por tipo de mensagem (igual Telegram)
       switch (message.type) {
         case MessageType.TEXT:
@@ -265,6 +267,7 @@ export class WhatsAppMessageHandler {
             phoneNumber,
             message,
             timestamp: Date.now(),
+            accountId, // Incluir accountId na fila
           });
           break;
 
@@ -279,6 +282,7 @@ export class WhatsAppMessageHandler {
               message.messageId,
               'whatsapp',
               phoneNumber, // platformId
+              accountId, // Passar accountId do cache
             );
           } else {
             this.logger.warn(`[WhatsApp] Image message without buffer`);
@@ -296,6 +300,7 @@ export class WhatsAppMessageHandler {
               message.messageId,
               'whatsapp',
               phoneNumber, // platformId
+              accountId, // Passar accountId do cache
             );
           } else {
             this.logger.warn(`[WhatsApp] Audio message without buffer`);

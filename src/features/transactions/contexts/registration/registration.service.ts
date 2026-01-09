@@ -150,6 +150,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    accountId?: string, // accountId contextual passado pelo provider
     skipLearning: boolean = false, // Evita loop infinito após confirmação
   ): Promise<{
     success: boolean;
@@ -161,18 +162,26 @@ export class TransactionRegistrationService {
     try {
       this.logger.log(`📝 [Registration] Processando texto de ${phoneNumber}: "${text}"`);
 
-      // 0. Validar conta ativa
-      const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
-      if (!accountValidation.valid) {
-        return {
-          success: false,
-          message: accountValidation.message || '❌ Conta ativa não encontrada.',
-          requiresConfirmation: false,
-        };
-      }
+      // 0. Usar accountId passado ou validar conta ativa
+      let activeAccountId: string;
 
-      const activeAccountId = accountValidation.accountId;
-      this.logger.debug(`🏦 Conta ativa: ${activeAccountId}`);
+      if (accountId) {
+        // Usar accountId contextual do provider (não valida, apenas usa)
+        activeAccountId = accountId;
+        this.logger.debug(`🏦 Usando accountId contextual: ${activeAccountId}`);
+      } else {
+        // Fallback: validar conta ativa do banco
+        const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
+        if (!accountValidation.valid) {
+          return {
+            success: false,
+            message: accountValidation.message || '❌ Conta ativa não encontrada.',
+            requiresConfirmation: false,
+          };
+        }
+        activeAccountId = accountValidation.accountId;
+        this.logger.debug(`🏦 Usando conta ativa do banco: ${activeAccountId}`);
+      }
 
       // 1. Buscar categorias do usuário (APENAS da conta ativa)
       const categoriesData = await this.userCache.getUserCategories(phoneNumber, activeAccountId);
@@ -569,7 +578,7 @@ export class TransactionRegistrationService {
       // 3.5. Resolver categoria/subcategoria ANTES do aprendizado (para ter IDs corretos)
       const resolved = await this.resolveCategoryAndSubcategory(
         user.gastoCertoId,
-        user.activeAccountId,
+        activeAccountId,
         extractedData.category,
         extractedData.subCategory,
         extractedData.type,
@@ -665,6 +674,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    accountId?: string, // accountId contextual passado pelo provider
   ): Promise<{
     success: boolean;
     message: string;
@@ -674,14 +684,25 @@ export class TransactionRegistrationService {
     try {
       this.logger.log(`🖼️ [Registration] Processando imagem de ${phoneNumber}`);
 
-      // 0. Validar conta ativa
-      const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
-      if (!accountValidation.valid) {
-        return {
-          success: false,
-          message: accountValidation.message || '❌ Conta ativa não encontrada.',
-          requiresConfirmation: false,
-        };
+      // 0. Usar accountId passado ou validar conta ativa
+      let activeAccountId: string;
+
+      if (accountId) {
+        // Usar accountId contextual do provider (não valida, apenas usa)
+        activeAccountId = accountId;
+        this.logger.debug(`🏦 Usando accountId contextual: ${activeAccountId}`);
+      } else {
+        // Fallback: validar conta ativa do banco
+        const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
+        if (!accountValidation.valid) {
+          return {
+            success: false,
+            message: accountValidation.message || '❌ Conta ativa não encontrada.',
+            requiresConfirmation: false,
+          };
+        }
+        activeAccountId = accountValidation.accountId;
+        this.logger.debug(`🏦 Usando conta ativa do banco: ${activeAccountId}`);
       }
 
       // 1. Extrair dados da imagem via IA
@@ -776,6 +797,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    accountId?: string, // accountId contextual passado pelo provider
   ): Promise<{
     success: boolean;
     message: string;
@@ -812,6 +834,7 @@ export class TransactionRegistrationService {
         messageId,
         user,
         platform,
+        accountId, // Passar accountId contextual
       );
     } catch (error) {
       this.logger.error(`❌ Erro ao processar áudio:`, error);
@@ -1088,14 +1111,14 @@ export class TransactionRegistrationService {
 
       // 👤 Buscar nome da conta ativa do usuário
       let accountName = 'Conta não identificada';
-      if (user.accounts && Array.isArray(user.accounts)) {
+      if (user.accounts && Array.isArray(user.accounts) && accountId) {
         const accounts = user.accounts as Array<{
           id: string;
           name: string;
           type?: string;
           isPrimary?: boolean;
         }>;
-        const activeAccount = accounts.find((acc) => acc.id === user.activeAccountId);
+        const activeAccount = accounts.find((acc) => acc.id === accountId);
         if (activeAccount) {
           accountName = activeAccount.name;
         }

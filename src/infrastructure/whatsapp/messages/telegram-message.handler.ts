@@ -272,6 +272,7 @@ export class TelegramMessageHandler {
   ): Promise<void> {
     this.logger.log('💰 Processing transaction message from registered user');
     const userId = message.chatId;
+    const accountId = user.activeAccountId; // Usar accountId do cache do usuário
 
     switch (message.type) {
       case MessageType.TEXT:
@@ -282,6 +283,7 @@ export class TelegramMessageHandler {
             message.id,
             'telegram',
             userId, // Passar chatId como platformId para respostas corretas
+            accountId, // Passar accountId do cache
           );
         }
         break;
@@ -295,6 +297,7 @@ export class TelegramMessageHandler {
             message.id,
             'telegram',
             userId, // Passar chatId como platformId para respostas corretas
+            accountId, // Passar accountId do cache
           );
         }
         break;
@@ -308,6 +311,7 @@ export class TelegramMessageHandler {
             message.id,
             'telegram',
             userId, // Passar chatId como platformId para respostas corretas
+            accountId, // Passar accountId do cache
           );
         }
         break;

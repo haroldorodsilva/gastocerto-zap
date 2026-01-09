@@ -134,36 +134,47 @@ export class WebChatService {
       }
 
       const phoneNumber = expectedPhoneNumber;
-      this.logger.log(`✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber})`);
+      this.logger.log(
+        `✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber}) | AccountId do header: ${accountId || 'default'}`,
+      );
 
-      // 1.5. SINCRONIZAR accountId do header com activeAccountId do usuário
-      if (accountId && accountId !== user.activeAccountId) {
-        this.logger.log(
-          `🔄 [WebChat] Sincronizando accountId do header: ${accountId} (anterior: ${user.activeAccountId})`,
-        );
+      // accountId é passado diretamente para as transações sem alterar o banco
 
-        const updatedUser = await this.userCacheService.switchAccount(phoneNumber, accountId);
+      // 2. Barrar comandos de gerenciamento de perfil no webchat
+      // O usuário deve fazer isso via interface gráfica
+      const lowerMessage = messageText.toLowerCase().trim();
+      const profileCommands = [
+        'listar perfis',
+        'meus perfis',
+        'minhas contas',
+        'ver perfis',
+        'mudar perfil',
+        'trocar perfil',
+        'mudar conta',
+        'trocar conta',
+        'usar perfil',
+        'selecionar perfil',
+      ];
 
-        if (!updatedUser) {
-          this.logger.error(
-            `❌ [WebChat] Erro ao trocar conta para ${accountId}. Conta pode não existir para o usuário.`,
-          );
-          return {
-            success: false,
-            messageType: 'error',
-            message: this.removeEmojis('❌ Erro ao selecionar conta. Verifique se a conta existe.'),
-            formatting: {
-              color: 'error',
-            },
-          };
-        }
+      const isProfileCommand = profileCommands.some((cmd) => lowerMessage.includes(cmd));
 
-        // Atualizar referência do usuário
-        user = updatedUser;
-        this.logger.log(`✅ [WebChat] Conta ativa sincronizada: ${accountId}`);
+      if (isProfileCommand) {
+        this.logger.log(`🚫 [WebChat] Comando de perfil bloqueado: ${messageText}`);
+        return {
+          success: false,
+          messageType: 'info',
+          message: this.removeEmojis(
+            '💡 Para gerenciar seus perfis, utilize o menu de seleção de perfis na interface.\n\n' +
+              'Você pode alternar entre seus perfis diretamente na tela, sem precisar enviar comandos.',
+          ),
+          formatting: {
+            emoji: '💡',
+            color: 'info',
+          },
+        };
       }
 
-      // 2. Verificar se há contexto de aprendizado pendente
+      // 3. Verificar se há contexto de aprendizado pendente
       const learningStatus = await this.messageLearningService.hasPendingLearning(phoneNumber);
       const hasLearningContext = learningStatus.hasPending;
 
@@ -196,7 +207,7 @@ export class WebChatService {
         }
       }
 
-      // 3. Processar como mensagem de transação normal
+      // 4. Processar como mensagem de transação normal
       this.logger.log(`💰 [WebChat] Processando como transação normal`);
 
       const result = await this.transactionsService.processTextMessage(
@@ -204,6 +215,8 @@ export class WebChatService {
         messageText,
         `webchat-${Date.now()}`,
         'webchat', // WebChat é uma plataforma própria
+        undefined, // platformId
+        accountId, // accountId contextual do header
       );
 
       return this.formatTransactionResponse(result);
@@ -381,31 +394,11 @@ export class WebChatService {
       }
 
       const phoneNumber = `webchat-${userId}`;
+      this.logger.log(
+        `✅ [WebChat] Usuário imagem: ${user.name} | AccountId: ${_accountId || 'default'}`,
+      );
 
-      // 1.5. SINCRONIZAR accountId do header com activeAccountId do usuário
-      if (_accountId && _accountId !== user.activeAccountId) {
-        this.logger.log(
-          `🔄 [WebChat] Sincronizando accountId do header na imagem: ${_accountId} (anterior: ${user.activeAccountId})`,
-        );
-
-        const updatedUser = await this.userCacheService.switchAccount(phoneNumber, _accountId);
-
-        if (!updatedUser) {
-          this.logger.error(
-            `❌ [WebChat] Erro ao trocar conta para ${_accountId}. Conta pode não existir para o usuário.`,
-          );
-          return {
-            success: false,
-            messageType: 'error',
-            message: this.removeEmojis('Erro ao selecionar conta. Verifique se a conta existe.'),
-            formatting: { color: 'error' },
-          };
-        }
-
-        // Atualizar referência do usuário
-        user = updatedUser;
-        this.logger.log(`✅ [WebChat] Conta ativa sincronizada na imagem: ${_accountId}`);
-      }
+      // accountId é passado diretamente para as transações sem alterar o banco
 
       // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
       const imageBuffer = file.buffer;
@@ -424,6 +417,7 @@ export class WebChatService {
         messageId,
         'webchat', // WebChat é uma plataforma própria
         phoneNumber, // platformId para replies
+        _accountId, // accountId contextual do header
       );
 
       // 3. Formatar resposta para frontend (remover emojis)
@@ -496,31 +490,11 @@ export class WebChatService {
       }
 
       const phoneNumber = `webchat-${userId}`;
+      this.logger.log(
+        `✅ [WebChat] Usuário áudio: ${user.name} | AccountId: ${_accountId || 'default'}`,
+      );
 
-      // 1.5. SINCRONIZAR accountId do header com activeAccountId do usuário
-      if (_accountId && _accountId !== user.activeAccountId) {
-        this.logger.log(
-          `🔄 [WebChat] Sincronizando accountId do header no áudio: ${_accountId} (anterior: ${user.activeAccountId})`,
-        );
-
-        const updatedUser = await this.userCacheService.switchAccount(phoneNumber, _accountId);
-
-        if (!updatedUser) {
-          this.logger.error(
-            `❌ [WebChat] Erro ao trocar conta para ${_accountId}. Conta pode não existir para o usuário.`,
-          );
-          return {
-            success: false,
-            messageType: 'error',
-            message: this.removeEmojis('Erro ao processar áudio. Verifique se a conta existe.'),
-            formatting: { color: 'error' },
-          };
-        }
-
-        // Atualizar referência do usuário
-        user = updatedUser;
-        this.logger.log(`✅ [WebChat] Conta ativa sincronizada no áudio: ${_accountId}`);
-      }
+      // accountId é passado diretamente para as transações sem alterar o banco
 
       // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
       const audioBuffer = file.buffer;
@@ -534,6 +508,7 @@ export class WebChatService {
         messageId,
         'webchat', // WebChat é uma plataforma própria
         phoneNumber, // platformId para replies
+        _accountId, // accountId contextual do header
       );
 
       // 3. Formatar resposta para frontend (remover emojis)

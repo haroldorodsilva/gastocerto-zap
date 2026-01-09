@@ -173,6 +173,7 @@ export class MessageLearningService {
         messageId,
         user,
         platform,
+        undefined, // accountId: não especificado, usa validação padrão
         true, // skipLearning: não verificar learning novamente
       );
 

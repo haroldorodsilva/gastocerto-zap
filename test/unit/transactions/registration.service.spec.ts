@@ -13,6 +13,12 @@ import { TransactionType } from '../../../src/infrastructure/ai/ai.interface';
 import { PrismaService } from '../../../src/core/database/prisma.service';
 import { TemporalParserService } from '../../../src/common/services/temporal-parser.service';
 import { MessageLearningService } from '../../../src/features/transactions/message-learning.service';
+import { InstallmentParserService } from '../../../src/common/services/installment-parser.service';
+import { FixedTransactionParserService } from '../../../src/common/services/fixed-transaction-parser.service';
+import { CreditCardParserService } from '../../../src/common/services/credit-card-parser.service';
+import { CreditCardInvoiceCalculatorService } from '../../../src/common/services/credit-card-invoice-calculator.service';
+import { PaymentStatusResolverService } from '../../../src/features/transactions/services/payment-status-resolver.service';
+import { CreditCardService } from '../../../src/features/credit-cards/credit-card.service';
 
 describe('TransactionRegistrationService - RAG Integration', () => {
   let service: TransactionRegistrationService;
@@ -32,7 +38,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
     hasActiveSubscription: true,
     isBlocked: false,
     isActive: true,
-    activeAccountId: null,
+    activeAccountId: 'acc-123',
+    defaultCreditCardId: null,
     accounts: [],
     categories: [],
     preferences: {},
@@ -187,6 +194,40 @@ describe('TransactionRegistrationService - RAG Integration', () => {
       }),
     };
 
+    const mockInstallmentParserService = {
+      detectInstallments: jest.fn().mockReturnValue({
+        isInstallment: false,
+        confidence: 0,
+      }),
+    };
+
+    const mockFixedTransactionParserService = {
+      detectFixed: jest.fn().mockReturnValue({
+        isFixed: false,
+        confidence: 0,
+      }),
+    };
+
+    const mockCreditCardParserService = {
+      detectCreditCard: jest.fn().mockReturnValue({
+        isCreditCard: false,
+        confidence: 0,
+      }),
+    };
+
+    const mockCreditCardInvoiceCalculatorService = {
+      calculateTotalInvoiceAmount: jest.fn().mockResolvedValue(0),
+    };
+
+    const mockPaymentStatusResolverService = {
+      resolvePaymentStatus: jest.fn().mockReturnValue('PAID'),
+    };
+
+    const mockCreditCardService = {
+      getDefaultCard: jest.fn().mockResolvedValue(null),
+      getCardById: jest.fn().mockResolvedValue(null),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TransactionRegistrationService,
@@ -202,6 +243,12 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: TemporalParserService, useValue: mockTemporalParserService },
         { provide: MessageLearningService, useValue: mockMessageLearningService },
+        { provide: InstallmentParserService, useValue: mockInstallmentParserService },
+        { provide: FixedTransactionParserService, useValue: mockFixedTransactionParserService },
+        { provide: CreditCardParserService, useValue: mockCreditCardParserService },
+        { provide: CreditCardInvoiceCalculatorService, useValue: mockCreditCardInvoiceCalculatorService },
+        { provide: PaymentStatusResolverService, useValue: mockPaymentStatusResolverService },
+        { provide: CreditCardService, useValue: mockCreditCardService },
       ],
     }).compile();
 
