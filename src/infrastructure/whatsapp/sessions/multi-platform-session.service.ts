@@ -150,7 +150,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       // Buscar token do banco de dados (tabela telegram_sessions)
       const session = await this.prisma.telegramSession.findUnique({
         where: { sessionId },
-        select: { token: true },
+        select: { token: true, name: true },
       });
 
       if (!session?.token) {
@@ -169,6 +169,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
         platform: MessagingPlatform.TELEGRAM,
         credentials: { token: session.token },
         sessionId,
+        sessionName: session.name, // Nome da sessão para logs
       };
 
       await telegramProvider.initialize(config, {
@@ -366,9 +367,49 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     }
   }
 
-  private handleError(sessionId: string, error: Error): void {
+  private async handleError(sessionId: string, error: Error): Promise<void> {
     // Log apenas mensagem essencial do erro
     const errorMsg = error.message || String(error);
+    
+    // Detectar erro 409 (múltiplas instâncias usando mesmo token)
+    if (errorMsg.includes('409 Conflict')) {
+      this.logger.error(
+        `🚨 ERRO 409 CRÍTICO - Sessão ${sessionId}: Múltiplas instâncias detectadas. ` +
+        `Desativando sessão automaticamente para evitar loop de erros.`
+      );
+      
+      // Desativar sessão no banco
+      try {
+        if (sessionId.startsWith('telegram-')) {
+          await this.prisma.telegramSession.update({
+            where: { sessionId },
+            data: {
+              isActive: false,
+              status: SessionStatus.DISCONNECTED,
+            },
+          });
+          
+          this.logger.warn(
+            `⚠️  Sessão ${sessionId} foi DESATIVADA. Para reativar: ` +
+            `1) Atualize o token para o ambiente correto (DEV/HLG/PROD), ` +
+            `2) Ative a sessão novamente via API/Admin`
+          );
+        }
+        
+        // Remover da memória
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          await session.provider.disconnect().catch(() => {});
+          this.sessions.delete(sessionId);
+          ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+        }
+      } catch (dbError) {
+        this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
+      }
+      
+      return; // Não emitir evento session.error para evitar spam
+    }
+    
     this.logger.error(`❌ Error in session ${sessionId}: ${errorMsg}`);
     this.eventEmitter.emit('session.error', { sessionId, error });
   }

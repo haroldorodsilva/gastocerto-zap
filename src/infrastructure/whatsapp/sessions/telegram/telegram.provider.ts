@@ -22,6 +22,10 @@ export class TelegramProvider implements IMessagingProvider {
   private bot: TelegramBot | null = null;
   private callbacks: MessagingCallbacks = {};
   private connected = false;
+  private conflict409Count = 0;
+  private readonly MAX_409_ERRORS = 3; // Após 3 erros 409, desativar sessão
+  private sessionId?: string;
+  private sessionName?: string;
 
   constructor(private readonly userRateLimiter: UserRateLimiterService) {}
 
@@ -31,13 +35,15 @@ export class TelegramProvider implements IMessagingProvider {
   ): Promise<void> {
     try {
       this.callbacks = callbacks;
+      this.sessionId = config.sessionId;
+      this.sessionName = config.sessionName || 'Unknown'; // Nome do banco de dados
       const token = config.credentials?.token;
 
       if (!token) {
         throw new Error('Telegram bot token is required');
       }
 
-      this.logger.log(`🚀 Initializing Telegram bot...`);
+      this.logger.log(`🚀 Initializing Telegram bot for session "${this.sessionName}" (${this.sessionId})...`);
 
       // Criar bot com configurações de rede otimizadas
       this.bot = new TelegramBot(token, {
@@ -52,7 +58,10 @@ export class TelegramProvider implements IMessagingProvider {
 
       // Verificar bot info
       const me = await this.bot.getMe();
-      this.logger.log(`✅ Connected to Telegram as @${me.username}`);
+      const botUsername = `@${me.username}`;
+      this.logger.log(
+        `✅ Connected to Telegram as ${botUsername} for session "${this.sessionName}" (${this.sessionId})`
+      );
 
       this.connected = true;
       this.callbacks.onConnected?.();
@@ -307,7 +316,34 @@ export class TelegramProvider implements IMessagingProvider {
     this.bot.on('polling_error', (error) => {
       // Log apenas a mensagem, sem stack trace
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Telegram polling error: ${errorMessage}`);
+      const sessionInfo = `${this.sessionName || 'Unknown'} (${this.sessionId || 'Unknown'})`;
+      
+      // Detectar erro 409 (conflito de múltiplas instâncias)
+      if (errorMessage.includes('409 Conflict')) {
+        this.conflict409Count++;
+        
+        if (this.conflict409Count >= this.MAX_409_ERRORS) {
+          this.logger.error(
+            `🚫 ERRO 409 RECORRENTE (${this.conflict409Count}x) na sessão ${sessionInfo}: ` +
+            `Outra instância está usando o mesmo token. ` +
+            `A sessão será desativada para evitar conflito. ` +
+            `Solução: Use tokens diferentes por ambiente (DEV/HLG/PROD).`
+          );
+          
+          // Desconectar para parar o loop de erros
+          this.disconnect().catch(() => {});
+          return;
+        }
+        
+        this.logger.warn(
+          `⚠️  Erro 409 detectado (${this.conflict409Count}/${this.MAX_409_ERRORS}) na sessão ${sessionInfo}: ${errorMessage}`
+        );
+      } else {
+        // Resetar contador se não for erro 409
+        this.conflict409Count = 0;
+        this.logger.error(`Telegram polling error (${sessionInfo}): ${errorMessage}`);
+      }
+      
       this.callbacks.onError?.(error);
     });
   }
