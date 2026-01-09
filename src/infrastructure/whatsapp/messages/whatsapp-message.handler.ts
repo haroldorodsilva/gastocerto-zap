@@ -273,7 +273,7 @@ export class WhatsAppMessageHandler {
           if (message.imageBuffer) {
             this.logger.log(`[WhatsApp] Processing image message directly`);
             await this.transactionsService.processImageMessage(
-              phoneNumber,
+              user, // Passar objeto user completo
               message.imageBuffer,
               message.mimeType || 'image/jpeg',
               message.messageId,
@@ -290,7 +290,7 @@ export class WhatsAppMessageHandler {
           if (message.audioBuffer) {
             this.logger.log(`[WhatsApp] Processing audio message directly`);
             await this.transactionsService.processAudioMessage(
-              phoneNumber,
+              user, // Passar objeto user completo
               message.audioBuffer,
               message.mimeType || 'audio/ogg',
               message.messageId,

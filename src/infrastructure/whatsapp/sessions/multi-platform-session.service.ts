@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { PrismaService } from '@core/database/prisma.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
@@ -20,8 +26,11 @@ interface PlatformSession {
   lastActivity: Date;
 }
 
+// Singleton global para prevenir duplicação em watch mode
+const ACTIVE_SESSIONS_GLOBAL = new Map<string, boolean>();
+
 @Injectable()
-export class MultiPlatformSessionService implements OnModuleInit {
+export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MultiPlatformSessionService.name);
   private readonly sessions = new Map<string, PlatformSession>();
 
@@ -35,6 +44,23 @@ export class MultiPlatformSessionService implements OnModuleInit {
   async onModuleInit() {
     this.logger.log('🚀 MultiPlatformSessionService initialized');
     await this.autoStartActiveSessions();
+  }
+
+  async onModuleDestroy() {
+    this.logger.log('🛑 MultiPlatformSessionService destroying - cleaning up sessions');
+
+    // Desconectar todas as sessões
+    for (const [sessionId, session] of this.sessions.entries()) {
+      try {
+        this.logger.log(`🧹 Disconnecting session: ${sessionId}`);
+        await session.provider.disconnect();
+        ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+      } catch (error) {
+        this.logger.error(`Error disconnecting session ${sessionId}:`, error);
+      }
+    }
+
+    this.sessions.clear();
   }
 
   /**
@@ -92,6 +118,35 @@ export class MultiPlatformSessionService implements OnModuleInit {
     try {
       this.logger.log(`🚀 Starting Telegram session: ${sessionId}`);
 
+      // ⚠️ VERIFICAR SINGLETON GLOBAL (previne duplicação em watch mode)
+      if (ACTIVE_SESSIONS_GLOBAL.has(sessionId)) {
+        this.logger.warn(
+          `⚠️  Telegram session ${sessionId} is already running globally, skipping initialization`,
+        );
+        return;
+      }
+
+      // ⚠️ VERIFICAR SE JÁ ESTÁ RODANDO LOCALMENTE
+      const existingSession = this.sessions.get(sessionId);
+      if (existingSession?.isConnected) {
+        this.logger.warn(
+          `⚠️  Telegram session ${sessionId} is already running locally, skipping initialization`,
+        );
+        ACTIVE_SESSIONS_GLOBAL.set(sessionId, true);
+        return;
+      }
+
+      // Se existe mas não está conectada, limpar primeiro
+      if (existingSession) {
+        this.logger.log(`🧹 Cleaning up old disconnected session: ${sessionId}`);
+        try {
+          await existingSession.provider.disconnect();
+        } catch {
+          // Ignorar erros ao desconectar sessão antiga
+        }
+        this.sessions.delete(sessionId);
+      }
+
       // Buscar token do banco de dados (tabela telegram_sessions)
       const session = await this.prisma.telegramSession.findUnique({
         where: { sessionId },
@@ -103,6 +158,9 @@ export class MultiPlatformSessionService implements OnModuleInit {
           `Telegram bot token not found for session ${sessionId}. Create session with token first.`,
         );
       }
+
+      // Marcar como ativa no singleton global ANTES de inicializar
+      ACTIVE_SESSIONS_GLOBAL.set(sessionId, true);
 
       // ✅ FIX: Criar uma NOVA instância de TelegramProvider para cada sessão
       const telegramProvider = new TelegramProvider(this.userRateLimiter);
@@ -159,6 +217,9 @@ export class MultiPlatformSessionService implements OnModuleInit {
 
     await session.provider.disconnect();
     this.sessions.delete(sessionId);
+
+    // Remover do singleton global
+    ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
 
     // Atualizar status no banco (WhatsApp ou Telegram)
     if (session.platform === MessagingPlatform.TELEGRAM) {

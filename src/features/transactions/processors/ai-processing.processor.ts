@@ -2,6 +2,7 @@ import { Processor, Process } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bull';
 import { TransactionsService } from '../transactions.service';
+import { UserCacheService } from '@features/users/user-cache.service';
 
 export interface AIProcessingJob {
   phoneNumber: string;
@@ -15,7 +16,10 @@ export interface AIProcessingJob {
 export class AIProcessingProcessor {
   private readonly logger = new Logger(AIProcessingProcessor.name);
 
-  constructor(private readonly transactionsService: TransactionsService) {}
+  constructor(
+    private readonly transactionsService: TransactionsService,
+    private readonly userCache: UserCacheService,
+  ) {}
 
   @Process()
   async handleAIProcessing(job: Job<AIProcessingJob>) {
@@ -24,12 +28,18 @@ export class AIProcessingProcessor {
     this.logger.log(`🤖 Processando ${messageType} de ${phoneNumber} (Job ${job.id})`);
 
     try {
+      // Buscar usuário uma única vez
+      const user = await this.userCache.getUser(phoneNumber);
+      if (!user) {
+        throw new Error(`Usuário não encontrado: ${phoneNumber}`);
+      }
+
       let result;
 
       switch (messageType) {
         case 'text':
           result = await this.transactionsService.processTextMessage(
-            phoneNumber,
+            user,
             content as string,
             messageId,
           );
@@ -37,7 +47,7 @@ export class AIProcessingProcessor {
 
         case 'image':
           result = await this.transactionsService.processImageMessage(
-            phoneNumber,
+            user,
             content as Buffer,
             mimeType || 'image/jpeg',
             messageId,
@@ -46,7 +56,7 @@ export class AIProcessingProcessor {
 
         case 'audio':
           result = await this.transactionsService.processAudioMessage(
-            phoneNumber,
+            user,
             content as Buffer,
             mimeType || 'audio/ogg',
             messageId,

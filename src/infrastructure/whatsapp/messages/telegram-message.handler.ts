@@ -272,13 +272,12 @@ export class TelegramMessageHandler {
   ): Promise<void> {
     this.logger.log('💰 Processing transaction message from registered user');
     const userId = message.chatId;
-    const phoneNumber = user.phoneNumber; // Usar phoneNumber real do usuário
 
     switch (message.type) {
       case MessageType.TEXT:
         if (message.text) {
           await this.transactionsService.processTextMessage(
-            phoneNumber, // Usar phoneNumber ao invés de chatId
+            user, // Passar objeto user completo
             message.text,
             message.id,
             'telegram',
@@ -290,7 +289,7 @@ export class TelegramMessageHandler {
       case MessageType.IMAGE:
         if (message.mediaBuffer) {
           await this.transactionsService.processImageMessage(
-            phoneNumber, // Usar phoneNumber ao invés de chatId
+            user, // Passar objeto user completo
             message.mediaBuffer,
             message.mimeType || 'image/jpeg',
             message.id,
@@ -303,7 +302,7 @@ export class TelegramMessageHandler {
       case MessageType.AUDIO:
         if (message.mediaBuffer) {
           await this.transactionsService.processAudioMessage(
-            phoneNumber, // Usar phoneNumber ao invés de chatId
+            user, // Passar objeto user completo
             message.mediaBuffer,
             message.mimeType || 'audio/ogg',
             message.id,

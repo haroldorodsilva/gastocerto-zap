@@ -118,8 +118,22 @@ export class WebChatService {
         }
       }
 
-      // Usar phoneNumber se existir, senão usar identificador único do webchat
-      const phoneNumber = user.phoneNumber || `webchat-${userId}`;
+      // GARANTIR que o phoneNumber seja webchat-{userId} para usuários webchat
+      const expectedPhoneNumber = `webchat-${userId}`;
+
+      // Se o phoneNumber do usuário não está no formato correto, atualizar
+      if (user.phoneNumber !== expectedPhoneNumber) {
+        this.logger.log(
+          `🔄 [WebChat] Atualizando phoneNumber: ${user.phoneNumber} → ${expectedPhoneNumber}`,
+        );
+
+        // Atualizar phoneNumber no banco para garantir consistência
+        user = await this.userCacheService.updateUserCache(user.gastoCertoId, {
+          phoneNumber: expectedPhoneNumber,
+        });
+      }
+
+      const phoneNumber = expectedPhoneNumber;
       this.logger.log(`✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber})`);
 
       // 1.5. SINCRONIZAR accountId do header com activeAccountId do usuário
@@ -186,7 +200,7 @@ export class WebChatService {
       this.logger.log(`💰 [WebChat] Processando como transação normal`);
 
       const result = await this.transactionsService.processTextMessage(
-        phoneNumber,
+        user, // Passa objeto user completo ao invés de phoneNumber
         messageText,
         `webchat-${Date.now()}`,
         'webchat', // WebChat é uma plataforma própria
@@ -404,7 +418,7 @@ export class WebChatService {
       );
 
       const result = await this.transactionsService.processImageMessage(
-        phoneNumber,
+        user, // Passar objeto user completo
         imageBuffer,
         mimeType,
         messageId,
@@ -514,7 +528,7 @@ export class WebChatService {
       const messageId = `webchat-${Date.now()}`;
 
       const result = await this.transactionsService.processAudioMessage(
-        phoneNumber,
+        user, // Passar objeto user completo
         audioBuffer,
         mimeType,
         messageId,

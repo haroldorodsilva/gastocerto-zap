@@ -280,6 +280,13 @@ export class TransactionRegistrationService {
       let responseTime = 0;
       const usedAI = false;
 
+      this.logger.log(
+        `🚀 INICIANDO PROCESSAMENTO | Platform: ${platform} | Phone: ${phoneNumber} | Message: "${text.substring(0, 50)}..."`,
+      );
+      this.logger.log(
+        `⚙️  Configuração RAG: ragEnabled=${ragEnabled}, ragAiEnabled=${aiSettings.ragAiEnabled}, threshold=${aiSettings.ragThreshold}`,
+      );
+
       if (ragEnabled) {
         try {
           const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido de 0.65 para 0.60
@@ -347,9 +354,17 @@ export class TransactionRegistrationService {
       // 3. FASE 2: Se RAG não funcionou, usar IA
       if (!extractedData) {
         this.logger.log(`🤖 FASE 2: Chamando IA para extrair transação...`);
+        this.logger.debug(
+          `📝 UserContext enviado para IA: ` +
+            `name=${userContext.name}, ` +
+            `categories=${userContext.categories.length}`,
+        );
         const startTime = Date.now();
         extractedData = await this.aiFactory.extractTransaction(text, userContext);
         responseTime = Date.now() - startTime;
+        this.logger.log(
+          `✅ IA retornou: ${extractedData.type} | ${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ''} | Confidence: ${(extractedData.confidence * 100).toFixed(1)}%`,
+        );
 
         // 3.5. FASE 3: Revalidar categoria da IA com RAG
         if (ragEnabled && extractedData.category) {
@@ -441,7 +456,7 @@ export class TransactionRegistrationService {
         extractedData.installmentNumber = 1;
         this.logger.log(
           `💳 Parcelamento detectado: ${installmentDetection.installments}x` +
-          ` (padrão: "${installmentDetection.matchedPattern}")`
+            ` (padrão: "${installmentDetection.matchedPattern}")`,
         );
       }
 
@@ -450,7 +465,7 @@ export class TransactionRegistrationService {
         extractedData.fixedFrequency = fixedDetection.frequency;
         this.logger.log(
           `🔁 Transação fixa detectada: ${fixedDetection.frequency}` +
-          ` (keywords: ${fixedDetection.matchedKeywords?.join(', ')})`
+            ` (keywords: ${fixedDetection.matchedKeywords?.join(', ')})`,
         );
       }
 
@@ -470,9 +485,9 @@ export class TransactionRegistrationService {
         extractedData.creditCardId = cardValidation.creditCardId;
         this.logger.log(
           `💳 Cartão de crédito validado` +
-          ` (keywords: ${creditCardDetection.matchedKeywords?.join(', ')})` +
-          ` | creditCardId: ${cardValidation.creditCardId}` +
-          ` | ${cardValidation.wasAutoSet ? 'AUTO-SET' : 'DEFAULT'}`
+            ` (keywords: ${creditCardDetection.matchedKeywords?.join(', ')})` +
+            ` | creditCardId: ${cardValidation.creditCardId}` +
+            ` | ${cardValidation.wasAutoSet ? 'AUTO-SET' : 'DEFAULT'}`,
         );
       }
 
@@ -498,7 +513,7 @@ export class TransactionRegistrationService {
 
           this.logger.log(
             `📅 Fatura calculada: ${invoiceMonthFormatted}` +
-            ` (Fechamento dia ${closingDay}, transação: ${invoiceCalc.isAfterClosing ? 'APÓS' : 'ANTES'} do fechamento)`
+              ` (Fechamento dia ${closingDay}, transação: ${invoiceCalc.isAfterClosing ? 'APÓS' : 'ANTES'} do fechamento)`,
           );
         } catch (error) {
           this.logger.error(`❌ Erro ao calcular mês da fatura:`, error);
@@ -515,8 +530,8 @@ export class TransactionRegistrationService {
 
       this.logger.log(
         `✅ Status determinado: ${statusDecision.status}` +
-        ` (${statusDecision.reason})` +
-        ` | Requer confirmação obrigatória: ${statusDecision.requiresConfirmation}`
+          ` (${statusDecision.reason})` +
+          ` | Requer confirmação obrigatória: ${statusDecision.requiresConfirmation}`,
       );
 
       // 7. Forçar confidence baixa se requer confirmação obrigatória
@@ -524,7 +539,7 @@ export class TransactionRegistrationService {
         // Garantir que NÃO será auto-registrada
         extractedData.confidence = Math.min(extractedData.confidence, 0.75);
         this.logger.log(
-          `⚠️ Confirmação obrigatória: confidence ajustada de ${((extractedData.confidence || 0) * 100).toFixed(1)}% para máx 75%`
+          `⚠️ Confirmação obrigatória: confidence ajustada de ${((extractedData.confidence || 0) * 100).toFixed(1)}% para máx 75%`,
         );
       }
 
@@ -1088,7 +1103,7 @@ export class TransactionRegistrationService {
 
       // 📦 Informações adicionais para transações especiais
       let additionalInfo = '';
-      
+
       // Transação parcelada
       if (data.installments && data.installments > 1) {
         const installmentValue = data.amount / data.installments;
@@ -1097,24 +1112,24 @@ export class TransactionRegistrationService {
           additionalInfo += ` (parcela ${data.installmentNumber}/${data.installments})`;
         }
       }
-      
+
       // Transação fixa/recorrente
       if (data.isFixed && data.fixedFrequency) {
         const frequencyMap = {
-          'MONTHLY': 'Mensal',
-          'WEEKLY': 'Semanal',
-          'ANNUAL': 'Anual',
-          'BIENNIAL': 'Bienal'
+          MONTHLY: 'Mensal',
+          WEEKLY: 'Semanal',
+          ANNUAL: 'Anual',
+          BIENNIAL: 'Bienal',
         };
         additionalInfo += `\n🔄 *Recorrência:* ${frequencyMap[data.fixedFrequency] || data.fixedFrequency}`;
       }
-      
+
       // Transação no cartão de crédito
       if (data.creditCardId && data.invoiceMonth) {
         additionalInfo += `\n💳 *Cartão de Crédito*`;
         additionalInfo += `\n📅 *Fatura:* ${data.invoiceMonth}`;
       }
-      
+
       // Status do pagamento
       if (data.paymentStatus === 'PENDING') {
         additionalInfo += `\n⏳ *Status:* Pendente`;
@@ -1155,7 +1170,7 @@ export class TransactionRegistrationService {
 
   /**
    * � FASE 8: Cria próximas ocorrências para transações fixas/recorrentes
-   * 
+   *
    * Quando o usuário confirma uma transação fixa (ex: assinatura mensal), este método:
    * 1. Determina a frequência (MONTHLY, WEEKLY, ANNUAL, BIENNIAL)
    * 2. Calcula as próximas N datas baseado na frequência
@@ -1324,7 +1339,7 @@ export class TransactionRegistrationService {
 
   /**
    * �📦 FASE 7: Cria parcelas adicionais para transações parceladas
-   * 
+   *
    * Quando o usuário confirma uma transação parcelada (ex: 4x), este método:
    * 1. Calcula as datas das próximas parcelas (incrementa mês a mês)
    * 2. Cria N-1 transações adicionais na API (primeira já foi criada)
@@ -1673,12 +1688,11 @@ export class TransactionRegistrationService {
       }
 
       // 4. Preparar DTO para API
-      const description = confirmation.description ||
-        data?.description ||
-        confirmation.extractedData?.description;
-      
+      const description =
+        confirmation.description || data?.description || confirmation.extractedData?.description;
+
       const merchant = confirmation.extractedData?.merchant || data?.merchant;
-      
+
       const dto: CreateGastoCertoTransactionDto = {
         userId: user.gastoCertoId,
         accountId, // Adicionar conta default
@@ -1711,7 +1725,7 @@ export class TransactionRegistrationService {
           `❌ [API ERROR] Erro ao enviar transação para GastoCerto API:`,
           JSON.stringify(response, null, 2),
         );
-        
+
         const errorMsg =
           typeof response.error === 'string'
             ? response.error
@@ -2237,11 +2251,15 @@ export class TransactionRegistrationService {
     wasAutoSet?: boolean;
   }> {
     try {
-      this.logger.log(`💳 [VALIDATE CARD] Validando uso de cartão para usuário ${user.gastoCertoId}`);
+      this.logger.log(
+        `💳 [VALIDATE CARD] Validando uso de cartão para usuário ${user.gastoCertoId}`,
+      );
 
       // 1. Verificar se já tem cartão default
       if (user.defaultCreditCardId) {
-        this.logger.log(`💳 [VALIDATE CARD] Cartão default encontrado: ${user.defaultCreditCardId}`);
+        this.logger.log(
+          `💳 [VALIDATE CARD] Cartão default encontrado: ${user.defaultCreditCardId}`,
+        );
         return {
           success: true,
           message: '',
@@ -2280,7 +2298,9 @@ export class TransactionRegistrationService {
       if (cards.length === 1) {
         // 4. Tem apenas 1 cartão → definir como default automaticamente
         const card = cards[0];
-        this.logger.log(`💳 [VALIDATE CARD] Apenas 1 cartão encontrado - definindo como default: ${card.id}`);
+        this.logger.log(
+          `💳 [VALIDATE CARD] Apenas 1 cartão encontrado - definindo como default: ${card.id}`,
+        );
 
         // Definir como default no cache
         await this.userCache.setDefaultCreditCard(user.phoneNumber, card.id);

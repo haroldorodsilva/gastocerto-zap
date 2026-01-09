@@ -84,17 +84,24 @@ export class TransactionsService {
   /**
    * Processa mensagem de texto e extrai transação
    * DELEGA para TransactionRegistrationService
+   * @param user - Objeto UserCache completo (já buscado pelo provedor)
+   * @param text - Texto da mensagem
+   * @param messageId - ID único da mensagem
+   * @param platform - Plataforma de origem (whatsapp|telegram|webchat)
+   * @param platformId - ID específico da plataforma (chatId, número, etc)
    */
   async processTextMessage(
-    phoneNumber: string,
+    user: UserCache,
     text: string,
     messageId: string,
     platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
+      const phoneNumber = user.phoneNumber; // Para compatibilidade com código existente
+      
       this.logger.log(
-        `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform}`,
+        `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform} | UserId: ${user.id}`,
       );
 
       // 0. Validação de segurança (prompt injection, mensagens maliciosas)
@@ -114,16 +121,6 @@ export class TransactionsService {
           message:
             '🛡️ Sua mensagem contém conteúdo não permitido.\n\n' +
             'Por favor, reformule e envie novamente.',
-          requiresConfirmation: false,
-        };
-      }
-
-      // 1. Buscar usuário
-      const user = await this.userCache.getUser(phoneNumber);
-      if (!user) {
-        return {
-          success: false,
-          message: '❌ Usuário não encontrado. Complete o cadastro primeiro.',
           requiresConfirmation: false,
         };
       }
@@ -603,7 +600,7 @@ export class TransactionsService {
    * DELEGA para TransactionRegistrationService
    */
   async processImageMessage(
-    phoneNumber: string,
+    user: UserCache,
     imageBuffer: Buffer,
     mimeType: string,
     messageId: string,
@@ -611,16 +608,9 @@ export class TransactionsService {
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
-      this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber}`);
+      const phoneNumber = user.phoneNumber; // Para compatibilidade
+      this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber} | UserId: ${user.id}`);
 
-      const user = await this.userCache.getUser(phoneNumber);
-      if (!user) {
-        return {
-          success: false,
-          message: '❌ Usuário não encontrado.',
-          requiresConfirmation: false,
-        };
-      }
 
       // Verificar se há confirmação pendente (bloqueio de contexto)
       const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
@@ -693,7 +683,7 @@ export class TransactionsService {
    * DELEGA para TransactionRegistrationService
    */
   async processAudioMessage(
-    phoneNumber: string,
+    user: UserCache,
     audioBuffer: Buffer,
     mimeType: string,
     messageId: string,
@@ -701,16 +691,9 @@ export class TransactionsService {
     platformId?: string,
   ): Promise<ProcessMessageResult> {
     try {
-      this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber}`);
+      const phoneNumber = user.phoneNumber; // Para compatibilidade
+      this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber} | UserId: ${user.id}`);
 
-      const user = await this.userCache.getUser(phoneNumber);
-      if (!user) {
-        return {
-          success: false,
-          message: '❌ Usuário não encontrado.',
-          requiresConfirmation: false,
-        };
-      }
 
       // Verificar se há confirmação pendente (bloqueio de contexto)
       const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
