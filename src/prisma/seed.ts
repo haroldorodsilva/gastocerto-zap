@@ -123,24 +123,39 @@ async function main() {
   if (!existingSettings) {
     await prisma.aISettings.create({
       data: {
-        // Providers por operação
-        textProvider: 'openai',
-        imageProvider: 'google_gemini',
-        audioProvider: 'groq',
-        categoryProvider: 'groq',
-        // Fallback
+        // 🎯 Providers por operação
+        textProvider: 'openai',        // OpenAI para texto
+        imageProvider: 'google_gemini', // Gemini para imagem
+        audioProvider: 'groq',         // Groq para áudio
+        categoryProvider: 'openai',    // OpenAI para categorias
+        
+        // 🔄 Fallback
         primaryProvider: 'openai',
         fallbackEnabled: true,
         fallbackTextChain: ['openai', 'groq', 'deepseek', 'google_gemini'],
         fallbackImageChain: ['google_gemini', 'openai'],
         fallbackAudioChain: ['groq', 'openai'],
-        fallbackCategoryChain: ['groq', 'deepseek', 'google_gemini', 'openai'],
+        fallbackCategoryChain: ['openai', 'groq', 'deepseek', 'google_gemini'],
+        
+        // 💾 Cache
         cacheEnabled: false,
         cacheTTL: 3600,
+        
+        // 🚦 Rate Limit
         rateLimitEnabled: true,
+        
+        // 🧠 RAG (Retrieval-Augmented Generation) - ATIVADO
+        ragEnabled: true,               // ✅ RAG habilitado
+        ragThreshold: 0.6,              // 60% de confiança mínima
+        ragAiEnabled: false,            // Usar BM25 (não embeddings de IA)
+        ragAiProvider: 'openai',        // Provider para embeddings (se habilitado)
+        
+        // 🎯 Thresholds de confiança
+        autoRegisterThreshold: 0.9,     // 90% para auto-registrar
+        minConfidenceThreshold: 0.5,    // 50% mínimo
       },
     });
-    console.log('✅ Configurações globais de IA criadas');
+    console.log('✅ Configurações globais de IA criadas (RAG ativado)');
   } else {
     console.log('ℹ️  Configurações globais de IA já existem, pulando...');
   }

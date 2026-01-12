@@ -410,7 +410,7 @@ export class OnboardingService {
 
       // Normalizar telefone: remover tudo exceto dígitos
       phoneToValidate = phoneToValidate.replace(/\D/g, '');
-      
+
       // Garantir que tem pelo menos 10 dígitos (DDD + número)
       if (phoneToValidate.length < 10) {
         this.logger.error(`❌ ERRO: Telefone inválido após normalização: ${phoneToValidate}`);
@@ -463,10 +463,10 @@ export class OnboardingService {
         this.logger.error(`❌ result.message: ${result.message || 'Nenhuma mensagem'}`);
         this.logger.error(`❌ Código tentado: ${data.verificationCode}`);
         this.logger.error(`❌ Email: ${data.email}, Telefone: ${phoneToValidate}`);
-        
+
         // Mensagem de erro mais detalhada
         const errorMessage = result.message || 'Código incorreto';
-        
+
         return {
           success: false,
           message:

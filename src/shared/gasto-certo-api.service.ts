@@ -374,7 +374,7 @@ export class GastoCertoApiService {
    */
   async requestAuthCode(data: RequestAuthCodeDto): Promise<AuthCodeResponseDto> {
     try {
-      this.logger.log(`Solicitando código de verificação para: ${data.email}`);
+      this.logger.log(`Solicitando código de verificação para: ${JSON.stringify(data)}`);
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders(data);
 
@@ -413,7 +413,7 @@ export class GastoCertoApiService {
    */
   async validateAuthCode(data: ValidateAuthCodeDto): Promise<ValidateAuthCodeResponseDto> {
     try {
-      this.logger.log(`validateAuthCode:: Validando código para: ${data.email}`);
+      this.logger.log(`validateAuthCode:: Validando código para: ${JSON.stringify(data)}`);
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders(data);
 
@@ -675,12 +675,10 @@ export class GastoCertoApiService {
       };
     } catch (error: any) {
       this.logger.error(`❌ Erro ao criar transação: ${error.message}`);
-      
+
       // Log detalhado da resposta da API para debug
       if (error.response) {
-        this.logger.error(
-          `📋 [API RESPONSE] Status: ${error.response.status}`,
-        );
+        this.logger.error(`📋 [API RESPONSE] Status: ${error.response.status}`);
         this.logger.error(
           `📋 [API RESPONSE] Data: ${JSON.stringify(error.response.data, null, 2)}`,
         );

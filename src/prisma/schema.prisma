@@ -242,8 +242,8 @@ model RAGSearchLog {
   queryNormalized String // Query normalizada (lowercase, sem acentos)
   matches         Json // Array de matches encontrados com scores
   bestMatch       String? // Nome da melhor categoria encontrada
-  bestScore       Decimal? @db.Decimal(6, 4) // Score do melhor match (0.0000 - 99.9999)
-  threshold       Decimal  @db.Decimal(5, 4) // Threshold usado na busca
+  bestScore       Decimal? @db.Decimal(5, 4) // Score do melhor match normalizado (0.0000 - 1.0000 = 0-100%)
+  threshold       Decimal  @db.Decimal(5, 4) // Threshold usado na busca (sempre 0-1)
   success         Boolean // true se encontrou match >= threshold
   ragMode         String   @default("BM25") // "BM25" ou "AI" (embeddings)
   responseTime    Int? // Tempo de resposta em ms
@@ -253,13 +253,13 @@ model RAGSearchLog {
   totalSteps        Int      @default(1) // Total de steps executados (1, 2 ou 3)
   aiProvider        String? // Provider de IA usado se ragMode="AI" ou flowStep=2 (ex: "openai", "groq")
   aiModel           String? // Modelo usado (ex: "text-embedding-ada-002", "gpt-4o")
-  aiConfidence      Decimal? @db.Decimal(5, 4) // Confiança da IA (se usou IA no step 2)
+  aiConfidence      Decimal? @db.Decimal(5, 4) // Confiança da IA (se usou IA no step 2) - sempre 0-1
   aiCategoryId      String? // ID da categoria que a IA retornou (step 2)
   aiCategoryName    String? // Nome da categoria que a IA retornou (step 2)
   finalCategoryId   String? // ID da categoria final escolhida (após todos os steps)
   finalCategoryName String? // Nome da categoria final escolhida
-  ragInitialScore   Decimal? @db.Decimal(5, 4) // Score do RAG no step 1 (mesmo que não passou threshold)
-  ragFinalScore     Decimal? @db.Decimal(5, 4) // Score do RAG no step 3 (validação final, se houver)
+  ragInitialScore   Decimal? @db.Decimal(5, 4) // Score do RAG no step 1 normalizado (0-1)
+  ragFinalScore     Decimal? @db.Decimal(5, 4) // Score do RAG no step 3 normalizado (0-1)
   wasAiFallback     Boolean  @default(false) // true se precisou usar IA (step 2) porque RAG falhou
 
   // Relacionamento com AIUsageLog

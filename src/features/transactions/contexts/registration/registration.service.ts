@@ -225,6 +225,10 @@ export class TransactionRegistrationService {
         categories: categoriesWithSubs, // Estrutura completa com subs
       };
 
+      this.logger.log(
+        `👤 [DEBUG] User info: name=${user.name}, gastoCertoId=${user.gastoCertoId}, phoneNumber=${user.phoneNumber}`,
+      );
+
       // 1.5. Indexar categorias no RAG (se disponível E habilitado)
       const aiSettings = await this.aiConfigService.getSettings();
       const ragEnabled = aiSettings.ragEnabled && this.ragService;
@@ -295,6 +299,9 @@ export class TransactionRegistrationService {
       this.logger.log(
         `⚙️  Configuração RAG: ragEnabled=${ragEnabled}, ragAiEnabled=${aiSettings.ragAiEnabled}, threshold=${aiSettings.ragThreshold}`,
       );
+      this.logger.log(
+        `🔍 [DEBUG] aiSettings.ragEnabled=${aiSettings.ragEnabled}, this.ragService=${!!this.ragService}, gastoCertoId=${user.gastoCertoId}`,
+      );
 
       if (ragEnabled) {
         try {
@@ -329,11 +336,19 @@ export class TransactionRegistrationService {
             // 🆕 Detectar tipo de transação da mensagem antes do RAG
             const detectedType = await this.detectTransactionType(text);
 
+            this.logger.log(
+              `📊 [DEBUG] Chamando ragService.findSimilarCategories com userId=${user.gastoCertoId}, text="${text}", type=${detectedType}`,
+            );
+
             ragMatches = await this.ragService.findSimilarCategories(text, user.gastoCertoId, {
               minScore: 0.4,
               maxResults: 3,
               transactionType: detectedType, // 🔥 Filtrar por tipo!
             });
+
+            this.logger.log(
+              `📊 [DEBUG] ragService.findSimilarCategories retornou ${ragMatches.length} matches`,
+            );
           }
 
           if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
@@ -1728,7 +1743,7 @@ export class TransactionRegistrationService {
           ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
           : DateUtil.formatToISO(DateUtil.today()),
         ...(merchant && { merchant }), // Só incluir se tiver valor
-        source: confirmation.platform || 'whatsapp', // Usar platform da confirmação
+        source: confirmation.platform || 'telegram', // ✅ Sources: telegram | whatsapp | webchat
       };
 
       this.logger.log(`📤 Enviando para GastoCerto API:`, JSON.stringify(dto, null, 2));

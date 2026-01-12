@@ -483,10 +483,11 @@ export class RAGService {
   async findSimilarCategories(
     text: string,
     userId: string,
-    config: Partial<RAGConfig> = {},
+    config: Partial<RAGConfig> & { skipLogging?: boolean } = {},
   ): Promise<CategoryMatch[]> {
     const startTime = Date.now();
-    const finalConfig = { ...this.defaultConfig, ...config };
+    const { skipLogging, ...configRest } = config;
+    const finalConfig = { ...this.defaultConfig, ...configRest };
 
     // Buscar categorias do cache (Redis ou Map)
     let categories: UserCategory[] = [];
@@ -687,22 +688,35 @@ export class RAGService {
     const results = matches.slice(0, finalConfig.maxResults);
     const responseTime = Date.now() - startTime;
 
+    // 🔧 Normalizar scores para máximo de 1.0 (100%)
+    // Se passou de 1.0 devido a boosts, limitar a 1.0
+    results.forEach((match) => {
+      if (match.score > 1.0) {
+        this.logger.debug(
+          `🔧 Score normalizado: ${match.categoryName} ${(match.score * 100).toFixed(1)}% → 100.0%`,
+        );
+        match.score = 1.0;
+      }
+    });
+
     this.logger.log(
       `✅ Encontradas ${results.length} categorias similares:` +
         results.map((m) => ` "${m.categoryName}" (${(m.score * 100).toFixed(1)}%)`).join(','),
     );
 
-    // Registrar tentativa para analytics (banco de dados)
-    const success = results.length > 0 && results[0].score >= finalConfig.minScore;
-    await this.recordSearchAttempt(
-      userId,
-      text,
-      results,
-      success,
-      finalConfig.minScore,
-      'BM25', // Por enquanto sempre BM25, depois terá AI
-      responseTime,
-    );
+    // Registrar tentativa para analytics (banco de dados) - APENAS SE NÃO FOR skipLogging
+    if (!skipLogging) {
+      const success = results.length > 0 && results[0].score >= finalConfig.minScore;
+      await this.recordSearchAttempt(
+        userId,
+        text,
+        results,
+        success,
+        finalConfig.minScore,
+        'BM25', // Por enquanto sempre BM25, depois terá AI
+        responseTime,
+      );
+    }
 
     return results;
   }
@@ -773,6 +787,16 @@ export class RAGService {
       matches.sort((a, b) => b.score - a.score);
       const results = matches.slice(0, finalConfig.maxResults);
       const responseTime = Date.now() - startTime;
+
+      // 🔧 Normalizar scores para máximo de 1.0 (100%)
+      results.forEach((match) => {
+        if (match.score > 1.0) {
+          this.logger.debug(
+            `🔧 Score normalizado: ${match.categoryName} ${(match.score * 100).toFixed(1)}% → 100.0%`,
+          );
+          match.score = 1.0;
+        }
+      });
 
       this.logger.log(
         `✅ [AI] Encontradas ${results.length} categorias similares em ${responseTime}ms:` +
@@ -879,7 +903,7 @@ export class RAGService {
       const bestMatch = matches.length > 0 ? matches[0] : null;
 
       this.logger.log(
-        `💾 Tentando salvar RAG log: userId=${userId}, query="${query}", matches=${matches.length}, success=${success}`,
+        `💾 Salvando RAG log: userId=${userId}, query="${query}", matches=${matches.length}, success=${success}`,
       );
 
       // Salvar no banco de dados com novos campos de tracking
@@ -1006,7 +1030,7 @@ export class RAGService {
    */
   async deleteSearchLogs(ids: string[]): Promise<{ deletedCount: number }> {
     this.logger.log(`🗑️ [RAG] Deletando ${ids.length} logs...`);
-    
+
     const result = await this.prisma.rAGSearchLog.deleteMany({
       where: {
         id: {
@@ -1401,10 +1425,11 @@ export class RAGService {
 
       this.logger.debug(`🔤 [detectUnknownTerm] Tokens extraídos: [${tokens.join(', ')}]`);
 
-      // Buscar melhor match
+      // Buscar melhor match (sem salvar log - já foi salvo no fluxo principal)
       const matches = await this.findSimilarCategories(text, userId, {
         maxResults: 3,
         minScore: 0.25,
+        skipLogging: true, // ⚠️ Evita log duplicado (já foi salvo no fluxo principal)
       });
 
       this.logger.debug(`🔍 [detectUnknownTerm] ${matches.length} matches encontrados`);
