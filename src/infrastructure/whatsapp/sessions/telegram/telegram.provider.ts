@@ -43,7 +43,9 @@ export class TelegramProvider implements IMessagingProvider {
         throw new Error('Telegram bot token is required');
       }
 
-      this.logger.log(`🚀 Initializing Telegram bot for session "${this.sessionName}" (${this.sessionId})...`);
+      this.logger.log(
+        `🚀 Initializing Telegram bot for session "${this.sessionName}" (${this.sessionId})...`,
+      );
 
       // Criar bot com configurações de rede otimizadas
       this.bot = new TelegramBot(token, {
@@ -60,7 +62,7 @@ export class TelegramProvider implements IMessagingProvider {
       const me = await this.bot.getMe();
       const botUsername = `@${me.username}`;
       this.logger.log(
-        `✅ Connected to Telegram as ${botUsername} for session "${this.sessionName}" (${this.sessionId})`
+        `✅ Connected to Telegram as ${botUsername} for session "${this.sessionName}" (${this.sessionId})`,
       );
 
       this.connected = true;
@@ -75,8 +77,23 @@ export class TelegramProvider implements IMessagingProvider {
 
   async disconnect(): Promise<void> {
     if (this.bot) {
-      this.logger.log('Disconnecting from Telegram...');
-      await this.bot.stopPolling();
+      const sessionInfo = this.sessionName
+        ? `"${this.sessionName}" (${this.sessionId})`
+        : this.sessionId || 'unknown';
+      this.logger.log(`🔌 Disconnecting Telegram bot ${sessionInfo}...`);
+
+      try {
+        // Parar polling (isso para de buscar novas mensagens)
+        await this.bot.stopPolling();
+
+        // Remover todos os listeners para evitar memory leaks
+        this.bot.removeAllListeners();
+
+        this.logger.log(`✅ Telegram bot ${sessionInfo} disconnected successfully`);
+      } catch (error) {
+        this.logger.error(`⚠️  Error stopping Telegram polling for ${sessionInfo}:`, error);
+      }
+
       this.bot = null;
       this.connected = false;
       this.callbacks.onDisconnected?.();
@@ -317,33 +334,33 @@ export class TelegramProvider implements IMessagingProvider {
       // Log apenas a mensagem, sem stack trace
       const errorMessage = error instanceof Error ? error.message : String(error);
       const sessionInfo = `${this.sessionName || 'Unknown'} (${this.sessionId || 'Unknown'})`;
-      
+
       // Detectar erro 409 (conflito de múltiplas instâncias)
       if (errorMessage.includes('409 Conflict')) {
         this.conflict409Count++;
-        
+
         if (this.conflict409Count >= this.MAX_409_ERRORS) {
           this.logger.error(
             `🚫 ERRO 409 RECORRENTE (${this.conflict409Count}x) na sessão ${sessionInfo}: ` +
-            `Outra instância está usando o mesmo token. ` +
-            `A sessão será desativada para evitar conflito. ` +
-            `Solução: Use tokens diferentes por ambiente (DEV/HLG/PROD).`
+              `Outra instância está usando o mesmo token. ` +
+              `A sessão será desativada para evitar conflito. ` +
+              `Solução: Use tokens diferentes por ambiente (DEV/HLG/PROD).`,
           );
-          
+
           // Desconectar para parar o loop de erros
           this.disconnect().catch(() => {});
           return;
         }
-        
+
         this.logger.warn(
-          `⚠️  Erro 409 detectado (${this.conflict409Count}/${this.MAX_409_ERRORS}) na sessão ${sessionInfo}: ${errorMessage}`
+          `⚠️  Erro 409 detectado (${this.conflict409Count}/${this.MAX_409_ERRORS}) na sessão ${sessionInfo}: ${errorMessage}`,
         );
       } else {
         // Resetar contador se não for erro 409
         this.conflict409Count = 0;
         this.logger.error(`Telegram polling error (${sessionInfo}): ${errorMessage}`);
       }
-      
+
       this.callbacks.onError?.(error);
     });
   }

@@ -50,17 +50,34 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     this.logger.log('🛑 MultiPlatformSessionService destroying - cleaning up sessions');
 
     // Desconectar todas as sessões
+    const disconnectPromises: Promise<void>[] = [];
+
     for (const [sessionId, session] of this.sessions.entries()) {
-      try {
-        this.logger.log(`🧹 Disconnecting session: ${sessionId}`);
-        await session.provider.disconnect();
-        ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
-      } catch (error) {
-        this.logger.error(`Error disconnecting session ${sessionId}:`, error);
-      }
+      disconnectPromises.push(
+        (async () => {
+          try {
+            this.logger.log(`🧹 Disconnecting session: ${sessionId} (${session.platform})`);
+            await session.provider.disconnect();
+            ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+            this.logger.log(`✅ Session ${sessionId} disconnected successfully`);
+          } catch (error) {
+            this.logger.error(`❌ Error disconnecting session ${sessionId}:`, error);
+          }
+        })(),
+      );
     }
 
+    // Aguardar todas as desconexões em paralelo
+    await Promise.all(disconnectPromises);
+
     this.sessions.clear();
+
+    // ℹ️ NÃO alteramos isActive no banco de dados aqui!
+    // Motivo: Quando o container subir novamente, ele precisa saber quais
+    // sessões estavam ativas para reconectá-las automaticamente.
+    // Apenas desconectamos os providers (stopPolling, etc).
+
+    this.logger.log('✅ MultiPlatformSessionService cleanup complete');
   }
 
   /**
@@ -370,14 +387,14 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   private async handleError(sessionId: string, error: Error): Promise<void> {
     // Log apenas mensagem essencial do erro
     const errorMsg = error.message || String(error);
-    
+
     // Detectar erro 409 (múltiplas instâncias usando mesmo token)
     if (errorMsg.includes('409 Conflict')) {
       this.logger.error(
         `🚨 ERRO 409 CRÍTICO - Sessão ${sessionId}: Múltiplas instâncias detectadas. ` +
-        `Desativando sessão automaticamente para evitar loop de erros.`
+          `Desativando sessão automaticamente para evitar loop de erros.`,
       );
-      
+
       // Desativar sessão no banco
       try {
         if (sessionId.startsWith('telegram-')) {
@@ -388,14 +405,14 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
               status: SessionStatus.DISCONNECTED,
             },
           });
-          
+
           this.logger.warn(
             `⚠️  Sessão ${sessionId} foi DESATIVADA. Para reativar: ` +
-            `1) Atualize o token para o ambiente correto (DEV/HLG/PROD), ` +
-            `2) Ative a sessão novamente via API/Admin`
+              `1) Atualize o token para o ambiente correto (DEV/HLG/PROD), ` +
+              `2) Ative a sessão novamente via API/Admin`,
           );
         }
-        
+
         // Remover da memória
         const session = this.sessions.get(sessionId);
         if (session) {
@@ -406,10 +423,10 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       } catch (dbError) {
         this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
       }
-      
+
       return; // Não emitir evento session.error para evitar spam
     }
-    
+
     this.logger.error(`❌ Error in session ${sessionId}: ${errorMsg}`);
     this.eventEmitter.emit('session.error', { sessionId, error });
   }

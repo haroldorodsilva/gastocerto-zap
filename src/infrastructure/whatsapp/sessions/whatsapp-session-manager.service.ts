@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
 import { SessionStatus } from '@prisma/client';
@@ -21,7 +21,7 @@ import { WhatsAppChatCacheService } from './whatsapp-chat-cache.service';
  * Baseado no simple-whatsapp-init.ts mas adaptado para múltiplas sessões
  */
 @Injectable()
-export class WhatsAppSessionManager implements OnModuleInit {
+export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppSessionManager.name);
 
   // Map de sockets ativos: sessionId -> WASocket
@@ -74,6 +74,49 @@ export class WhatsAppSessionManager implements OnModuleInit {
     this.logger.log('✅ WhatsAppSessionManager initialized');
     // Auto-restore active sessions on startup
     await this.restoreActiveSessions();
+  }
+
+  /**
+   * Destruição do módulo - desconecta todas as sessões WhatsApp
+   * 
+   * IMPORTANTE: NÃO alteramos isActive no banco!
+   * Apenas desconectamos os sockets para liberar recursos.
+   * Quando o container subir novamente, ele reconecta automaticamente
+   * as sessões que estavam ativas.
+   */
+  async onModuleDestroy() {
+    this.logger.log('🛑 WhatsAppSessionManager destroying - cleaning up sessions');
+
+    const disconnectPromises: Promise<void>[] = [];
+
+    for (const [sessionId, sock] of this.activeSockets.entries()) {
+      disconnectPromises.push(
+        (async () => {
+          try {
+            this.logger.log(`🧹 Disconnecting WhatsApp session: ${sessionId}`);
+            
+            // Marcar como parada intencional para evitar auto-reconexão
+            this.stoppingSessions.add(sessionId);
+            
+            // Fechar socket (sem fazer logout, preserva credenciais)
+            sock.end(undefined);
+            
+            this.logger.log(`✅ WhatsApp session ${sessionId} disconnected`);
+          } catch (error) {
+            this.logger.error(`❌ Error disconnecting WhatsApp session ${sessionId}:`, error);
+          }
+        })()
+      );
+    }
+
+    // Aguardar todas as desconexões
+    await Promise.all(disconnectPromises);
+
+    this.activeSockets.clear();
+    this.currentQRCodes.clear();
+    this.stoppingSessions.clear();
+
+    this.logger.log('✅ WhatsAppSessionManager cleanup complete');
   }
 
   /**

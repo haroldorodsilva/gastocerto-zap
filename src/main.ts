@@ -15,6 +15,10 @@ async function bootstrap() {
   const port = configService.get('PORT', 3000);
   const nodeEnv = configService.get('NODE_ENV', 'development');
 
+  // 🔥 HABILITAR GRACEFUL SHUTDOWN
+  // Isso faz com que onModuleDestroy() seja chamado quando o container recebe SIGTERM/SIGINT
+  app.enableShutdownHooks();
+
   // WebSocket adapter
   app.useWebSocketAdapter(new IoAdapter(app));
 
@@ -40,6 +44,25 @@ async function bootstrap() {
   logger.log(`🔗 API: http://localhost:${port}`);
   logger.log(`🌐 WebSocket: ws://localhost:${port}/ws`);
   logger.log('\n✅ WhatsApp será inicializado automaticamente pelo WhatsAppIntegrationService\n');
+
+  // 🛑 Configurar listeners para graceful shutdown
+  const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
+  
+  signals.forEach((signal) => {
+    process.on(signal, async () => {
+      logger.warn(`\n⚠️  Received ${signal}, starting graceful shutdown...`);
+      
+      try {
+        logger.log('🧹 Closing application and disconnecting all services...');
+        await app.close();
+        logger.log('✅ Application closed successfully');
+        process.exit(0);
+      } catch (error) {
+        logger.error('❌ Error during shutdown:', error);
+        process.exit(1);
+      }
+    });
+  });
 }
 
 bootstrap();
