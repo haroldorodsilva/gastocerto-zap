@@ -1,5 +1,5 @@
 import { Injectable, Logger, Optional, forwardRef, Inject } from '@nestjs/common';
-import { RAGLearningService } from '@infrastructure/ai/rag/rag-learning.service';
+import { RAGLearningService } from '@infrastructure/rag/services/rag-learning.service';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { UserCache } from '@prisma/client';

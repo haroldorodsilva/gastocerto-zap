@@ -1,6 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { UserCacheService } from '@features/users/user-cache.service';
-import { RAGService } from '@infrastructure/ai/rag/rag.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 
 export interface AccountOperationResult {
   success: boolean;

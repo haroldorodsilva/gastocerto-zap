@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { RAGService } from '@infrastructure/ai/rag/rag.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';

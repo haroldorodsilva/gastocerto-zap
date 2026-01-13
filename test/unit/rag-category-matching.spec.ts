@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { RAGService } from '@infrastructure/ai/rag/rag.service';
-import { CategoryResolutionService } from '@infrastructure/ai/category-resolution.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
+import { CategoryResolutionService } from '@infrastructure/rag/services/category-resolution.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { ConfigService } from '@nestjs/config';

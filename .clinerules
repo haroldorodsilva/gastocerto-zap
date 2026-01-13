@@ -1,0 +1,464 @@
+# GastoCerto ZAP - Claude Skills
+
+## Contexto do Projeto
+
+Este é um projeto **NestJS** de chatbot WhatsApp/Telegram para controle financeiro pessoal integrado com a API GastoCerto.
+
+### Tecnologias Principais
+- **Framework**: NestJS 10+ (TypeScript)
+- **Banco de Dados**: PostgreSQL com Prisma ORM
+- **Cache**: Redis (via ioredis)
+- **Mensageria**: Baileys (WhatsApp), node-telegram-bot-api (Telegram)
+- **IA**: OpenAI GPT-4o-mini, Groq (Llama 3.1), Google Gemini
+- **RAG**: BM25 para busca semântica de categorias
+
+---
+
+## Estrutura do Projeto
+
+```
+src/
+├── common/                 # Guards, decorators, services globais
+├── core/                   # Database (Prisma), config base
+├── features/               # Módulos de negócio
+│   ├── admin/             # Admin API endpoints
+│   ├── admin-controllers/ # Controladores específicos (RAG, etc)
+│   ├── intent/            # NLP intent analyzer
+│   ├── messages/          # Validação de mensagens
+│   ├── onboarding/        # Cadastro de novos usuários
+│   ├── transactions/      # Registro de transações
+│   ├── users/             # User cache service
+│   └── webchat/           # Web chat interface
+├── infrastructure/        # Camada de infraestrutura
+│   ├── ai/                # IA services (OpenAI, Groq, Gemini)
+│   │   └── rag/           # Sistema RAG (busca semântica)
+│   ├── chat/              # WhatsApp chat cache
+│   ├── core/              # Session manager genérico
+│   ├── database/          # Auth state managers
+│   ├── messaging/         # Multi-platform messaging
+│   ├── sessions/          # Session CRUD
+│   ├── telegram/          # Telegram-specific code
+│   └── whatsapp/          # WhatsApp-specific code
+└── prisma/
+    └── schema.prisma      # Database schema
+```
+
+---
+
+## Convenções de Código
+
+### TypeScript Paths
+```typescript
+@common/*          → src/common/*
+@core/*            → src/core/*
+@features/*        → src/features/*
+@infrastructure/*  → src/infrastructure/*
+```
+
+### Logging
+```typescript
+private readonly logger = new Logger(ClassName.name);
+this.logger.log('✅ Success message');
+this.logger.warn('⚠️ Warning message');
+this.logger.error('❌ Error message', error);
+```
+
+### Emojis Padrão
+- ✅ Sucesso
+- ❌ Erro
+- ⚠️ Warning
+- 📊 Stats/Dados
+- 🔍 Busca/Search
+- 🎯 Intent/Matching
+- 🔄 Processamento/Loop
+- 💾 Cache/Storage
+- 🚀 Início/Start
+- 🔧 Debug/Fix
+- 📝 Log/Info
+
+### Async/Await
+- **SEMPRE** usar async/await (nunca .then/.catch)
+- **SEMPRE** fazer try/catch em controllers
+- **SEMPRE** logar erros com contexto
+
+### Prisma
+```typescript
+// ✅ Correto
+const user = await this.prisma.userCache.findUnique({...});
+
+// ❌ Evitar
+const user = await prisma.userCache.findUnique({...});
+```
+
+---
+
+## Sistema RAG (Retrieval-Augmented Generation)
+
+### Fluxo Principal
+1. **RAG BM25**: Busca semântica em categorias indexadas
+2. **Threshold**: Score >= 0.4 (40%) para match válido
+3. **AI Fallback**: Se RAG falha, usa IA (OpenAI/Groq)
+4. **RAG Validation**: Valida resposta da IA no índice
+
+### Endpoints RAG Admin
+```bash
+# Testar matching sem criar logs
+POST /admin/rag/test-match
+Body: { userId, query }
+
+# Estatísticas completas
+GET /admin/rag/stats?year=2026&month=1
+
+# Lista de logs (resumida)
+GET /admin/rag/search-logs?limit=20
+
+# Detalhes completos de um log
+GET /admin/rag/search-logs/:id/details
+
+# Adicionar sinônimo global
+POST /admin/rag/global-synonyms
+Body: { term, targetCategory, targetSubCategory }
+```
+
+### Cache Redis
+```
+rag:categories:{gastoCertoId}    → Categorias indexadas (JSON)
+rag:embeddings:{gastoCertoId}    → Embeddings de categorias
+rag:learning:{phoneNumber}       → Contexto de aprendizado (TTL: 5min)
+user:{phoneNumber}               → Cache de usuário
+```
+
+---
+
+## Comandos Úteis
+
+### Build & Compilação
+```bash
+npm run build              # Webpack build
+npx tsc --noEmit          # Validar TypeScript
+npm run start:dev         # Dev mode
+```
+
+### Testes
+```bash
+npm test                  # Todos os testes
+npm test -- rag.service  # Teste específico
+npm run test:cov         # Com coverage
+```
+
+### Prisma
+```bash
+npx prisma generate      # Gerar cliente
+npx prisma migrate dev   # Criar migration
+npx prisma studio        # GUI do banco
+```
+
+### Docker
+```bash
+docker-compose up -d     # Subir Redis + Postgres
+docker-compose logs -f   # Ver logs
+```
+
+---
+
+## Modelos de Dados Críticos
+
+### UserCache
+```prisma
+model UserCache {
+  id                    String
+  phoneNumber           String  @unique  # SEM código do país
+  gastoCertoId          String  @unique
+  whatsappId            String?
+  telegramId            String?
+  activeAccountId       String?  # Conta ativa
+  hasActiveSubscription Boolean
+  isBlocked             Boolean
+  isActive              Boolean
+  categories            Json     # Categorias do usuário
+}
+```
+
+### RAGSearchLog
+```prisma
+model RAGSearchLog {
+  id                String
+  userId            String  # gastoCertoId
+  query             String
+  success           Boolean
+  bestMatch         String?
+  bestScore         Decimal
+  threshold         Decimal
+  ragMode           String   # "BM25" ou "AI"
+  wasAiFallback     Boolean
+  flowStep          Int      # 1, 2 ou 3
+  totalSteps        Int
+  responseTime      Int?     # ms
+}
+```
+
+### TransactionConfirmation
+```prisma
+model TransactionConfirmation {
+  id               String
+  phoneNumber      String
+  platform         String  # whatsapp | telegram
+  type             TransactionType  # INCOME | EXPENSE
+  amount           Decimal
+  categoryId       String?
+  status           ConfirmationStatus  # PENDING | CONFIRMED | EXPIRED
+  ragSearchLogId   String?  # Link com RAG log
+}
+```
+
+---
+
+## Padrões de Resposta
+
+### API Admin
+```typescript
+return {
+  success: true,
+  data: {...},
+  pagination?: {...},
+  stats?: {...},
+  timestamp: new Date().toISOString(),
+};
+```
+
+### Errors
+```typescript
+return {
+  success: false,
+  message: 'Mensagem de erro',
+  error: error.message,
+  timestamp: new Date().toISOString(),
+};
+```
+
+---
+
+## Multi-Platform (WhatsApp + Telegram)
+
+### Event-Driven Architecture
+```typescript
+// Emissor
+this.eventEmitter.emit('whatsapp.message', { sessionId, message, platform });
+
+// Listener
+@OnEvent('whatsapp.message')
+async handleMessage(event: MessageReceivedEvent) {...}
+```
+
+### Identificadores
+- **WhatsApp**: `phoneNumber` (5566996285154)
+- **Telegram**: `chatId` (707624962)
+- **Unificado**: Sempre usar `phoneNumber` do UserCache
+
+---
+
+## Graceful Shutdown
+
+### CRÍTICO para evitar sessões bloqueadas
+```typescript
+// main.ts
+app.enableShutdownHooks();
+
+process.on('SIGTERM', async () => {
+  await app.close();
+});
+
+// Services
+async onModuleDestroy() {
+  await this.disconnect();
+}
+```
+
+---
+
+## Debug & Troubleshooting
+
+### RAG não encontra categoria
+1. Verificar se categoria está indexada:
+   ```bash
+   GET /admin/rag/test-match
+   # Ver debug.totalCategoriesIndexed
+   ```
+
+2. Ver categorias mais próximas:
+   ```bash
+   # Ver debug.topNonMatchingCategories
+   ```
+
+3. Criar sinônimo se necessário:
+   ```bash
+   POST /admin/rag/global-synonyms
+   ```
+
+### Sessão bloqueada (Telegram/WhatsApp)
+- Ver: `docs/GRACEFUL_SHUTDOWN_FIX.md`
+- Verificar se `onModuleDestroy` está implementado
+- Conferir logs: `✅ Redis desconectado`, `✅ Sessões desconectadas`
+
+### Usuário não recebe mensagens
+1. Verificar contexto da plataforma:
+   ```typescript
+   this.contextService.registerContext(userId, sessionId, platform);
+   ```
+
+2. Ver se evento está sendo emitido:
+   ```typescript
+   this.eventEmitter.emit('telegram.reply', { platformId, message });
+   ```
+
+---
+
+## Documentação Importante
+
+- `docs/RAG_ADMIN_QUICK_GUIDE.md` - Guia rápido endpoints RAG
+- `docs/RAG_ADMIN_STATS_API.md` - Documentação completa stats
+- `docs/RAG_LEARNING_DEBUG_GUIDE.md` - Debug do fluxo de aprendizado
+- `docs/PLATFORM_FLOW_COMPARISON.md` - Comparação WhatsApp vs Telegram
+- `docs/GRACEFUL_SHUTDOWN_FIX.md` - Fix para sessões bloqueadas
+
+---
+
+## Regras de Edição
+
+### Quando editar arquivos:
+1. **SEMPRE** incluir 3-5 linhas de contexto antes e depois
+2. **NUNCA** usar placeholders como `...existing code...`
+3. **SEMPRE** validar com `npx tsc --noEmit`
+4. **SEMPRE** rodar testes se mexer em lógica de negócio
+
+### Ordem de rotas NestJS:
+```typescript
+// ✅ CORRETO: Específicas primeiro
+@Get('users-cache/count')
+@Get('users-cache/search')
+@Get('users-cache/:id')
+@Get('users-cache')
+
+// ❌ ERRADO: Genérica captura todas
+@Get('users-cache')
+@Get('users-cache/search')  // Nunca será chamada!
+```
+
+### Prisma Decimal:
+```typescript
+// ✅ CORRETO: Converter para number
+Number(log.bestScore)
+
+// ❌ ERRADO: Usar direto
+log.bestScore + 1  // Erro de tipo
+```
+
+---
+
+## Performance
+
+### N+1 Queries
+```typescript
+// ❌ Evitar
+for (const log of logs) {
+  const user = await this.prisma.userCache.findUnique(...);
+}
+
+// ✅ Correto
+const enrichedLogs = await Promise.all(
+  logs.map(async (log) => {
+    const user = await this.cacheService.getUserByGastoCertoId(log.userId);
+    return { ...log, userName: user?.name };
+  })
+);
+```
+
+### Redis
+- Use pipeline para múltiplas operações
+- Sempre definir TTL em caches temporários
+- Prefixar keys: `rag:`, `user:`, etc.
+
+---
+
+## Testes
+
+### Mock de Services
+```typescript
+const mockRagService = {
+  findSimilarCategories: jest.fn().mockResolvedValue([...]),
+};
+
+const mockUserCache = {
+  getUser: jest.fn().mockResolvedValue(mockUser),
+  getUserByGastoCertoId: jest.fn().mockResolvedValue(mockUser),
+};
+```
+
+### Prisma em Testes
+```typescript
+// Adicionar null check em métodos que usam prisma
+if (!this.prisma) {
+  this.logger.warn('⚠️ Prisma não disponível em testes');
+  return null;
+}
+```
+
+---
+
+## KPIs Importantes
+
+| Métrica | Meta | Crítico |
+|---------|------|---------|
+| RAG Success Rate | > 85% | < 70% |
+| AI Fallback Rate | < 15% | > 30% |
+| Avg Response Time | < 100ms | > 500ms |
+| Test Coverage | > 80% | < 60% |
+
+---
+
+## Contatos & Recursos
+
+- **Projeto**: GastoCerto ZAP
+- **API Base**: https://api.gastocerto.com.br
+- **Ambiente**: Dev em http://localhost:4444
+- **Redis**: localhost:6379
+- **PostgreSQL**: localhost:5432
+
+---
+
+## Quick Commands
+
+```bash
+# Subir ambiente completo
+docker-compose up -d && npm run start:dev
+
+# Rebuild completo
+rm -rf dist && npm run build
+
+# Ver logs do RAG
+grep "🎯" logs/app.log
+
+# Limpar cache Redis
+docker exec -it <redis-container> redis-cli FLUSHALL
+
+# Ver estatísticas do mês
+curl "http://localhost:4444/admin/rag/stats?year=2026&month=1"
+
+# Testar matching
+curl -X POST http://localhost:4444/admin/rag/test-match \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"USER_ID","query":"gastei na padaria"}'
+```
+
+---
+
+## Notas Finais
+
+- **Multi-plataforma**: WhatsApp e Telegram compartilham a mesma lógica de negócio
+- **Event-driven**: Toda comunicação entre módulos via eventos
+- **Graceful shutdown**: CRÍTICO para evitar sessões órfãs
+- **RAG-first**: Sempre tentar RAG antes de usar IA (custo)
+- **Cache agressivo**: Redis para tudo que puder (categorias, usuários)
+- **Logs detalhados**: Usar emojis para facilitar grep
+
+**Última atualização**: 13 de janeiro de 2026

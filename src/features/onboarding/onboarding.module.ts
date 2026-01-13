@@ -6,15 +6,12 @@ import { NameValidator } from './validators/name.validator';
 import { PhoneValidator } from './validators/phone.validator';
 import { UsersModule } from '@features/users/users.module';
 import { PrismaService } from '@core/database/prisma.service';
+import { MessagesModule } from '@infrastructure/messaging/messages/messages.module';
 
 @Module({
   imports: [
     UsersModule,
-    forwardRef(() =>
-      import('../../infrastructure/whatsapp/messages/messages.module').then(
-        (m) => m.MessagesModule,
-      ),
-    ),
+    forwardRef(() => MessagesModule),
   ],
   providers: [
     OnboardingService,

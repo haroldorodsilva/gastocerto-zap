@@ -1,4 +1,4 @@
-import { TRANSACTION_USER_PROMPT_TEMPLATE } from '../../../src/features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
+import { TRANSACTION_USER_PROMPT_TEMPLATE } from '@infrastructure/ai/prompts';
 
 describe('Transaction Extraction Prompt', () => {
   describe('TRANSACTION_USER_PROMPT_TEMPLATE', () => {

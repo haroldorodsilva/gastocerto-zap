@@ -5,9 +5,10 @@ import { OnboardingStateService } from '@features/onboarding/onboarding-state.se
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessageContextService } from '@infrastructure/whatsapp/messages/message-context.service';
-import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
-import { MessageType } from '@common/interfaces/message.interface';
+import { MessageContextService } from '@infrastructure/messaging/messages/services/message-context.service';
+import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
+import { MessageType } from '@infrastructure/messaging/message.interface';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 
 describe('OnboardingService', () => {
   let service: OnboardingService;
@@ -46,15 +47,21 @@ describe('OnboardingService', () => {
       },
     };
 
+    const ragServiceMock = {
+      findSimilarCategories: jest.fn(),
+      learnFromCorrection: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OnboardingService,
-        { provide: EventEmitter2, useValue: eventEmitterMock },
         { provide: OnboardingStateService, useValue: onboardingStateMock },
-        { provide: MessageContextService, useValue: contextServiceMock },
         { provide: GastoCertoApiService, useValue: gastoCertoApiMock },
         { provide: UserCacheService, useValue: userCacheMock },
         { provide: PrismaService, useValue: prismaMock },
+        { provide: EventEmitter2, useValue: eventEmitterMock },
+        { provide: MessageContextService, useValue: contextServiceMock },
+        { provide: RAGService, useValue: ragServiceMock },
       ],
     }).compile();
 

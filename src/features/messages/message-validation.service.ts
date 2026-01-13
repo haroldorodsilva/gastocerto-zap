@@ -3,7 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
-import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
+import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { UserCache } from '@prisma/client';
 
 /**
@@ -186,6 +186,7 @@ export class MessageValidationService {
 
       // 7. Verificar se tem aprendizado pendente
       const phoneNumber = user.phoneNumber;
+      this.logger.log(`🔍 [${platform}] Checking pending learning for phoneNumber: ${phoneNumber}`);
       const learningCheck = await this.messageLearningService.hasPendingLearning(phoneNumber);
 
       if (learningCheck.hasPending) {
@@ -199,6 +200,8 @@ export class MessageValidationService {
             context: learningCheck.context,
           },
         };
+      } else {
+        this.logger.log(`✅ [${platform}] No pending learning for ${phoneNumber}`);
       }
 
       // 8. Usuário válido - pode prosseguir

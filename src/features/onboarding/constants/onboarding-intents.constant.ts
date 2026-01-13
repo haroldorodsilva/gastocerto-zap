@@ -1,4 +1,4 @@
-import { IntentPattern } from '@core/utils/intent-matcher.util';
+import { IntentPattern } from '@infrastructure/nlp/services/intent-matcher.service';
 
 /**
  * Intenções durante solicitação de código de verificação

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { FixedTransactionParserService } from '@common/services/fixed-transaction-parser.service';
+import { FixedTransactionParserService } from '@features/transactions/services/parsers/fixed-transaction-parser.service';
 
 describe('FixedTransactionParserService', () => {
   let service: FixedTransactionParserService;

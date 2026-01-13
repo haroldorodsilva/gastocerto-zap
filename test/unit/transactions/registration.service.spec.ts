@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { TransactionRegistrationService } from '../../../src/features/transactions/contexts/registration/registration.service';
 import { AIProviderFactory } from '../../../src/infrastructure/ai/ai-provider.factory';
 import { AIConfigService } from '../../../src/infrastructure/ai/ai-config.service';
-import { RAGService } from '../../../src/infrastructure/ai/rag/rag.service';
+import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
 import { TransactionValidatorService } from '../../../src/features/transactions/transaction-validator.service';
 import { TransactionConfirmationService } from '../../../src/features/transactions/transaction-confirmation.service';
 import { GastoCertoApiService } from '../../../src/shared/gasto-certo-api.service';
@@ -11,12 +11,12 @@ import { UserCacheService } from '../../../src/features/users/user-cache.service
 import { AccountManagementService } from '../../../src/features/accounts/account-management.service';
 import { TransactionType } from '../../../src/infrastructure/ai/ai.interface';
 import { PrismaService } from '../../../src/core/database/prisma.service';
-import { TemporalParserService } from '../../../src/common/services/temporal-parser.service';
+import { TemporalParserService } from '../../../src/features/transactions/services/parsers/temporal-parser.service';
 import { MessageLearningService } from '../../../src/features/transactions/message-learning.service';
-import { InstallmentParserService } from '../../../src/common/services/installment-parser.service';
-import { FixedTransactionParserService } from '../../../src/common/services/fixed-transaction-parser.service';
-import { CreditCardParserService } from '../../../src/common/services/credit-card-parser.service';
-import { CreditCardInvoiceCalculatorService } from '../../../src/common/services/credit-card-invoice-calculator.service';
+import { InstallmentParserService } from '../../../src/features/transactions/services/parsers/installment-parser.service';
+import { FixedTransactionParserService } from '../../../src/features/transactions/services/parsers/fixed-transaction-parser.service';
+import { CreditCardParserService } from '../../../src/features/transactions/services/parsers/credit-card-parser.service';
+import { CreditCardInvoiceCalculatorService } from '../../../src/features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from '../../../src/features/transactions/services/payment-status-resolver.service';
 import { CreditCardService } from '../../../src/features/credit-cards/credit-card.service';
 
@@ -129,6 +129,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
       }),
       findByPlatformId: jest.fn().mockResolvedValue(mockUser),
       findByPhoneNumber: jest.fn().mockResolvedValue(mockUser),
+      getUserByGastoCertoId: jest.fn().mockResolvedValue(mockUser),
     };
 
     const mockAccountManagementService = {

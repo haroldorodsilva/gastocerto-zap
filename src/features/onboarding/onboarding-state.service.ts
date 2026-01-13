@@ -5,7 +5,7 @@ import { OnboardingData, OnboardingResponse } from './dto/onboarding.dto';
 import { EmailValidator } from './validators/email.validator';
 import { NameValidator } from './validators/name.validator';
 import { PhoneValidator } from './validators/phone.validator';
-import { IntentMatcher } from '@core/utils/intent-matcher.util';
+import { IntentMatcher } from '@infrastructure/nlp/services/intent-matcher.service';
 import {
   VERIFICATION_CODE_INTENTS,
   CONFIRMATION_INTENTS,

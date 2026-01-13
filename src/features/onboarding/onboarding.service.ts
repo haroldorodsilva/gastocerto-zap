@@ -1,15 +1,15 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OnboardingStateService } from './onboarding-state.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from '@features/users/user-cache.service';
-import { RAGService } from '@infrastructure/ai/rag/rag.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { OnboardingResponse } from './dto/onboarding.dto';
 import { CreateUserDto } from '../users/dto/user.dto';
-import { IFilteredMessage } from '@common/interfaces/message.interface';
-import { MessageContextService } from '../../infrastructure/whatsapp/messages/message-context.service';
-import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
+import { IFilteredMessage } from '@infrastructure/messaging/message.interface';
+import { MessageContextService } from '@infrastructure/messaging/messages/message-context.service';
+import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 
 @Injectable()
 export class OnboardingService {
@@ -21,6 +21,7 @@ export class OnboardingService {
     private readonly userCache: UserCacheService,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    @Inject(forwardRef(() => MessageContextService))
     private readonly contextService: MessageContextService,
     @Optional() private readonly ragService?: RAGService,
   ) {}

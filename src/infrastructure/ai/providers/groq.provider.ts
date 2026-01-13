@@ -12,7 +12,7 @@ import {
 import {
   getTransactionSystemPrompt,
   TRANSACTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
+} from '../prompts';
 
 /**
  * Groq Provider - Especializado em ÁUDIO

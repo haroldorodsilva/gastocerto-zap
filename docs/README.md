@@ -1,5 +1,38 @@
 # 📚 Índice de Documentação
 
+> **Última atualização:** 13 de Janeiro de 2026 | **Versão:** 2.5.0
+
+---
+
+## 🔥 Novidades (Janeiro 2026)
+
+### [🔧 ADMIN_RAG_INTEGRATION_GUIDE.md](./ADMIN_RAG_INTEGRATION_GUIDE.md) ⭐ NOVO
+**Guia completo de integração do painel admin com sistema RAG**
+
+- Análise RAG sem criar logs no banco
+- Endpoints de teste e debug
+- Criação de sinônimos globais e por usuário
+- Exemplos práticos em JavaScript/TypeScript
+- Fluxos de integração
+- Troubleshooting
+
+**Quando ler**: Ao desenvolver ou integrar painel administrativo
+
+---
+
+### [📊 IMPROVEMENTS_SUMMARY.md](./IMPROVEMENTS_SUMMARY.md) ⭐ NOVO
+**Resumo de melhorias implementadas e próximos passos**
+
+- Reorganização de prompts IA
+- Limpeza de documentação
+- Endpoints admin implementados
+- Sugestões de melhorias futuras
+- Performance e segurança
+
+**Quando ler**: Planejamento de features ou onboarding
+
+---
+
 ## 🎯 Guias de Fluxo (Essenciais)
 
 Documentação dos fluxos principais do sistema:

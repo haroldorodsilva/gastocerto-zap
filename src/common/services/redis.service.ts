@@ -11,6 +11,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis | null = null;
   private isConnected = false;
+  private isShuttingDown = false;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -54,13 +55,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.client.on('error', (error) => {
+        // Ignorar erros durante shutdown
+        if (this.isShuttingDown) return;
         this.isConnected = false;
         this.logger.error(`❌ Redis erro: ${error.message}`);
       });
 
       this.client.on('close', () => {
         this.isConnected = false;
-        this.logger.warn(`⚠️  Redis desconectado`);
+        // Não logar durante shutdown para evitar mensagens duplicadas
+        if (!this.isShuttingDown) {
+          this.logger.warn(`⚠️  Redis desconectado`);
+        }
       });
 
       // Aguardar conexão
@@ -74,11 +80,27 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async disconnect(): Promise<void> {
-    if (this.client) {
-      await this.client.quit();
-      this.client = null;
+    // Evitar múltiplas desconexões
+    if (this.isShuttingDown || !this.client) {
+      return;
+    }
+
+    try {
+      this.isShuttingDown = true;
       this.isConnected = false;
-      this.logger.log('Redis desconectado');
+
+      // Usar quit() para graceful shutdown
+      await this.client.quit();
+      this.logger.log('✅ Redis desconectado com sucesso');
+    } catch (error) {
+      // Se quit() falhar, usar disconnect() como fallback
+      if (this.client && this.client.status !== 'end') {
+        this.client.disconnect();
+      }
+      this.logger.warn('⚠️  Redis desconectado com fallback');
+    } finally {
+      this.client = null;
+      this.isShuttingDown = false;
     }
   }
 

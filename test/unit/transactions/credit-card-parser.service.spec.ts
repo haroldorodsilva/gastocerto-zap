@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { CreditCardParserService } from '@common/services/credit-card-parser.service';
+import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
 
 describe('CreditCardParserService', () => {
   let service: CreditCardParserService;

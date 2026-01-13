@@ -4,13 +4,12 @@ import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from './user-cache.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { CommonModule } from '@common/common.module';
-import { RAGModule } from '../../infrastructure/ai/rag/rag.module';
+import { RAGModule } from '@infrastructure/rag/rag.module';
 import { AiModule } from '../../infrastructure/ai/ai.module';
-import { RedisService } from '@common/services/redis.service';
 
 @Module({
   imports: [HttpModule, CommonModule, RAGModule, AiModule],
-  providers: [GastoCertoApiService, UserCacheService, RedisService],
+  providers: [GastoCertoApiService, UserCacheService],
   exports: [GastoCertoApiService, UserCacheService],
 })
 export class UsersModule {}

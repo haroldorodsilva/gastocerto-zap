@@ -676,14 +676,10 @@ export class GastoCertoApiService {
     } catch (error: any) {
       this.logger.error(`❌ Erro ao criar transação: ${error.message}`);
 
-      // Log detalhado da resposta da API para debug
+      // Log resumido da resposta da API
       if (error.response) {
-        this.logger.error(`📋 [API RESPONSE] Status: ${error.response.status}`);
         this.logger.error(
-          `📋 [API RESPONSE] Data: ${JSON.stringify(error.response.data, null, 2)}`,
-        );
-        this.logger.error(
-          `📋 [API RESPONSE] Headers: ${JSON.stringify(error.response.headers, null, 2)}`,
+          `📋 Status: ${error.response.status} | Data: ${JSON.stringify(error.response.data)}`,
         );
       }
 

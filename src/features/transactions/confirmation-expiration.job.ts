@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessagingPlatform } from '@common/interfaces/messaging-provider.interface';
+import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { ConfirmationStatus } from '@prisma/client';
 
 /**

@@ -4,11 +4,11 @@ import { IAIProvider, TransactionData, UserContext, TransactionType } from '../a
 import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
   IMAGE_ANALYSIS_USER_PROMPT,
-} from '../../../features/transactions/contexts/registration/prompts/image-analysis.prompt';
+} from '../prompts';
 import {
   getTransactionSystemPrompt,
   TRANSACTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
+} from '../prompts';
 
 /**
  * Google Gemini Provider

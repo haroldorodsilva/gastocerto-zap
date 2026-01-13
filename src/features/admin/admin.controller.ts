@@ -12,15 +12,16 @@ import {
   Put,
   Body,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { UserCacheService } from '../users/user-cache.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { PrismaService } from '@core/database/prisma.service';
 import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
-import { SessionsService } from '../../infrastructure/whatsapp/sessions/sessions.service';
-import { SessionManagerService } from '../../infrastructure/whatsapp/sessions/session-manager.service';
-import { TelegramSessionsService } from '../../infrastructure/whatsapp/sessions/telegram/telegram-sessions.service';
-import { RAGService } from '../../infrastructure/ai/rag/rag.service';
+import { SessionsService } from '@infrastructure/messaging/core/services/sessions.service';
+import { SessionManagerService } from '@infrastructure/core/session-manager.service';
+import { TelegramSessionsService } from '@infrastructure/telegram/providers/telegram-sessions.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { RedisService } from '@common/services/redis.service';
 
 @Controller('admin')
@@ -655,6 +656,83 @@ export class AdminController {
   }
 
   /**
+   * Busca usuários por nome ou telefone (sem paginação)
+   * Para uso em autocomplete/busca rápida do admin
+   *
+   * GET /admin/users-cache/search?q=harold
+   * GET /admin/users-cache/search?q=556699
+   *
+   * Retorna até 20 resultados
+   */
+  @Get('users-cache/search')
+  async searchUsers(@Query('q') query?: string) {
+    this.logger.log(`🔍 Admin buscando usuários: "${query}"`);
+
+    try {
+      if (!query || query.trim().length < 2) {
+        throw new BadRequestException('Query deve ter pelo menos 2 caracteres');
+      }
+
+      const searchTerm = query.trim();
+
+      // Buscar por nome ou telefone
+      const users = await this.prisma.userCache.findMany({
+        where: {
+          OR: [
+            {
+              name: {
+                contains: searchTerm,
+                mode: 'insensitive',
+              },
+            },
+            {
+              phoneNumber: {
+                contains: searchTerm,
+              },
+            },
+            {
+              email: {
+                contains: searchTerm,
+                mode: 'insensitive',
+              },
+            },
+          ],
+        },
+        select: {
+          id: true,
+          phoneNumber: true,
+          name: true,
+          email: true,
+          gastoCertoId: true,
+          hasActiveSubscription: true,
+          activeAccountId: true,
+          isBlocked: true,
+          isActive: true,
+          lastSyncAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ isActive: 'desc' }, { lastSyncAt: 'desc' }],
+        take: 20, // Limite de 20 resultados para busca rápida
+      });
+
+      this.logger.log(`✅ Encontrados ${users.length} usuários para query "${query}"`);
+
+      return {
+        success: true,
+        data: users,
+        count: users.length,
+        query: searchTerm,
+      };
+    } catch (error: any) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      this.logger.error('❌ Erro ao buscar usuários:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Lista configurações de provedores de IA
    * GET /admin/ai-providers
    */
@@ -1251,6 +1329,17 @@ isActive: ${dto.isActive}
         offsetNum,
       );
 
+      // 🆕 Enriquecer logs com userName
+      const enrichedLogs = await Promise.all(
+        result.logs.map(async (log) => {
+          const user = await this.cacheService.getUserByGastoCertoId(log.userId);
+          return {
+            ...log,
+            userName: user?.name || 'Desconhecido',
+          };
+        }),
+      );
+
       // Calcular estatísticas detalhadas
       const successfulAttempts = result.logs.filter((log) => log.success).length;
       const failedAttempts = result.logs.length - successfulAttempts;
@@ -1324,7 +1413,7 @@ isActive: ${dto.isActive}
 
       return {
         success: true,
-        data: result.logs,
+        data: enrichedLogs,
         pagination: {
           total: result.total,
           limit: result.limit,
@@ -1359,60 +1448,122 @@ isActive: ${dto.isActive}
   }
 
   /**
-   * 🆕 Consultar detalhes de um log RAG específico
-   * GET /admin/rag/search-logs/:id
+   * 🆕 Consultar TODOS os detalhes de um log RAG específico
+   * GET /admin/rag/search-logs/:id/details
+   * Retorna: RAG log completo + dados do usuário + transação vinculada + logs de IA
    */
-  @Get('rag/search-logs/:id')
+  @Get('rag/search-logs/:id/details')
   async getRagSearchLogDetail(@Param('id') id: string) {
-    this.logger.log(`📋 Admin solicitou detalhes do log RAG: ${id}`);
+    this.logger.log(`📋 Admin solicitou detalhes COMPLETOS do log RAG: ${id}`);
 
     try {
+      // Buscar log RAG completo
       const log = await this.prisma.rAGSearchLog.findUnique({
         where: { id },
-        include: {
-          _count: {
-            select: {
-              aiUsageLogs: true,
-            },
-          },
-        },
       });
 
       if (!log) {
         return {
           success: false,
-          message: 'Log não encontrado',
+          message: 'Log RAG não encontrado',
           timestamp: new Date().toISOString(),
         };
       }
 
-      // Buscar logs de AI relacionados
+      // Buscar dados do usuário
+      const user = await this.cacheService.getUserByGastoCertoId(log.userId);
+      const userData = user
+        ? {
+            id: user.id,
+            name: user.name,
+            phoneNumber: user.phoneNumber,
+            whatsappId: user.whatsappId,
+            telegramId: user.telegramId,
+            gastoCertoId: user.gastoCertoId,
+            activeAccountId: user.activeAccountId,
+            isActive: user.isActive,
+            hasActiveSubscription: user.hasActiveSubscription,
+            createdAt: user.createdAt,
+          }
+        : null;
+
+      // Buscar transações vinculadas (relacionamento reverso)
+      const transactions = await this.prisma.transactionConfirmation.findMany({
+        where: {
+          ragSearchLogId: id,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10, // Limitar a 10 transações mais recentes
+      });
+
+      // Buscar logs de AI relacionados (TODOS os campos)
       const aiLogs = await this.prisma.aIUsageLog.findMany({
         where: { ragSearchLogId: id },
-        select: {
-          id: true,
-          provider: true,
-          model: true,
-          operation: true,
-          totalTokens: true,
-          estimatedCost: true,
-          aiCategoryName: true,
-          aiConfidence: true,
-          needsSynonymLearning: true,
-          createdAt: true,
-        },
+        orderBy: { createdAt: 'asc' },
       });
+
+      // Buscar sinônimos do usuário relacionados ao termo buscado
+      const userSynonyms = user
+        ? await this.prisma.userSynonym.findMany({
+            where: {
+              userId: log.userId,
+              keyword: {
+                contains: log.queryNormalized,
+              },
+            },
+            orderBy: { usageCount: 'desc' },
+            take: 10,
+          })
+        : [];
 
       return {
         success: true,
         data: {
-          ...log,
+          // Dados completos do RAG log
+          ragLog: log,
+
+          // Dados do usuário
+          user: userData,
+
+          // Transações vinculadas (relacionamento reverso)
+          transactions: transactions,
+
+          // Logs de IA vinculados
           aiUsageLogs: aiLogs,
+          aiUsageStats: {
+            totalLogs: aiLogs.length,
+            totalTokens: aiLogs.reduce((sum, log) => sum + (log.totalTokens || 0), 0),
+            totalCost: aiLogs.reduce(
+              (sum, log) => sum + (log.estimatedCost ? Number(log.estimatedCost) : 0),
+              0,
+            ),
+            providers: [...new Set(aiLogs.map((l) => l.provider))],
+            models: [...new Set(aiLogs.map((l) => l.model))],
+          },
+
+          // Sinônimos do usuário relacionados
+          relatedSynonyms: userSynonyms,
+
+          // Análise do RAG
+          ragAnalysis: {
+            wasSuccessful: log.success,
+            usedAiFallback: log.wasAiFallback,
+            ragMode: log.ragMode,
+            ragInitialScore: log.ragInitialScore ? Number(log.ragInitialScore) : null,
+            threshold: log.threshold ? Number(log.threshold) : null,
+            passedThreshold:
+              log.ragInitialScore && log.threshold
+                ? Number(log.ragInitialScore) >= Number(log.threshold)
+                : false,
+            responseTimeMs: log.responseTime,
+            flowStep: log.flowStep,
+            totalSteps: log.totalSteps,
+          },
         },
         timestamp: new Date().toISOString(),
       };
     } catch (error: any) {
-      this.logger.error('❌ Erro ao buscar detalhes do log RAG:', error);
+      this.logger.error('❌ Erro ao buscar detalhes completos do log RAG:', error);
 
       return {
         success: false,
@@ -1424,27 +1575,78 @@ isActive: ${dto.isActive}
   }
 
   /**
-   * 🆕 Estatísticas gerais do RAG
+   * 📊 Estatísticas gerais do RAG
+   * GET /admin/rag/stats?year=2026&month=1
    * GET /admin/rag/stats?days=7
+   *
+   * Query params:
+   * - year: Ano (ex: 2026) - Filtra por ano inteiro
+   * - month: Mês (1-12) - Requer year, filtra por mês específico
+   * - days: Dias (ex: 7, 30) - Período em dias (ignorado se year/month presentes)
+   *
+   * @returns Estatísticas completas do RAG incluindo:
+   * - Total de buscas e taxa de sucesso
+   * - AI Fallback (quando RAG falha)
+   * - Scores médios e tempo de resposta
+   * - Top usuários e queries
+   * - Distribuição por flowStep
+   * - Queries mais frequentes
+   * - Categorias mais buscadas
    */
   @Get('rag/stats')
-  async getRagStats(@Query('days') days?: string) {
+  async getRagStats(
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+    @Query('days') days?: string,
+  ) {
     this.logger.log('📊 Admin solicitou estatísticas gerais do RAG');
 
     try {
-      const daysNum = parseInt(days || '7');
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - daysNum);
+      let startDate: Date;
+      let endDate: Date;
+      let periodLabel: string;
+
+      // Prioridade: year/month > days
+      if (year) {
+        const yearNum = parseInt(year);
+
+        if (month) {
+          // Filtro por ano + mês específico
+          const monthNum = parseInt(month);
+          startDate = new Date(yearNum, monthNum - 1, 1); // Primeiro dia do mês
+          endDate = new Date(yearNum, monthNum, 0, 23, 59, 59, 999); // Último dia do mês
+          periodLabel = `${monthNum.toString().padStart(2, '0')}/${yearNum}`;
+        } else {
+          // Filtro por ano inteiro
+          startDate = new Date(yearNum, 0, 1); // 01/01/YEAR
+          endDate = new Date(yearNum, 11, 31, 23, 59, 59, 999); // 31/12/YEAR
+          periodLabel = yearNum.toString();
+        }
+      } else {
+        // Fallback: últimos N dias
+        const daysNum = parseInt(days || '7');
+        startDate = new Date();
+        startDate.setDate(startDate.getDate() - daysNum);
+        endDate = new Date();
+        periodLabel = `Últimos ${daysNum} dias`;
+      }
+
+      const whereClause = {
+        createdAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+      };
 
       // Total de buscas
       const totalSearches = await this.prisma.rAGSearchLog.count({
-        where: { createdAt: { gte: startDate } },
+        where: whereClause,
       });
 
       // Buscas bem-sucedidas
       const successfulSearches = await this.prisma.rAGSearchLog.count({
         where: {
-          createdAt: { gte: startDate },
+          ...whereClause,
           success: true,
         },
       });
@@ -1452,36 +1654,51 @@ isActive: ${dto.isActive}
       // Buscas com AI Fallback
       const aiFallbackSearches = await this.prisma.rAGSearchLog.count({
         where: {
-          createdAt: { gte: startDate },
+          ...whereClause,
           wasAiFallback: true,
         },
       });
 
       // Média de score RAG
       const avgScore = await this.prisma.rAGSearchLog.aggregate({
-        where: { createdAt: { gte: startDate } },
+        where: whereClause,
         _avg: { ragInitialScore: true },
       });
 
       // Tempo médio de resposta
       const avgResponseTime = await this.prisma.rAGSearchLog.aggregate({
-        where: { createdAt: { gte: startDate } },
+        where: whereClause,
         _avg: { responseTime: true },
       });
 
       // Top usuários usando RAG
-      const topUsers = await this.prisma.rAGSearchLog.groupBy({
+      const topUsersRaw = await this.prisma.rAGSearchLog.groupBy({
         by: ['userId'],
-        where: { createdAt: { gte: startDate } },
+        where: whereClause,
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
         take: 10,
       });
 
+      // Enriquecer com userName
+      const topUsers = await Promise.all(
+        topUsersRaw.map(async (u) => {
+          const user = await this.cacheService.getUserByGastoCertoId(u.userId);
+          return {
+            userId: u.userId,
+            userName: user?.name || 'Desconhecido',
+            searches: u._count.id,
+          };
+        }),
+      );
+
       // Queries que mais precisam de sinônimos
       const needsSynonymLearning = await this.prisma.aIUsageLog.count({
         where: {
-          createdAt: { gte: startDate },
+          createdAt: {
+            gte: startDate,
+            lte: endDate,
+          },
           needsSynonymLearning: true,
         },
       });
@@ -1489,20 +1706,93 @@ isActive: ${dto.isActive}
       // Distribuição por flowStep
       const flowStepDistribution = await this.prisma.rAGSearchLog.groupBy({
         by: ['flowStep', 'totalSteps'],
-        where: { createdAt: { gte: startDate } },
+        where: whereClause,
+        _count: { id: true },
+        orderBy: { flowStep: 'asc' },
+      });
+
+      // Top queries (mais frequentes)
+      const topQueriesRaw = await this.prisma.rAGSearchLog.groupBy({
+        by: ['query'],
+        where: whereClause,
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 20,
+      });
+
+      const topQueries = topQueriesRaw.map((q) => ({
+        query: q.query,
+        count: q._count.id,
+      }));
+
+      // Top queries que falharam
+      const topFailedQueriesRaw = await this.prisma.rAGSearchLog.groupBy({
+        by: ['query'],
+        where: {
+          ...whereClause,
+          success: false,
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 20,
+      });
+
+      const topFailedQueries = topFailedQueriesRaw.map((q) => ({
+        query: q.query,
+        count: q._count.id,
+      }));
+
+      // Top categorias encontradas
+      const topCategoriesRaw = await this.prisma.rAGSearchLog.groupBy({
+        by: ['bestMatch'],
+        where: {
+          ...whereClause,
+          success: true,
+          bestMatch: { not: null },
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 20,
+      });
+
+      const topCategories = topCategoriesRaw.map((c) => ({
+        category: c.bestMatch || 'Desconhecida',
+        count: c._count.id,
+      }));
+
+      // Distribuição por ragMode
+      const ragModeDistribution = await this.prisma.rAGSearchLog.groupBy({
+        by: ['ragMode'],
+        where: whereClause,
+        _count: { id: true },
+      });
+
+      // Custos de IA (se houver)
+      const aiCosts = await this.prisma.aIUsageLog.aggregate({
+        where: {
+          createdAt: {
+            gte: startDate,
+            lte: endDate,
+          },
+        },
+        _sum: {
+          totalTokens: true,
+          estimatedCost: true,
+        },
         _count: { id: true },
       });
 
       return {
         success: true,
         period: {
-          days: daysNum,
+          label: periodLabel,
           from: startDate.toISOString(),
-          to: new Date().toISOString(),
+          to: endDate.toISOString(),
         },
-        stats: {
+        summary: {
           totalSearches,
           successfulSearches,
+          failedSearches: totalSearches - successfulSearches,
           successRate:
             totalSearches > 0
               ? ((successfulSearches / totalSearches) * 100).toFixed(2) + '%'
@@ -1515,18 +1805,29 @@ isActive: ${dto.isActive}
           avgRagScore: avgScore._avg.ragInitialScore
             ? Number(avgScore._avg.ragInitialScore).toFixed(4)
             : null,
-          avgResponseTime: avgResponseTime._avg.responseTime
-            ? Math.round(avgResponseTime._avg.responseTime) + 'ms'
+          avgResponseTimeMs: avgResponseTime._avg.responseTime
+            ? Math.round(avgResponseTime._avg.responseTime)
             : null,
           needsSynonymLearning,
-          topUsers: topUsers.map((u) => ({
-            userId: u.userId,
-            searches: u._count.id,
-          })),
-          flowStepDistribution: flowStepDistribution.map((d) => ({
-            step: `${d.flowStep}/${d.totalSteps}`,
-            count: d._count.id,
-          })),
+        },
+        topUsers,
+        topQueries,
+        topFailedQueries,
+        topCategories,
+        flowStepDistribution: flowStepDistribution.map((d) => ({
+          step: d.flowStep,
+          totalSteps: d.totalSteps,
+          label: `Step ${d.flowStep}/${d.totalSteps}`,
+          count: d._count.id,
+        })),
+        ragModeDistribution: ragModeDistribution.map((r) => ({
+          mode: r.ragMode,
+          count: r._count.id,
+        })),
+        aiUsage: {
+          totalLogs: aiCosts._count.id,
+          totalTokens: aiCosts._sum.totalTokens || 0,
+          totalCost: aiCosts._sum.estimatedCost ? Number(aiCosts._sum.estimatedCost) : 0,
         },
         timestamp: new Date().toISOString(),
       };
@@ -1536,6 +1837,177 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao buscar estatísticas RAG',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Revalidar mensagem de usuário sem gerar log RAG
+   * POST /admin/rag/revalidate
+   * Body: { userId: string, message: string }
+   */
+  @Post('rag/revalidate')
+  async revalidateUserMessage(@Body() body: { userId: string; message: string }) {
+    this.logger.log(`🔄 Admin revalidando mensagem do usuário: ${body.userId}`);
+
+    try {
+      // Buscar usuário
+      const user = await this.cacheService.getUser(body.userId);
+      if (!user) {
+        return {
+          success: false,
+          message: 'Usuário não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Buscar categorias com skipLogging=true
+      const matches = await this.ragService.findSimilarCategories(body.message, user.gastoCertoId, {
+        skipLogging: true,
+      });
+
+      return {
+        success: true,
+        data: {
+          userId: body.userId,
+          message: body.message,
+          matches,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao revalidar mensagem:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao revalidar mensagem',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Adicionar termo aos sinônimos globais
+   * POST /admin/rag/global-synonyms
+   * Body: { term: string, targetCategory: string, targetSubCategory?: string }
+   */
+  @Post('rag/global-synonyms')
+  async addGlobalSynonym(
+    @Body()
+    body: {
+      term: string;
+      targetCategory: string;
+      targetSubCategory?: string;
+    },
+  ) {
+    this.logger.log(`➕ Admin adicionando sinônimo global: ${body.term} → ${body.targetCategory}`);
+
+    try {
+      // Criar sinônimo global (userId = 'GLOBAL')
+      const synonym = await this.prisma.userSynonym.create({
+        data: {
+          userId: 'GLOBAL',
+          keyword: body.term.toLowerCase().trim(),
+          categoryId: body.targetCategory,
+          categoryName: body.targetCategory,
+          subCategoryId: body.targetSubCategory || '',
+          subCategoryName: body.targetSubCategory || '',
+          confidence: 1.0,
+          source: 'ADMIN_APPROVED',
+        },
+      });
+
+      // Limpar cache do RAG para forçar reindexação
+      await this.ragService.clearCache();
+
+      return {
+        success: true,
+        data: synonym,
+        message: 'Sinônimo global adicionado com sucesso',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao adicionar sinônimo global:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao adicionar sinônimo global',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * 🆕 Listar logs RAG por usuário específico
+   * GET /admin/rag/user-logs/:userId?limit=50
+   */
+  @Get('rag/user-logs/:userId')
+  async getUserRagLogs(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+    @Query('onlyFailed') onlyFailed?: string,
+  ) {
+    this.logger.log(`📋 Admin solicitou logs RAG do usuário: ${userId}`);
+
+    try {
+      const limitNum = Math.min(parseInt(limit || '50'), 200);
+      const failedFilter = onlyFailed === 'true';
+
+      const where: any = { userId };
+      if (failedFilter) {
+        where.success = false;
+      }
+
+      const logs = await this.prisma.rAGSearchLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limitNum,
+        select: {
+          id: true,
+          query: true,
+          queryNormalized: true,
+          matches: true,
+          bestMatch: true,
+          bestScore: true,
+          success: true,
+          ragMode: true,
+          wasAiFallback: true,
+          flowStep: true,
+          totalSteps: true,
+          responseTime: true,
+          createdAt: true,
+        },
+      });
+
+      // Buscar informações do usuário
+      const user = await this.cacheService.getUser(userId);
+
+      return {
+        success: true,
+        data: {
+          user: user
+            ? {
+                id: user.id,
+                name: user.name,
+                phoneNumber: user.phoneNumber,
+                gastoCertoId: user.gastoCertoId,
+              }
+            : null,
+          logs,
+          total: logs.length,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar logs do usuário:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar logs do usuário',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
@@ -1712,7 +2184,7 @@ isActive: ${dto.isActive}
       }
 
       const result = await this.ragService.deleteSearchLogs(dto.ids);
-      
+
       this.logger.log(`✅ Deletados ${result.deletedCount} de ${dto.ids.length} logs solicitados`);
 
       return {
@@ -2616,11 +3088,11 @@ isActive: ${dto.isActive}
         },
       });
 
-      // 5. Confirmações de transações (últimas 50)
+      // 5. Transações do usuário (últimas 10, ordenadas por data mais recente)
       const transactionConfirmations = await this.prisma.transactionConfirmation.findMany({
         where: { userId: user.id },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
+        orderBy: { date: 'desc' },
+        take: 10,
         select: {
           id: true,
           description: true,
@@ -2632,6 +3104,8 @@ isActive: ${dto.isActive}
           type: true,
           date: true,
           status: true,
+          apiSent: true,
+          apiSentAt: true,
           createdAt: true,
           confirmedAt: true,
         },
@@ -2670,7 +3144,27 @@ isActive: ${dto.isActive}
         },
       });
 
-      // 8. Calcular estatísticas
+      // 8. Buscar categorias do usuário (via API GastoCerto)
+      let categories: any[] = [];
+      let accounts: any[] = [];
+
+      try {
+        // Buscar contas do usuário
+        accounts = await this.cacheService['gastoCertoApi'].getUserAccounts(userId);
+
+        // Se tiver conta ativa, buscar categorias dessa conta
+        if (user.activeAccountId) {
+          const accountCategories = await this.cacheService['gastoCertoApi'].getAccountCategories(
+            userId,
+            user.activeAccountId,
+          );
+          categories = accountCategories || [];
+        }
+      } catch (error) {
+        this.logger.warn(`⚠️ Erro ao buscar categorias/contas da API: ${error.message}`);
+      }
+
+      // 9. Calcular estatísticas
       const stats = {
         rag: {
           total: ragLogs.length,
@@ -2715,6 +3209,7 @@ isActive: ${dto.isActive}
           total: transactionConfirmations.length,
           confirmed: transactionConfirmations.filter((t) => t.status === 'CONFIRMED').length,
           pending: transactionConfirmations.filter((t) => t.status === 'PENDING').length,
+          sent: transactionConfirmations.filter((t) => t.apiSent).length,
           totalAmount: transactionConfirmations
             .reduce((sum, t) => sum + Number(t.amount), 0)
             .toFixed(2),
@@ -2761,12 +3256,26 @@ isActive: ${dto.isActive}
             aiConfidence: log.aiConfidence ? Number(log.aiConfidence) : null,
           })),
           synonyms,
-          transactionConfirmations: transactionConfirmations.map((t) => ({
+          transactions: transactionConfirmations.map((t) => ({
             ...t,
             amount: Number(t.amount),
           })),
           unrecognizedMessages,
           onboardingSessions,
+          categories: categories.map((cat) => ({
+            id: cat.id || cat.categoryId,
+            name: cat.name || cat.categoryName,
+            type: cat.type,
+            accountId: cat.accountId,
+            subCategories: cat.subCategories || [],
+          })),
+          accounts: accounts.map((acc) => ({
+            id: acc.id,
+            name: acc.name,
+            role: acc.role,
+            isPrimary: acc.isPrimary,
+            isCreator: acc.isCreator,
+          })),
         },
         timestamp: new Date().toISOString(),
       };
@@ -2776,6 +3285,82 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao buscar resumo do usuário',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * POST /admin/users/:userId/sync-categories
+   * Força a sincronização das categorias do usuário com a API do GastoCerto
+   */
+  @Post('users/:userId/sync-categories')
+  async syncUserCategories(@Param('userId') userId: string) {
+    try {
+      this.logger.log(`🔄 Forçando sync de categorias para usuário: ${userId}`);
+
+      // 1. Buscar usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: userId },
+      });
+
+      if (!user) {
+        throw new NotFoundException('Usuário não encontrado');
+      }
+
+      // 2. Buscar contas atualizadas da API
+      const accounts = await this.cacheService['gastoCertoApi'].getUserAccounts(userId);
+
+      // 3. Buscar categorias da conta ativa
+      let categories: any[] = [];
+      if (user.activeAccountId) {
+        categories = await this.cacheService['gastoCertoApi'].getAccountCategories(
+          userId,
+          user.activeAccountId,
+        );
+      }
+
+      // 4. Atualizar cache do usuário
+      await this.prisma.userCache.update({
+        where: { gastoCertoId: userId },
+        data: {
+          accounts: accounts as any,
+          lastSyncAt: new Date(),
+        },
+      });
+
+      // 5. Limpar cache RAG para forçar reindexação
+      const cacheKey = `rag:embeddings:${userId}`;
+      const redisClient = this.redisService.getClient();
+      await redisClient.del(cacheKey);
+
+      this.logger.log(`✅ Categorias sincronizadas com sucesso: ${categories.length} categorias`);
+
+      return {
+        success: true,
+        message: 'Categorias sincronizadas com sucesso',
+        data: {
+          totalAccounts: accounts.length,
+          activeAccountId: user.activeAccountId,
+          totalCategories: categories.length,
+          categories: categories.map((cat) => ({
+            id: cat.id || cat.categoryId,
+            name: cat.name || cat.categoryName,
+            type: cat.type,
+            accountId: cat.accountId,
+            subCategoriesCount: cat.subCategories?.length || 0,
+          })),
+          lastSyncAt: new Date().toISOString(),
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao sincronizar categorias:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao sincronizar categorias',
         error: error.message,
         timestamp: new Date().toISOString(),
       };

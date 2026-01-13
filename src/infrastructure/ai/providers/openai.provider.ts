@@ -5,15 +5,11 @@ import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
 import {
   getTransactionSystemPrompt,
   TRANSACTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
-import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
   IMAGE_ANALYSIS_USER_PROMPT,
-} from '../../../features/transactions/contexts/registration/prompts/image-analysis.prompt';
-import {
   CATEGORY_SUGGESTION_SYSTEM_PROMPT,
   CATEGORY_SUGGESTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/category-suggestion.prompt';
+} from '../prompts';
 
 @Injectable()
 export class OpenAIProvider implements IAIProvider {

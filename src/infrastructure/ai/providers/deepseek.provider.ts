@@ -5,11 +5,9 @@ import { IAIProvider, TransactionData, UserContext, AIProviderType } from '../ai
 import {
   TRANSACTION_SYSTEM_PROMPT,
   TRANSACTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/transaction-extraction.prompt';
-import {
   CATEGORY_SUGGESTION_SYSTEM_PROMPT,
   CATEGORY_SUGGESTION_USER_PROMPT_TEMPLATE,
-} from '../../../features/transactions/contexts/registration/prompts/category-suggestion.prompt';
+} from '../prompts';
 
 /**
  * DeepSeek AI Provider

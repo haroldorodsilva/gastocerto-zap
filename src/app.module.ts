@@ -19,9 +19,9 @@ import { SharedModule } from '@shared/shared.module';
 import { EventsModule } from './core/events/events.module'; // ← Event Bus
 import { SecurityModule } from './features/security/security.module'; // ← Segurança
 import { AssistantModule } from './features/assistant/assistant.module'; // ← Assistente
-import { MultiPlatformSessionModule } from './infrastructure/whatsapp/sessions/multi-platform-session.module';
-import { SessionsModule } from './infrastructure/whatsapp/sessions/sessions.module';
-import { MessagesModule } from './infrastructure/whatsapp/messages/messages.module';
+import { MultiPlatformSessionModule } from './infrastructure/sessions/multi-platform-session.module';
+import { SessionsModule } from './infrastructure/sessions/sessions.module';
+import { MessagesModule } from './infrastructure/messaging/messages/messages.module';
 import { UsersModule } from './features/users/users.module';
 import { OnboardingModule } from './features/onboarding/onboarding.module';
 import { AiModule } from './infrastructure/ai/ai.module';

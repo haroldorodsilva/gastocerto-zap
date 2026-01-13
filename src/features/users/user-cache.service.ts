@@ -4,7 +4,7 @@ import { PrismaService } from '@core/database/prisma.service';
 import { UserCache } from '@prisma/client';
 import { UserDto } from './dto/user.dto';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
-import { RAGService } from '../../infrastructure/ai/rag/rag.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
 import { RedisService } from '@common/services/redis.service';
 

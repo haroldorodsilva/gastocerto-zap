@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { RAGService } from '../../../src/infrastructure/ai/rag/rag.service';
+import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
 import { PrismaService } from '../../../src/core/database/prisma.service';
-import { CategoryMatch } from '../../../src/infrastructure/ai/rag/rag.interface';
+import { CategoryMatch } from '../../../src/infrastructure/rag/services/rag.interface';
 
 describe('RAGService', () => {
   let service: RAGService;

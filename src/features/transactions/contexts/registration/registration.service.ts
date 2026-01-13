@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@core/database/prisma.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
 import { AIConfigService } from '@infrastructure/ai/ai-config.service';
-import { RAGService } from '@infrastructure/ai/rag/rag.service';
+import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { TransactionValidatorService } from '../../transaction-validator.service';
 import { TransactionConfirmationService } from '../../transaction-confirmation.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
@@ -16,7 +16,7 @@ import {
   CreateGastoCertoTransactionDto,
 } from '../../dto/transaction.dto';
 import { DateUtil } from '../../../../utils/date.util';
-import { TemporalParserService } from '@common/services/temporal-parser.service';
+import { TemporalParserService } from '@features/transactions/services/parsers/temporal-parser.service';
 import { MessageLearningService } from '../../message-learning.service';
 import {
   TRANSACTION_VERBS,
@@ -28,10 +28,10 @@ import {
   EXPENSE_KEYWORDS,
   INCOME_KEYWORDS,
 } from '@common/constants/nlp-keywords.constants';
-import { InstallmentParserService } from '@common/services/installment-parser.service';
-import { FixedTransactionParserService } from '@common/services/fixed-transaction-parser.service';
-import { CreditCardParserService } from '@common/services/credit-card-parser.service';
-import { CreditCardInvoiceCalculatorService } from '@common/services/credit-card-invoice-calculator.service';
+import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
+import { FixedTransactionParserService } from '@features/transactions/services/parsers/fixed-transaction-parser.service';
+import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
+import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from '../../services/payment-status-resolver.service';
 import { CreditCardService } from '@features/credit-cards/credit-card.service';
 
@@ -1738,11 +1738,11 @@ export class TransactionRegistrationService {
         amount: Number(confirmation.amount),
         categoryId,
         subCategoryId,
-        ...(description && { description }), // Só incluir se tiver valor
+        ...(description && description.trim() ? { description: description.trim() } : {}), // Só incluir se não estiver vazio
         date: confirmation.date
           ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
           : DateUtil.formatToISO(DateUtil.today()),
-        ...(merchant && { merchant }), // Só incluir se tiver valor
+        ...(merchant && merchant.trim() ? { merchant: merchant.trim() } : {}), // Só incluir se não estiver vazio
         source: confirmation.platform || 'telegram', // ✅ Sources: telegram | whatsapp | webchat
       };
 

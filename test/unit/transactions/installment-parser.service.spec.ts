@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { InstallmentParserService } from '@common/services/installment-parser.service';
+import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
 
 describe('InstallmentParserService', () => {
   let service: InstallmentParserService;

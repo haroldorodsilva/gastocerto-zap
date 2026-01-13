@@ -25,20 +25,23 @@ export class TransactionsController {
   ) {}
 
   /**
-   * Lista transações pendentes com filtros opcionais
-   * GET /admin/transactions/pending?userId=xxx&accountId=xxx&dateFrom=2025-01-01&dateTo=2025-12-31
+   * Lista todas as transações com filtros opcionais
+   * GET /admin/transactions?userId=xxx&accountId=xxx&dateFrom=2025-01-01&dateTo=2025-12-31&status=CONFIRMED&type=EXPENSES&apiSent=true
    */
-  @Get('pending')
-  async listPendingTransactions(
+  @Get()
+  async listTransactions(
     @Query('userId') userId?: string,
     @Query('accountId') accountId?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('status') status?: string,
+    @Query('type') type?: string,
+    @Query('apiSent') apiSent?: string,
+    @Query('phoneNumber') phoneNumber?: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
   ) {
-    this.logger.log('📋 Listando transações pendentes com filtros');
+    this.logger.log('📋 Listando todas as transações com filtros');
 
     try {
       const pageNum = parseInt(page || '1');
@@ -48,14 +51,19 @@ export class TransactionsController {
       // Construir filtros dinamicamente
       const where: any = {};
 
-      // Status (padrão: apenas pendentes e com erro)
+      // Filtrar por status
       if (status) {
         where.status = status.toUpperCase();
-      } else {
-        where.OR = [
-          { status: ConfirmationStatus.PENDING },
-          { status: ConfirmationStatus.CONFIRMED, apiSent: false },
-        ];
+      }
+
+      // Filtrar por tipo de transação (EXPENSES | INCOME)
+      if (type) {
+        where.type = type.toUpperCase();
+      }
+
+      // Filtrar por envio à API
+      if (apiSent !== undefined) {
+        where.apiSent = apiSent === 'true';
       }
 
       // Filtrar por userId (gastoCertoId do usuário)
@@ -65,12 +73,17 @@ export class TransactionsController {
         };
       }
 
+      // Filtrar por número de telefone
+      if (phoneNumber) {
+        where.phoneNumber = phoneNumber;
+      }
+
       // Filtrar por accountId
       if (accountId) {
         where.accountId = accountId;
       }
 
-      // Filtrar por data
+      // Filtrar por data da transação
       if (dateFrom || dateTo) {
         where.date = {};
         if (dateFrom) {
@@ -117,10 +130,14 @@ export class TransactionsController {
         filters: {
           userId,
           accountId,
+          phoneNumber,
           dateFrom,
           dateTo,
-          status: status || 'PENDING or (CONFIRMED and not sent)',
+          status,
+          type,
+          apiSent,
         },
+        timestamp: new Date().toISOString(),
       };
     } catch (error: any) {
       this.logger.error('❌ Erro ao listar transações:', error);
@@ -130,6 +147,33 @@ export class TransactionsController {
         error: error.message,
       });
     }
+  }
+
+  /**
+   * Lista apenas transações pendentes (atalho para backward compatibility)
+   * GET /admin/transactions/pending
+   */
+  @Get('pending')
+  async listPendingTransactions(
+    @Query('userId') userId?: string,
+    @Query('accountId') accountId?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+  ) {
+    return this.listTransactions(
+      userId,
+      accountId,
+      dateFrom,
+      dateTo,
+      'PENDING',
+      undefined,
+      undefined,
+      undefined,
+      limit,
+      page,
+    );
   }
 
   /**
