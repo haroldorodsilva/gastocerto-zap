@@ -1,7 +1,20 @@
-import { Controller, Post, Get, Body, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  BadRequestException,
+} from '@nestjs/common';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { RAGLearningService } from '@infrastructure/rag/services/rag-learning.service';
 import { PrismaService } from '@core/database/prisma.service';
+import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
+import { expandCategoriesForRAG } from '@features/users/user-cache.service';
 
 /**
  * Controller Admin para testes e análise do sistema RAG
@@ -14,10 +27,13 @@ import { PrismaService } from '@core/database/prisma.service';
  */
 @Controller('admin/rag')
 export class RagAdminController {
+  private readonly logger = new Logger(RagAdminController.name);
+
   constructor(
     private readonly ragService: RAGService,
     private readonly ragLearningService: RAGLearningService,
     private readonly prisma: PrismaService,
+    private readonly gastoCertoApiService: GastoCertoApiService,
   ) {}
 
   /**
@@ -61,9 +77,12 @@ export class RagAdminController {
     const { userId, query } = body;
     const startTime = Date.now();
 
+    this.logger.log(`🔍 [TEST-MATCH] Iniciando teste para userId: ${userId}`);
+    this.logger.log(`💬 [TEST-MATCH] Query: "${query}"`);
+
     // Buscar categorias do usuário
     const userCache = await this.prisma.userCache.findUnique({
-      where: { id: userId },
+      where: { gastoCertoId: userId },
       select: {
         gastoCertoId: true,
         phoneNumber: true,
@@ -73,8 +92,16 @@ export class RagAdminController {
     });
 
     if (!userCache) {
+      this.logger.error(`❌ [TEST-MATCH] Usuário ${userId} não encontrado no cache`);
       throw new Error(`Usuário ${userId} não encontrado no cache`);
     }
+
+    this.logger.log(
+      `✅ [TEST-MATCH] Usuário encontrado: ${userCache.name} (${userCache.phoneNumber})`,
+    );
+    this.logger.log(
+      `🏪 [TEST-MATCH] ActiveAccountId: ${userCache.activeAccountId || 'Não definido'}`,
+    );
 
     // Buscar sinônimos personalizados do usuário
     const userSynonyms = await this.prisma.userSynonym.findMany({
@@ -82,19 +109,77 @@ export class RagAdminController {
       orderBy: { confidence: 'desc' },
     });
 
+    this.logger.log(`📚 [TEST-MATCH] Sinônimos do usuário: ${userSynonyms.length}`);
+
+    // 🔥 INDEXAR CATEGORIAS (igual ao fluxo de mensagens)
+    this.logger.log(`📦 [TEST-MATCH] Buscando e indexando categorias...`);
+
+    try {
+      // Buscar categorias da API (todas as contas)
+      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
+        userCache.gastoCertoId,
+      );
+
+      if (categoriesResponse?.accounts?.length > 0) {
+        // Encontrar a conta ativa
+        const activeAccount = categoriesResponse.accounts.find(
+          (acc) => acc.id === userCache.activeAccountId,
+        );
+
+        if (activeAccount && activeAccount.categories.length > 0) {
+          // Expandir categorias (criar entrada para cada subcategoria)
+          const userCategories = expandCategoriesForRAG(activeAccount.categories);
+
+          // Indexar no Redis
+          await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
+
+          this.logger.log(
+            `✅ [TEST-MATCH] ${userCategories.length} categorias indexadas no Redis (conta: ${activeAccount.name})`,
+          );
+        } else {
+          this.logger.warn(
+            `⚠️ [TEST-MATCH] Conta ativa não encontrada ou sem categorias (accountId: ${userCache.activeAccountId})`,
+          );
+        }
+      } else {
+        this.logger.warn(`⚠️ [TEST-MATCH] Nenhuma conta encontrada para o usuário`);
+      }
+    } catch (indexError) {
+      this.logger.error(`❌ [TEST-MATCH] Erro ao indexar categorias:`, indexError);
+    }
+
     // Normalizar query e tokenizar
     const queryNormalized = this.ragService['normalize'](query);
     const queryTokens = this.ragService['tokenize'](queryNormalized);
+
+    this.logger.log(`🧬 [TEST-MATCH] Query normalizada: "${queryNormalized}"`);
+    this.logger.log(`🔠 [TEST-MATCH] Tokens: [${queryTokens.join(', ')}]`);
 
     // Buscar TODAS as categorias indexadas do usuário
     const cacheKey = `rag:categories:${userCache.gastoCertoId}`;
     const redisClient = await this.ragService['cacheManager'].get<string>(cacheKey);
     const allCategories = redisClient ? JSON.parse(redisClient) : [];
 
+    this.logger.log(`📁 [TEST-MATCH] Categorias indexadas no Redis: ${allCategories.length}`);
+    if (allCategories.length === 0) {
+      this.logger.warn(`⚠️ [TEST-MATCH] NENHUMA categoria indexada para o usuário!`);
+      this.logger.warn(`⚠️ [TEST-MATCH] Cache key: ${cacheKey}`);
+    }
+
     // Executar matching SEM criar logs (threshold padrão)
+    this.logger.log(`🎯 [TEST-MATCH] Executando matching RAG...`);
     const result = await this.ragService.findSimilarCategories(query, userCache.gastoCertoId, {
       skipLogging: true,
     });
+
+    this.logger.log(
+      `📊 [TEST-MATCH] Resultado do matching: ${result.length} match(es) encontrado(s)`,
+    );
+    if (result.length > 0) {
+      this.logger.log(
+        `🥇 [TEST-MATCH] Melhor match: "${result[0].categoryName}" (score: ${result[0].score})`,
+      );
+    }
 
     // Se não encontrou matches, calcular scores de TODAS as categorias para debug
     let topNonMatching: any[] = [];
@@ -136,6 +221,16 @@ export class RagAdminController {
 
     // Gerar body de exemplo para criar transação
     const bestMatch = result.length > 0 ? result[0] : null;
+
+    this.logger.log(`🔨 [TEST-MATCH] Gerando transaction body...`);
+    if (bestMatch) {
+      this.logger.log(
+        `✅ [TEST-MATCH] Match encontrado - categoryId: ${bestMatch.categoryId}, subCategoryId: ${bestMatch.subCategoryId || 'null'}`,
+      );
+    } else {
+      this.logger.warn(`⚠️ [TEST-MATCH] Nenhum match - transaction body sem categoria`);
+    }
+
     const transactionBody = bestMatch
       ? {
           userId: userCache.gastoCertoId,
@@ -162,6 +257,9 @@ export class RagAdminController {
         };
 
     const processingTime = Date.now() - startTime;
+
+    this.logger.log(`⏱️ [TEST-MATCH] Tempo de processamento: ${processingTime}ms`);
+    this.logger.log(`✅ [TEST-MATCH] Teste concluído com sucesso`);
 
     return {
       matches: result,
@@ -215,59 +313,188 @@ export class RagAdminController {
   }> {
     const { userId, query } = body;
 
+    this.logger.log(`🔬 [ANALYZE] Iniciando análise detalhada para userId: ${userId}`);
+
     const userCache = await this.prisma.userCache.findUnique({
-      where: { id: userId },
-      select: { gastoCertoId: true },
+      where: { gastoCertoId: userId },
+      select: {
+        gastoCertoId: true,
+        activeAccountId: true,
+      },
     });
 
     if (!userCache) {
-      throw new Error(`Usuário ${userId} não encontrado no cache`);
+      this.logger.error(`❌ [ANALYZE] Usuário ${userId} não encontrado no cache`);
+      throw new BadRequestException(`Usuário ${userId} não encontrado no cache`);
+    }
+
+    // 🔥 INDEXAR CATEGORIAS (igual ao test-match)
+    this.logger.log(`📦 [ANALYZE] Buscando e indexando categorias...`);
+
+    try {
+      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
+        userCache.gastoCertoId,
+      );
+
+      if (categoriesResponse?.accounts?.length > 0) {
+        const activeAccount = categoriesResponse.accounts.find(
+          (acc) => acc.id === userCache.activeAccountId,
+        );
+
+        if (activeAccount && activeAccount.categories.length > 0) {
+          const userCategories = expandCategoriesForRAG(activeAccount.categories);
+          await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
+          this.logger.log(`✅ [ANALYZE] ${userCategories.length} categorias indexadas`);
+        }
+      }
+    } catch (indexError) {
+      this.logger.error(`❌ [ANALYZE] Erro ao indexar:`, indexError);
     }
 
     // Normalizar query
     const queryNormalized = this.ragService['normalize'](query);
     const queryTokens = this.ragService['tokenize'](queryNormalized);
 
-    // Buscar todas categorias
-    const allCategories = await this.ragService['getUserCategories'](userCache.gastoCertoId);
+    this.logger.log(`🔠 [ANALYZE] Tokens: [${queryTokens.join(', ')}]`);
 
-    // Calcular score para CADA categoria
-    const categoriesWithScores = allCategories.map((cat) => {
-      const categoryText = `${cat.name} ${cat.subCategory?.name || ''}`;
-      const categoryNormalized = this.ragService['normalize'](categoryText);
-      const categoryTokens = this.ragService['tokenize'](categoryNormalized);
+    // Buscar categorias usando método do RAGService (igual test-match)
+    const allCategories = await this.ragService.getCachedCategories(userCache.gastoCertoId);
+    this.logger.log(`📁 [ANALYZE] Categorias para análise: ${allCategories.length}`);
 
-      // Calcular score BM25
-      const score = this.ragService['calculateBM25Score'](queryTokens, categoryTokens);
-
-      // Verificar tokens que deram match
-      const matchedTokens = queryTokens.filter((qt) => categoryTokens.includes(qt));
-
-      // Determinar razão do score
-      let reason = 'Sem match';
-      if (score > 0.5) reason = 'Match forte';
-      else if (score > 0.3) reason = 'Match médio';
-      else if (score > 0.1) reason = 'Match fraco';
-
+    if (allCategories.length === 0) {
+      this.logger.warn(`⚠️ [ANALYZE] Nenhuma categoria para analisar!`);
       return {
-        categoryId: cat.id,
-        categoryName: cat.name,
-        subCategoryId: cat.subCategory?.id,
-        subCategoryName: cat.subCategory?.name,
-        score,
-        matchedTokens,
-        reason,
+        query,
+        queryNormalized,
+        queryTokens,
+        categories: [],
       };
+    }
+
+    // 🔥 USAR EXATAMENTE O MESMO RESULTADO que o test-match
+    // Executar o RAG real para ter os resultados corretos
+    const ragResults = await this.ragService.findSimilarCategories(query, userCache.gastoCertoId);
+
+    // Criar um mapa dos resultados do RAG para acesso rápido
+    const ragResultsMap = new Map();
+    ragResults.forEach((result) => {
+      const key = `${result.categoryId}:${result.subCategoryId || 'null'}`;
+      ragResultsMap.set(key, result);
     });
 
-    // Ordenar por score (maior primeiro)
+    // Mapear todas as categorias mostrando os scores reais do RAG
+    const categoriesWithScores = allCategories.map((cat) => {
+      const key = `${cat.id}:${cat.subCategory?.id || 'null'}`;
+      const ragResult = ragResultsMap.get(key);
+
+      if (ragResult) {
+        // Esta categoria teve match no RAG - usar score real
+        const reasons: string[] = [];
+
+        // Analisar como o score foi calculado
+        const queryTokens = this.ragService['tokenize'](this.ragService['normalize'](query));
+        const fullText = cat.subCategory?.name ? `${cat.name} ${cat.subCategory.name}` : cat.name;
+        const normalizedText = this.ragService['normalize'](fullText);
+        const categoryTokens = this.ragService['tokenize'](normalizedText);
+
+        // Score BM25 base
+        const bm25Score = this.ragService['calculateBM25Score'](queryTokens, categoryTokens);
+        if (bm25Score > 0) {
+          reasons.push(`BM25: ${bm25Score.toFixed(4)}`);
+        }
+
+        // Verificar word boundary matches
+        if (cat.subCategory?.name) {
+          const normalizedSubCat = this.ragService['normalize'](cat.subCategory.name);
+          const subCatRegex = new RegExp(`\\b${normalizedSubCat}\\b`, 'i');
+          if (
+            normalizedSubCat.length >= 3 &&
+            subCatRegex.test(this.ragService['normalize'](query))
+          ) {
+            reasons.push('Match direto: +10.0');
+          }
+        }
+
+        // Verificar tokens individuais
+        const matchingTokens = queryTokens.filter((qt) => categoryTokens.includes(qt));
+        if (matchingTokens.length > 0) {
+          const boost = matchingTokens.length * 2.0;
+          reasons.push(`Tokens: [${matchingTokens.join(', ')}] (+${boost.toFixed(1)})`);
+        }
+
+        // All tokens match
+        if (
+          queryTokens.length > 0 &&
+          queryTokens.every((token) => categoryTokens.includes(token))
+        ) {
+          reasons.push('All tokens: +8.0');
+        }
+
+        return {
+          categoryId: cat.id,
+          categoryName: cat.name,
+          subCategoryId: cat.subCategory?.id,
+          subCategoryName: cat.subCategory?.name,
+          score: ragResult.score,
+          matchedTokens: queryTokens.filter((qt) => categoryTokens.includes(qt)),
+          reason:
+            reasons.length > 0 ? reasons.join(' | ') : `Score RAG: ${ragResult.score.toFixed(4)}`,
+        };
+      } else {
+        // Esta categoria não teve match no RAG
+        return {
+          categoryId: cat.id,
+          categoryName: cat.name,
+          subCategoryId: cat.subCategory?.id,
+          subCategoryName: cat.subCategory?.name,
+          score: 0,
+          matchedTokens: [],
+          reason: 'Sem match',
+        };
+      }
+    });
+
+    // Ordenar por score
     categoriesWithScores.sort((a, b) => b.score - a.score);
+
+    // Pegar top 20
+    const topCategories = categoriesWithScores.slice(0, 20);
+
+    const topScore = categoriesWithScores[0]?.score || 0;
+    const categoriesWithMatches = categoriesWithScores.filter((c) => c.score > 0).length;
+
+    this.logger.log(
+      `✅ [ANALYZE] Análise concluída - Top score: ${topScore.toFixed(4)} | ${categoriesWithMatches}/${allCategories.length} categorias com score > 0`,
+    );
+
+    // Buscar sinônimos para mostrar nas informações
+    const userSynonyms = await this.prisma.userSynonym.findMany({
+      where: {
+        OR: [{ userId: userCache.gastoCertoId }, { userId: 'GLOBAL' }],
+      },
+    });
+
+    const userSynCount = userSynonyms.filter((s) => s.userId === userCache.gastoCertoId).length;
+    const globalSynCount = userSynonyms.filter((s) => s.userId === 'GLOBAL').length;
+
+    this.logger.log(
+      `📚 [ANALYZE] Sinônimos: ${userSynCount} do usuário + ${globalSynCount} globais = ${userSynonyms.length} total`,
+    );
+
+    if (categoriesWithMatches === 0) {
+      this.logger.warn(`⚠️ [ANALYZE] Nenhuma categoria teve score > 0`);
+      this.logger.log(`🔍 [ANALYZE] Primeiras 3 categorias disponíveis para debug:`);
+      allCategories.slice(0, 3).forEach((cat, idx) => {
+        const subCatText = cat.subCategory?.name ? ` > ${cat.subCategory.name}` : '';
+        this.logger.log(`   ${idx + 1}. ${cat.name}${subCatText} (ID: ${cat.id})`);
+      });
+    }
 
     return {
       query,
       queryNormalized,
       queryTokens,
-      categories: categoriesWithScores,
+      categories: topCategories,
     };
   }
 
@@ -275,7 +502,18 @@ export class RagAdminController {
    * Cria sinônimo global (aplicado a todos os usuários)
    *
    * POST /admin/rag/synonym/global
-   * Body: { keyword: string, categoryId: string, subCategoryId?: string }
+   * Body: { keyword: string, categoryName: string, subCategoryName?: string }
+   *
+   * 💡 IMPORTANTE: Use NOMES de categorias, não IDs!
+   * - Cada usuário tem IDs de categorias diferentes
+   * - O matching é feito por nome da categoria/subcategoria
+   *
+   * Exemplo:
+   * {
+   *   "keyword": "uber",
+   *   "categoryName": "Transporte",
+   *   "subCategoryName": "Aplicativos"
+   * }
    */
   @Post('synonym/global')
   @HttpCode(HttpStatus.CREATED)
@@ -283,25 +521,36 @@ export class RagAdminController {
     @Body()
     body: {
       keyword: string;
-      categoryId: string;
-      subCategoryId?: string;
+      categoryName: string;
+      subCategoryName?: string;
     },
   ): Promise<{ message: string; synonym: any }> {
-    const { keyword, categoryId, subCategoryId } = body;
+    const { keyword, categoryName, subCategoryName } = body;
+
+    if (!keyword || !categoryName) {
+      throw new BadRequestException('keyword e categoryName são obrigatórios');
+    }
+
+    this.logger.log(
+      `🌍 [GLOBAL-SYNONYM] Criando sinônimo global: "${keyword}" → ${categoryName}${subCategoryName ? ' > ' + subCategoryName : ''}`,
+    );
 
     // Criar sinônimo com userId = 'GLOBAL' para aplicar a todos
+    // Usa NOMES como referência, não IDs (cada usuário tem IDs diferentes)
     const synonym = await this.prisma.userSynonym.create({
       data: {
         userId: 'GLOBAL',
         keyword: keyword.toLowerCase().trim(),
-        categoryId,
-        categoryName: categoryId, // TODO: Buscar nome real da categoria
-        subCategoryId: subCategoryId || '',
-        subCategoryName: subCategoryId || '',
+        categoryId: 'GLOBAL', // ID placeholder (matching é por nome)
+        categoryName: categoryName.trim(),
+        subCategoryId: subCategoryName ? 'GLOBAL' : null,
+        subCategoryName: subCategoryName?.trim() || null,
         confidence: 1.0,
         source: 'ADMIN_APPROVED',
       },
     });
+
+    this.logger.log(`✅ [GLOBAL-SYNONYM] Sinônimo global criado: ID ${synonym.id}`);
 
     // Limpar cache RAG para forçar reindexação
     await this.ragService.clearCache?.();
@@ -333,7 +582,7 @@ export class RagAdminController {
 
     // Buscar gastoCertoId do usuário
     const userCache = await this.prisma.userCache.findUnique({
-      where: { id: userId },
+      where: { gastoCertoId: userId },
       select: { gastoCertoId: true },
     });
 
@@ -369,7 +618,7 @@ export class RagAdminController {
   @Get('synonyms/:userId')
   async getUserSynonyms(@Param('userId') userId: string): Promise<any[]> {
     const userCache = await this.prisma.userCache.findUnique({
-      where: { id: userId },
+      where: { gastoCertoId: userId },
       select: { gastoCertoId: true },
     });
 
@@ -388,6 +637,8 @@ export class RagAdminController {
    * Útil para ver queries que não deram match
    *
    * GET /admin/rag/logs/:userId?failedOnly=true
+   *
+   * @param userId - gastoCertoId do usuário (UUID)
    */
   @Get('logs/:userId')
   async getUserLogs(
@@ -396,7 +647,7 @@ export class RagAdminController {
     @Query('limit') limit?: string,
   ): Promise<any[]> {
     const userCache = await this.prisma.userCache.findUnique({
-      where: { id: userId },
+      where: { gastoCertoId: userId },
       select: { gastoCertoId: true },
     });
 
@@ -445,5 +696,22 @@ export class RagAdminController {
     }
 
     return suggestions;
+  }
+
+  // Métodos auxiliares para normalização e tokenização (implementação simples)
+  private normalize(text: string): string {
+    return text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Remove diacríticos
+      .replace(/[^\w\s]/g, ' ')
+      .trim();
+  }
+
+  private tokenize(text: string): string[] {
+    return text
+      .split(/\s+/)
+      .filter((token) => token.length > 0)
+      .map((token) => token.replace(/s$/, '')); // Remove plural simples
   }
 }

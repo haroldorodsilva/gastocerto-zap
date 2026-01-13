@@ -579,11 +579,10 @@ export class RAGService {
           validSubCatTokens.length > 0 &&
           validSubCatTokens.every((sct) => queryTokens.includes(sct));
 
-        // Match direto: subcategoria completa aparece na query OU query aparece na subcategoria
-        const isDirectMatch =
-          (normalizedQuery.includes(normalizedSubCat) ||
-            normalizedSubCat.includes(normalizedQuery)) &&
-          normalizedSubCat.length >= 3; // Mínimo 3 caracteres para evitar matches muito genéricos
+        // Match direto: subcategoria completa aparece como PALAVRA COMPLETA na query
+        // Usa word boundaries para evitar matches parciais (ex: "gas" em "gastei")
+        const subCatRegex = new RegExp(`\\b${normalizedSubCat}\\b`, 'i');
+        const isDirectMatch = normalizedSubCat.length >= 3 && subCatRegex.test(normalizedQuery);
 
         if (isDirectMatch) {
           score += 10.0; // Boost GIGANTE para match direto de subcategoria
@@ -599,18 +598,45 @@ export class RAGService {
       }
 
       // 🆕 BOOST PARA SINÔNIMOS PERSONALIZADOS (prioritário - maior confiança)
-      const userSynonymMatch = userSynonyms.find(
-        (syn) =>
-          syn.categoryId === category.id &&
-          (!syn.subCategoryId || syn.subCategoryId === category.subCategory?.id),
-      );
+      // Para sinônimos GLOBAIS: match por NOME (categoryName/subCategoryName)
+      // Para sinônimos de USUÁRIO: match por ID (mais preciso)
+      const userSynonymMatch = userSynonyms.find((syn) => {
+        if (syn.isGlobal) {
+          // Sinônimo GLOBAL: match por NOME (normalizado)
+          const synCatNorm = this.normalize(syn.categoryName);
+          const catNorm = this.normalize(category.name);
+
+          const categoryMatches = synCatNorm === catNorm;
+
+          if (syn.subCategoryName && category.subCategory?.name) {
+            const synSubCatNorm = this.normalize(syn.subCategoryName);
+            const subCatNorm = this.normalize(category.subCategory.name);
+            return categoryMatches && synSubCatNorm === subCatNorm;
+          }
+
+          return categoryMatches;
+        } else {
+          // Sinônimo de USUÁRIO: match por ID (mais preciso)
+          return (
+            syn.categoryId === category.id &&
+            (!syn.subCategoryId || syn.subCategoryId === category.subCategory?.id)
+          );
+        }
+      });
 
       if (userSynonymMatch) {
-        // Boost MUITO alto para sinônimos personalizados (3.0x base + confiança)
-        const userSynonymBoost = 3.0 * userSynonymMatch.confidence;
+        // Boost diferenciado: subcategoria = 5.0x, categoria = 3.0x
+        const isSubcategoryMatch = userSynonymMatch.subCategoryName && category.subCategory?.name;
+        const baseBoost = isSubcategoryMatch ? 5.0 : 3.0;
+        const userSynonymBoost = baseBoost * userSynonymMatch.confidence;
+
         score += userSynonymBoost;
+
+        const synonymType = userSynonymMatch.isGlobal ? 'GLOBAL' : 'USER';
+        const matchLevel = isSubcategoryMatch ? 'subcategoria' : 'categoria';
+
         this.logger.log(
-          `🎯 MATCH SINÔNIMO PERSONALIZADO: "${userSynonymMatch.keyword}" → "${category.name}"${category.subCategory ? ' → ' + category.subCategory.name : ''} (boost +${userSynonymBoost.toFixed(2)})`,
+          `🎯 MATCH SINÔNIMO ${synonymType} (${matchLevel}): "${userSynonymMatch.keyword}" → "${category.name}"${category.subCategory ? ' > ' + category.subCategory.name : ''} (boost +${userSynonymBoost.toFixed(2)})`,
         );
       }
 
@@ -1184,6 +1210,7 @@ export class RAGService {
       subCategoryId?: string;
       subCategoryName?: string;
       confidence: number;
+      isGlobal?: boolean;
     }>
   > {
     try {
@@ -1195,19 +1222,34 @@ export class RAGService {
       // Tokenizar query para buscar matches parciais
       const queryTokens = this.tokenize(normalizedQuery);
 
-      // Buscar sinônimos que contenham algum token da query
+      // Buscar sinônimos do usuário E globais
       const synonyms = await this.prisma.userSynonym.findMany({
         where: {
-          userId,
-          OR: queryTokens.map((token) => ({
-            keyword: {
-              contains: token,
+          OR: [
+            {
+              // Sinônimos do usuário
+              userId,
+              OR: queryTokens.map((token) => ({
+                keyword: {
+                  contains: token,
+                },
+              })),
             },
-          })),
+            {
+              // Sinônimos globais (aplicados a todos)
+              userId: 'GLOBAL',
+              OR: queryTokens.map((token) => ({
+                keyword: {
+                  contains: token,
+                },
+              })),
+            },
+          ],
         },
-        orderBy: {
-          confidence: 'desc', // Priorizar sinônimos com maior confiança
-        },
+        orderBy: [
+          { userId: 'asc' }, // Prioriza usuário sobre GLOBAL
+          { confidence: 'desc' }, // Depois por confiança
+        ],
       });
 
       // Atualizar usageCount e lastUsedAt para os sinônimos encontrados
@@ -1225,6 +1267,10 @@ export class RAGService {
             lastUsedAt: new Date(),
           },
         });
+
+        this.logger.log(
+          `📚 Encontrados ${synonyms.length} sinônimos (${synonyms.filter((s) => s.userId === userId).length} do usuário, ${synonyms.filter((s) => s.userId === 'GLOBAL').length} globais)`,
+        );
       }
 
       return synonyms.map((s) => ({
@@ -1234,6 +1280,7 @@ export class RAGService {
         subCategoryId: s.subCategoryId || undefined,
         subCategoryName: s.subCategoryName || undefined,
         confidence: s.confidence,
+        isGlobal: s.userId === 'GLOBAL',
       }));
     } catch (error) {
       this.logger.error('Erro ao buscar sinônimos personalizados:', error);
