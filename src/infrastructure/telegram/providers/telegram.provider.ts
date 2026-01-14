@@ -393,49 +393,6 @@ export class TelegramProvider implements IMessagingProvider {
   }
 
   /**
-   * Força logout no Telegram para desconectar todas as instâncias ativas
-   * Útil quando há erro 409 (conflito de múltiplas instâncias)
-   */
-  private async forceLogoutFromTelegram(): Promise<boolean> {
-    const sessionInfo = `${this.sessionName} (${this.sessionId})`;
-
-    if (!this.bot || !this.lastConfig?.credentials?.token) {
-      this.logger.warn(`⚠️  Bot ou token não disponível para forçar logout de ${sessionInfo}`);
-      return false;
-    }
-
-    try {
-      this.logger.log(
-        `🔌 Forçando logout de todas as instâncias no Telegram para ${sessionInfo}...`,
-      );
-
-      // Usar logOut para forçar desconexão de todas as instâncias
-      // Isso faz uma chamada direta à API do Telegram
-      const token = this.lastConfig.credentials.token;
-      const response = await fetch(`https://api.telegram.org/bot${token}/logOut`, {
-        method: 'POST',
-      });
-
-      const data = await response.json();
-
-      if (data.ok) {
-        this.logger.log(`✅ Logout forçado com sucesso para ${sessionInfo}`);
-        return true;
-      } else if (data.error_code === 400 && data.description?.includes('Logged out')) {
-        this.logger.log(`ℹ️  Bot já estava deslogado para ${sessionInfo}`);
-        return false; // Já estava deslogado, não precisa esperar tanto
-      } else {
-        this.logger.warn(`⚠️  Logout retornou: ${JSON.stringify(data)}`);
-        return false;
-      }
-    } catch (error: any) {
-      this.logger.warn(`⚠️  Erro ao forçar logout (ignorando): ${error.message}`);
-      return false;
-      // Não lançar erro - continuar com o processo de reconexão
-    }
-  }
-
-  /**
    * Tenta reconectar automaticamente após erro crítico
    */
   private async attemptReconnect(errorType: string): Promise<void> {
@@ -487,21 +444,22 @@ export class TelegramProvider implements IMessagingProvider {
     );
 
     try {
-      // Se for erro 409, forçar logout no Telegram para desconectar outras instâncias
-      let needsLongerWait = false;
-      if (errorType.includes('409 Conflict')) {
-        const loggedOut = await this.forceLogoutFromTelegram();
-        needsLongerWait = loggedOut; // Se fez logout, precisa esperar mais
-      }
+      // ✅ FIX: NÃO fazer logout forçado - apenas desconectar e reconectar
+      // Fazer logout invalida o token e requer gerar novo token no BotFather
+      // Em vez disso, apenas parar polling e aguardar antes de reconectar
 
-      // Desconectar completamente
+      // Desconectar completamente (para polling atual)
       await this.disconnect();
 
       // Aguardar antes de reconectar (aumentar progressivamente)
-      // Se fez logout com sucesso, aguardar mais tempo para o Telegram processar
-      let baseWaitTime = Math.min(this.reconnectAttempts * 3000, 10000); // 3s, 6s, max 10s
-      if (needsLongerWait) {
-        baseWaitTime += 5000; // +5s extra se fez logout (para o Telegram processar)
+      let baseWaitTime = Math.min(this.reconnectAttempts * 5000, 15000); // 5s, 10s, max 15s
+
+      // Para erro 409, aguardar mais tempo para outras instâncias desconectarem
+      if (errorType.includes('409 Conflict')) {
+        baseWaitTime += 5000; // +5s extra para conflitos
+        this.logger.log(
+          `⚠️  Erro 409 detectado. Aguardando ${baseWaitTime}ms para outras instâncias desconectarem...`,
+        );
       }
 
       this.logger.log(`⏳ Aguardando ${baseWaitTime}ms antes de reconectar...`);
