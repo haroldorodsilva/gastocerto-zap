@@ -2426,7 +2426,7 @@ isActive: ${dto.isActive}
         };
       }
 
-      // Buscar sinônimos
+      // Buscar sinônimos com dados do usuário via relacionamento Prisma
       const [synonyms, total] = await Promise.all([
         this.prisma.userSynonym.findMany({
           where,
@@ -2447,6 +2447,13 @@ isActive: ${dto.isActive}
             lastUsedAt: true,
             createdAt: true,
             updatedAt: true,
+            user: {
+              select: {
+                gastoCertoId: true,
+                name: true,
+                email: true,
+              },
+            },
           },
         }),
         this.prisma.userSynonym.count({ where }),
@@ -2655,46 +2662,28 @@ isActive: ${dto.isActive}
       const categoryId = dto.categoryId || '';
       const subCategoryId = dto.subCategoryId || '';
 
-      // Buscar todos usuários ativos com cache
-      const activeUsers = await this.prisma.userCache.findMany({
-        where: {
-          isActive: true,
-        },
-        select: {
-          gastoCertoId: true,
+      // Criar UM ÚNICO sinônimo global (userId = null)
+      // Este sinônimo será usado por TODOS os usuários
+      const globalSynonym = await this.prisma.userSynonym.create({
+        data: {
+          userId: null, // NULL = sinônimo global para todos
+          keyword: dto.keyword.toLowerCase().trim(),
+          categoryId: categoryId,
+          categoryName: dto.categoryName,
+          subCategoryId: subCategoryId,
+          subCategoryName: dto.subCategoryName,
+          confidence: dto.confidence ?? 1.0,
+          source: 'ADMIN_APPROVED',
         },
       });
 
-      const results = {
-        created: 0,
-        failed: 0,
-        totalUsers: activeUsers.length,
-      };
-
-      // Criar sinônimo para cada usuário
-      for (const user of activeUsers) {
-        try {
-          await this.ragService.addUserSynonym({
-            userId: user.gastoCertoId,
-            keyword: dto.keyword,
-            categoryId: categoryId,
-            categoryName: dto.categoryName,
-            subCategoryId: subCategoryId,
-            subCategoryName: dto.subCategoryName,
-            confidence: dto.confidence ?? 1.0,
-            source: 'ADMIN_APPROVED',
-          });
-          results.created++;
-        } catch (error) {
-          results.failed++;
-          // Não logar cada erro individual para não poluir logs
-        }
-      }
-
+      this.logger.log(
+        `✅ Sinônimo global criado: ${globalSynonym.id} - "${dto.keyword}" → ${dto.categoryName}`,
+      );
       return {
         success: true,
-        message: `Sinônimo global criado para ${results.created} usuários`,
-        ...results,
+        message: 'Sinônimo global criado com sucesso',
+        data: globalSynonym,
         timestamp: new Date().toISOString(),
       };
     } catch (error: any) {

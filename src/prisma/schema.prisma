@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,31 +7,29 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Sessões WhatsApp
 model WhatsAppSession {
   id            String        @id @default(uuid())
   sessionId     String        @unique
-  phoneNumber   String // Removido @unique - será preenchido após QR code
+  phoneNumber   String
   name          String?
   status        SessionStatus @default(INACTIVE)
-  creds         Json? // Credenciais Baileys (chaves, tokens)
+  creds         Json?
   isActive      Boolean       @default(true)
   lastSeen      DateTime?
-  lastConnected DateTime? // Última conexão bem-sucedida
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+  lastConnected DateTime?
 
   @@index([phoneNumber])
   @@index([status])
   @@map("whatsapp_sessions")
 }
 
-// Sessões Telegram
 model TelegramSession {
   id        String        @id @default(uuid())
   sessionId String        @unique
   name      String
-  token     String // Token do bot obtido via @BotFather
+  token     String
   status    SessionStatus @default(INACTIVE)
   isActive  Boolean       @default(true)
   lastSeen  DateTime?
@@ -45,25 +40,15 @@ model TelegramSession {
   @@map("telegram_sessions")
 }
 
-enum SessionStatus {
-  INACTIVE
-  CONNECTING
-  QR_PENDING
-  CONNECTED
-  DISCONNECTED
-  ERROR
-}
-
-// Sessões de Onboarding (cadastro de novos usuários)
 model OnboardingSession {
   id            String         @id @default(uuid())
-  platformId    String         @unique // Telegram chatId ou WhatsApp number
-  phoneNumber   String? // Telefone real do usuário (opcional até ser coletado)
+  platformId    String         @unique
+  phoneNumber   String?
   currentStep   OnboardingStep @default(COLLECT_NAME)
   data          Json           @default("{}")
   attempts      Int            @default(0)
   lastMessageAt DateTime       @default(now())
-  expiresAt     DateTime // 30 minutos de inatividade
+  expiresAt     DateTime
   completed     Boolean        @default(false)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -72,6 +57,306 @@ model OnboardingSession {
   @@index([phoneNumber])
   @@index([expiresAt])
   @@map("onboarding_sessions")
+}
+
+model UserCache {
+  id                       String                    @id @default(uuid())
+  phoneNumber              String                    @unique
+  gastoCertoId             String                    @unique
+  whatsappId               String?
+  telegramId               String?
+  email                    String
+  name                     String
+  hasActiveSubscription    Boolean                   @default(false)
+  activeAccountId          String?
+  accounts                 Json                      @default("[]")
+  categories               Json                      @default("[]")
+  preferences              Json?
+  lastSyncAt               DateTime                  @default(now())
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  isBlocked                Boolean                   @default(false)
+  isActive                 Boolean                   @default(true)
+  defaultCreditCardId      String?
+  transactionConfirmations TransactionConfirmation[]
+  unrecognizedMessages     UnrecognizedMessage[]
+  synonyms                 UserSynonym[]
+
+  @@index([phoneNumber])
+  @@index([gastoCertoId])
+  @@index([whatsappId])
+  @@index([telegramId])
+  @@index([activeAccountId])
+  @@map("user_cache")
+}
+
+model TransactionConfirmation {
+  id                String             @id @default(uuid())
+  phoneNumber       String
+  platform          String             @default("whatsapp")
+  userId            String?
+  accountId         String?
+  messageId         String             @unique
+  type              TransactionType
+  amount            Decimal            @db.Decimal(10, 2)
+  category          String
+  categoryId        String?
+  subCategoryId     String?
+  subCategoryName   String?
+  description       String?
+  date              DateTime           @default(now())
+  extractedData     Json
+  status            ConfirmationStatus @default(PENDING)
+  confirmedAt       DateTime?
+  notifiedExpiring  Boolean            @default(false)
+  apiSent           Boolean            @default(false)
+  apiSentAt         DateTime?
+  apiError          String?
+  apiRetryCount     Int                @default(0)
+  createdAt         DateTime           @default(now())
+  expiresAt         DateTime
+  aiUsageLogId      String?
+  ragSearchLogId    String?
+  creditCardId      String?
+  fixedFrequency    String?
+  installmentNumber Int                @default(1)
+  installments      Int?
+  invoiceMonth      String?
+  isFixed           Boolean            @default(false)
+  paymentStatus     String             @default("DONE")
+  deletedAt         DateTime?
+  user              UserCache?         @relation(fields: [userId], references: [id])
+
+  @@index([phoneNumber])
+  @@index([platform])
+  @@index([userId])
+  @@index([deletedAt])
+  @@index([accountId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([apiSent])
+  @@index([status, apiSent])
+  @@map("transaction_confirmations")
+}
+
+model AIUsageLog {
+  id                   String          @id @default(uuid())
+  userCacheId          String?
+  phoneNumber          String
+  provider             String
+  model                String
+  operation            AIOperationType
+  inputType            AIInputType
+  inputText            String?
+  inputTokens          Int
+  outputTokens         Int
+  totalTokens          Int
+  estimatedCost        Decimal         @db.Decimal(10, 6)
+  responseTime         Int?
+  success              Boolean         @default(true)
+  errorMessage         String?
+  metadata             Json?
+  createdAt            DateTime        @default(now())
+  ragSearchLogId       String?
+  ragInitialFound      Boolean?
+  ragInitialScore      Decimal?        @db.Decimal(5, 4)
+  ragInitialCategory   String?
+  aiCategoryId         String?
+  aiCategoryName       String?
+  aiConfidence         Decimal?        @db.Decimal(5, 4)
+  finalCategoryId      String?
+  finalCategoryName    String?
+  wasRagFallback       Boolean         @default(false)
+  needsSynonymLearning Boolean         @default(false)
+  ragSearchLog         RAGSearchLog?   @relation(fields: [ragSearchLogId], references: [id])
+
+  @@index([userCacheId])
+  @@index([phoneNumber])
+  @@index([provider])
+  @@index([operation])
+  @@index([createdAt])
+  @@index([ragSearchLogId])
+  @@index([wasRagFallback])
+  @@index([needsSynonymLearning])
+  @@map("ai_usage_logs")
+}
+
+model RAGSearchLog {
+  id                String       @id @default(uuid())
+  userId            String
+  query             String
+  queryNormalized   String
+  matches           Json
+  bestMatch         String?
+  bestScore         Decimal?     @db.Decimal(6, 4)
+  threshold         Decimal      @db.Decimal(5, 4)
+  success           Boolean
+  ragMode           String       @default("BM25")
+  responseTime      Int?
+  createdAt         DateTime     @default(now())
+  flowStep          Int          @default(1)
+  totalSteps        Int          @default(1)
+  aiProvider        String?
+  aiModel           String?
+  aiConfidence      Decimal?     @db.Decimal(5, 4)
+  aiCategoryId      String?
+  aiCategoryName    String?
+  finalCategoryId   String?
+  finalCategoryName String?
+  ragInitialScore   Decimal?     @db.Decimal(5, 4)
+  ragFinalScore     Decimal?     @db.Decimal(5, 4)
+  wasAiFallback     Boolean      @default(false)
+  aiUsageLogs       AIUsageLog[]
+
+  @@index([userId])
+  @@index([success])
+  @@index([createdAt])
+  @@index([userId, success])
+  @@index([wasAiFallback])
+  @@index([flowStep])
+  @@index([aiProvider])
+  @@map("rag_search_logs")
+}
+
+model UserSynonym {
+  id              String        @id @default(uuid())
+  userId          String?
+  keyword         String
+  categoryId      String?
+  categoryName    String
+  source          SynonymSource @default(USER_CONFIRMED)
+  usageCount      Int           @default(0)
+  lastUsedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  subCategoryId   String?
+  subCategoryName String?
+  confidence      Float         @default(1.0)
+
+  // Relacionamento com UserCache
+  user UserCache? @relation(fields: [userId], references: [gastoCertoId], onDelete: Cascade)
+
+  @@unique([userId, keyword])
+  @@index([userId])
+  @@index([userId, keyword])
+  @@index([usageCount])
+  @@map("user_synonyms")
+}
+
+model UnrecognizedMessage {
+  id             String     @id @default(uuid())
+  userCacheId    String?
+  phoneNumber    String
+  messageText    String
+  detectedIntent String?
+  confidence     Float?
+  wasProcessed   Boolean    @default(false)
+  addedToContext Boolean    @default(false)
+  userFeedback   String?
+  metadata       Json?
+  createdAt      DateTime   @default(now())
+  userCache      UserCache? @relation(fields: [userCacheId], references: [id])
+
+  @@index([userCacheId])
+  @@index([phoneNumber])
+  @@index([wasProcessed])
+  @@index([addedToContext])
+  @@index([createdAt])
+  @@map("unrecognized_messages")
+}
+
+model AIProviderConfig {
+  id              String    @id @default(uuid())
+  provider        String    @unique
+  displayName     String
+  enabled         Boolean   @default(true)
+  apiKey          String?
+  baseUrl         String?
+  textModel       String?
+  visionModel     String?
+  audioModel      String?
+  rpmLimit        Int?      @default(0)
+  tpmLimit        Int?      @default(0)
+  inputCostPer1M  Decimal?  @db.Decimal(10, 6)
+  outputCostPer1M Decimal?  @db.Decimal(10, 6)
+  cacheCostPer1M  Decimal?  @db.Decimal(10, 6)
+  supportsVision  Boolean   @default(false)
+  supportsAudio   Boolean   @default(false)
+  supportsCache   Boolean   @default(false)
+  cacheEnabled    Boolean   @default(false)
+  priority        Int       @default(999)
+  fallbackEnabled Boolean   @default(true)
+  metadata        Json?     @default("{}")
+  lastUsedAt      DateTime?
+  totalRequests   Int       @default(0)
+  totalErrors     Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([provider])
+  @@index([enabled])
+  @@index([priority])
+  @@map("ai_provider_configs")
+}
+
+model AISettings {
+  id                       String   @id @default(uuid())
+  textProvider             String   @default("openai")
+  imageProvider            String   @default("google_gemini")
+  audioProvider            String   @default("groq")
+  categoryProvider         String   @default("groq")
+  primaryProvider          String   @default("groq")
+  fallbackEnabled          Boolean  @default(true)
+  fallbackTextChain        String[] @default(["groq", "deepseek", "google_gemini", "openai"])
+  fallbackImageChain       String[] @default(["google_gemini", "openai"])
+  fallbackAudioChain       String[] @default(["openai", "groq"])
+  fallbackCategoryChain    String[] @default(["groq", "deepseek", "google_gemini", "openai"])
+  cacheEnabled             Boolean  @default(false)
+  cacheTTL                 Int      @default(3600)
+  rateLimitEnabled         Boolean  @default(true)
+  ragEnabled               Boolean  @default(false)
+  ragAiEnabled             Boolean  @default(false)
+  ragAiProvider            String   @default("groq")
+  ragProvider              String   @default("bm25")
+  ragThreshold             Float    @default(0.6)
+  ragCacheEnabled          Boolean  @default(true)
+  assistantEnabled         Boolean  @default(true)
+  assistantPersonality     String   @default("friendly")
+  assistantMaxHistoryMsgs  Int      @default(5)
+  autoRegisterThreshold    Float    @default(0.90) @map("auto_register_threshold")
+  minConfidenceThreshold   Float    @default(0.50) @map("min_confidence_threshold")
+  securityEnabled          Boolean  @default(true)
+  securityMaxMessageLength Int      @default(500)
+  securityRateLimitMinute  Int      @default(20)
+  securityRateLimitHour    Int      @default(100)
+  securityLogEvents        Boolean  @default(true)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@map("ai_settings")
+}
+
+model SecurityLog {
+  id        String           @id @default(uuid())
+  userId    String
+  eventType String
+  details   String           @db.VarChar(500)
+  severity  SecuritySeverity @default(low)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([severity, createdAt])
+  @@map("security_logs")
+}
+
+enum SessionStatus {
+  INACTIVE
+  CONNECTING
+  QR_PENDING
+  CONNECTED
+  DISCONNECTED
+  ERROR
 }
 
 enum OnboardingStep {
@@ -87,98 +372,6 @@ enum OnboardingStep {
   COMPLETED
 }
 
-// Cache de usuários da API Gasto Certo
-model UserCache {
-  id                    String  @id @default(uuid())
-  phoneNumber           String  @unique // Telefone normalizado SEM código do país: 66996285154 - CHAVE ÚNICA para suportar multi-plataforma
-  gastoCertoId          String  @unique // ID do usuário no sistema Gasto Certo
-  whatsappId            String? // ID do usuário no WhatsApp (ex: 5566996285154@s.whatsapp.net) - Pode ser null se não vinculado
-  telegramId            String? // ID do chat do usuário no Telegram (ex: 707624962) - Pode ser null se não vinculado
-  email                 String
-  name                  String
-  hasActiveSubscription Boolean @default(false)
-  isBlocked             Boolean @default(false) // 🆕 Usuário bloqueado (não pode usar o sistema)
-  isActive              Boolean @default(true) // 🆕 Usuário ativo (conta não desativada)
-
-  // 🆕 Gerenciamento de múltiplas contas
-  activeAccountId     String? // ID da conta ativa no momento (usado para todas operações)
-  accounts            Json    @default("[]") // Array de contas: [{ id, name, type, isPrimary }]
-  defaultCreditCardId String? // ✨ NOVO: ID do cartão de crédito padrão
-
-  categories               Json                      @default("[]")
-  preferences              Json?
-  lastSyncAt               DateTime                  @default(now())
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
-  unrecognizedMessages     UnrecognizedMessage[] // Mensagens não reconhecidas deste usuário
-  transactionConfirmations TransactionConfirmation[] // Confirmações de transações deste usuário
-
-  @@index([phoneNumber])
-  @@index([gastoCertoId])
-  @@index([whatsappId])
-  @@index([telegramId])
-  @@index([activeAccountId])
-  @@map("user_cache")
-}
-
-// Confirmações de transações pendentes
-model TransactionConfirmation {
-  id               String             @id @default(uuid())
-  phoneNumber      String
-  platform         String             @default("whatsapp") // Plataforma de origem: whatsapp | telegram
-  userId           String? // ID do UserCache - relação com usuário
-  user             UserCache?         @relation(fields: [userId], references: [id], onDelete: SetNull)
-  accountId        String? // ID da conta ativa no momento da transação
-  messageId        String             @unique
-  type             TransactionType
-  amount           Decimal            @db.Decimal(10, 2)
-  category         String // Nome da categoria (mantido para compatibilidade)
-  categoryId       String? // ID da categoria resolvida
-  subCategoryId    String? // ID da subcategoria resolvida (se houver)
-  subCategoryName  String? // Nome da subcategoria (para exibir ao usuário)
-  description      String?
-  date             DateTime           @default(now())
-  extractedData    Json // Dados brutos extraídos pela IA
-  status           ConfirmationStatus @default(PENDING)
-  confirmedAt      DateTime?
-  notifiedExpiring Boolean            @default(false) // Se já enviou aviso de expiração próxima
-
-  // Campos para tracking/análise (relacionar com logs da IA/RAG)
-  aiUsageLogId   String? // ID do log de uso da IA (se usou IA)
-  ragSearchLogId String? // ID do log de busca RAG (se usou RAG)
-  ragSearchLog   RAGSearchLog? @relation("RAGSearchToTransaction", fields: [ragSearchLogId], references: [id], onDelete: SetNull)
-
-  // Campos para controle de envio para API
-  apiSent Boolean @default(false) // Se foi enviado para API GastoCerto
-
-  // ✨ NOVOS CAMPOS - Transações Avançadas
-  isFixed           Boolean   @default(false) // Transação recorrente/fixa
-  fixedFrequency    String? // MONTHLY, WEEKLY, ANNUAL, BIENNIAL
-  installments      Int? // Número total de parcelas
-  installmentNumber Int       @default(1) // Número da parcela atual
-  creditCardId      String? // ID do cartão de crédito usado
-  paymentStatus     String    @default("DONE") // PENDING ou DONE
-  invoiceMonth      String? // Mês da fatura (YYYY-MM) para cartão de crédito
-  apiSentAt         DateTime? // Quando foi enviado com sucesso
-  apiError          String? // Última mensagem de erro da API
-  apiRetryCount     Int       @default(0) // Número de tentativas de envio
-
-  createdAt DateTime  @default(now())
-  expiresAt DateTime
-  deletedAt DateTime? // Soft delete - nunca apagar transações de verdade
-
-  @@index([phoneNumber])
-  @@index([platform])
-  @@index([userId])
-  @@index([deletedAt])
-  @@index([accountId])
-  @@index([status])
-  @@index([expiresAt])
-  @@index([apiSent])
-  @@index([status, apiSent])
-  @@map("transaction_confirmations")
-}
-
 enum TransactionType {
   EXPENSES
   INCOME
@@ -191,300 +384,27 @@ enum ConfirmationStatus {
   EXPIRED
 }
 
-// Log de uso de IA (tokens e custos)
-model AIUsageLog {
-  id            String          @id @default(uuid())
-  userCacheId   String? // ID do UserCache (pode ser null se usuário ainda não cadastrado)
-  phoneNumber   String // Telefone do usuário (sempre presente)
-  provider      String // openai, google-gemini, groq
-  model         String // gpt-4o, gemini-1.5-pro, etc
-  operation     AIOperationType // Tipo de operação
-  inputType     AIInputType // text, audio, image
-  inputText     String? // Texto de entrada (se aplicável)
-  inputTokens   Int // Tokens de entrada
-  outputTokens  Int // Tokens de saída
-  totalTokens   Int // Total de tokens
-  estimatedCost Decimal         @db.Decimal(10, 6) // Custo estimado em USD
-  responseTime  Int? // Tempo de resposta em ms
-  success       Boolean         @default(true)
-  errorMessage  String?
-  metadata      Json? // Dados adicionais (ex: confidence, categoria extraída)
-
-  // 🆕 Contexto RAG para análise e melhoria
-  ragSearchLogId       String? // ID do RAGSearchLog relacionado (se veio do fluxo RAG)
-  ragSearchLog         RAGSearchLog? @relation(fields: [ragSearchLogId], references: [id], onDelete: SetNull)
-  ragInitialFound      Boolean? // true se RAG encontrou algo no step 1 (mesmo abaixo do threshold)
-  ragInitialScore      Decimal?      @db.Decimal(5, 4) // Score do RAG inicial (step 1)
-  ragInitialCategory   String? // Categoria que RAG sugeriu no step 1
-  aiCategoryId         String? // ID da categoria que IA retornou
-  aiCategoryName       String? // Nome da categoria que IA retornou
-  aiConfidence         Decimal?      @db.Decimal(5, 4) // Confiança da IA
-  finalCategoryId      String? // ID da categoria final escolhida (após validação)
-  finalCategoryName    String? // Nome da categoria final escolhida
-  wasRagFallback       Boolean       @default(false) // true se foi fallback de RAG que falhou
-  needsSynonymLearning Boolean       @default(false) // true se deve extrair sinônimos desta interação
-
-  createdAt DateTime @default(now())
-
-  @@index([userCacheId])
-  @@index([phoneNumber])
-  @@index([provider])
-  @@index([operation])
-  @@index([createdAt])
-  @@index([ragSearchLogId]) // Para vincular com RAG log
-  @@index([wasRagFallback]) // Para análise de fallbacks
-  @@index([needsSynonymLearning]) // Para processar aprendizado de sinônimos
-  @@map("ai_usage_logs")
-}
-
-// Log de tentativas de busca RAG (para analytics e melhoria contínua)
-model RAGSearchLog {
-  id              String   @id @default(uuid())
-  userId          String // gastoCertoId do UserCache
-  query           String // Texto de busca (ex: "rotativo", "gasolina")
-  queryNormalized String // Query normalizada (lowercase, sem acentos)
-  matches         Json // Array de matches encontrados com scores
-  bestMatch       String? // Nome da melhor categoria encontrada
-  bestScore       Decimal? @db.Decimal(5, 4) // Score do melhor match normalizado (0.0000 - 1.0000 = 0-100%)
-  threshold       Decimal  @db.Decimal(5, 4) // Threshold usado na busca (sempre 0-1)
-  success         Boolean // true se encontrou match >= threshold
-  ragMode         String   @default("BM25") // "BM25" ou "AI" (embeddings)
-  responseTime    Int? // Tempo de resposta em ms
-
-  // 🆕 Rastreamento completo do fluxo RAG → IA → RAG
-  flowStep          Int      @default(1) // 1=RAG inicial, 2=IA fallback, 3=RAG validação final
-  totalSteps        Int      @default(1) // Total de steps executados (1, 2 ou 3)
-  aiProvider        String? // Provider de IA usado se ragMode="AI" ou flowStep=2 (ex: "openai", "groq")
-  aiModel           String? // Modelo usado (ex: "text-embedding-ada-002", "gpt-4o")
-  aiConfidence      Decimal? @db.Decimal(5, 4) // Confiança da IA (se usou IA no step 2) - sempre 0-1
-  aiCategoryId      String? // ID da categoria que a IA retornou (step 2)
-  aiCategoryName    String? // Nome da categoria que a IA retornou (step 2)
-  finalCategoryId   String? // ID da categoria final escolhida (após todos os steps)
-  finalCategoryName String? // Nome da categoria final escolhida
-  ragInitialScore   Decimal? @db.Decimal(5, 4) // Score do RAG no step 1 normalizado (0-1)
-  ragFinalScore     Decimal? @db.Decimal(5, 4) // Score do RAG no step 3 normalizado (0-1)
-  wasAiFallback     Boolean  @default(false) // true se precisou usar IA (step 2) porque RAG falhou
-
-  // Relacionamento com AIUsageLog
-  aiUsageLogs AIUsageLog[]
-
-  // Link reverso para transações criadas a partir deste log RAG
-  transactions TransactionConfirmation[] @relation("RAGSearchToTransaction")
-
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([success])
-  @@index([createdAt])
-  @@index([userId, success]) // Para queries falhas por usuário
-  @@index([wasAiFallback]) // Para análise de quando IA foi necessária
-  @@index([flowStep]) // Para análise por step
-  @@index([aiProvider]) // Para análise por provider de IA
-  @@map("rag_search_logs")
-}
-
-// Sinônimos personalizados por usuário para RAG
-// Permite que o sistema aprenda termos específicos de cada usuário
-// Ex: "pro labore" → Categoria "Receitas → Salário", "inss" → "Impostos → INSS"
-// 
-// ⚠️ SINÔNIMOS GLOBAIS (userId = NULL):
-//    - Usam NOMES das categorias (categoryName, subCategoryName)
-//    - categoryId/subCategoryId são opcionais
-//    - Matching por NOME para encontrar categoria nas categorias do usuário
-//    - Exemplo: "coca cola" → categoryName: "Alimentação", subCategoryName: "Lanches"
-// 
-// 📝 SINÔNIMOS PESSOAIS (userId = gastoCertoId):
-//    - Usam IDs específicos (categoryId obrigatório)
-//    - Matching direto por ID (mais preciso)
-//    - Exemplo: "refri" → categoryId: "uuid-123", subCategoryId: "uuid-456"
-model UserSynonym {
-  id              String        @id @default(uuid())
-  userId          String? // gastoCertoId do UserCache. NULL = sinônimo global (todos os usuários)
-  keyword         String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook", "coca cola")
-  categoryId      String? // ID da categoria (obrigatório para sinônimos pessoais, opcional para globais)
-  categoryName    String // Nome da categoria (sempre obrigatório - usado para matching em globais)
-  subCategoryId   String? // ID da subcategoria (opcional)
-  subCategoryName String? // Nome da subcategoria (opcional - usado para matching em globais)
-  confidence      Float         @default(1.0) // Confiança do mapeamento (0-1): USER_CONFIRMED=1.0, AI_SUGGESTED=0.7, AUTO_LEARNED=0.5
-  source          SynonymSource @default(USER_CONFIRMED) // Origem do sinônimo
-  usageCount      Int           @default(0) // Quantas vezes foi usado (para analytics)
-  lastUsedAt      DateTime? // Última vez que foi usado
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  @@unique([userId, keyword]) // Um usuário não pode ter keywords duplicadas (aplica-se apenas quando userId não é NULL)
-  @@index([userId]) // Buscar todos sinônimos de um usuário
-  @@index([userId, keyword]) // Buscar sinônimo específico rapidamente
-  @@index([keyword], map: "user_synonyms_global_keyword_idx") // Buscar sinônimos globais
-  @@index([usageCount]) // Analytics: sinônimos mais usados
-  @@map("user_synonyms")
-}
-
 enum SynonymSource {
-  USER_CONFIRMED // Usuário confirmou explicitamente: "Sim, 'pro labore' é Receitas → Salário"
-  AI_SUGGESTED // IA sugeriu e usuário aceitou
-  AUTO_LEARNED // Sistema aprendeu automaticamente (padrão detectado)
-  IMPORTED // Importado de outro usuário ou base de conhecimento
-  ADMIN_APPROVED // Admin criou/aprovou manualmente
+  USER_CONFIRMED
+  AI_SUGGESTED
+  AUTO_LEARNED
+  IMPORTED
+  ADMIN_APPROVED
 }
 
 enum AIOperationType {
-  TRANSACTION_EXTRACTION // Extrair dados de transação
-  AUDIO_TRANSCRIPTION // Transcrever áudio
-  IMAGE_ANALYSIS // Analisar imagem/nota fiscal
-  CATEGORY_SUGGESTION // Sugerir categoria
-  RAG_EMBEDDING // Gerar embeddings para RAG (busca semântica)
-  INTENT_DETECTION // Detectar intenção do usuário
+  TRANSACTION_EXTRACTION
+  AUDIO_TRANSCRIPTION
+  IMAGE_ANALYSIS
+  CATEGORY_SUGGESTION
+  RAG_EMBEDDING
+  INTENT_DETECTION
 }
 
 enum AIInputType {
   TEXT
   AUDIO
   IMAGE
-}
-
-// Log de mensagens não reconhecidas (para treinamento de NLP)
-model UnrecognizedMessage {
-  id             String     @id @default(uuid())
-  userCacheId    String? // ID do UserCache (pode ser null se usuário ainda não cadastrado)
-  userCache      UserCache? @relation(fields: [userCacheId], references: [id], onDelete: SetNull)
-  phoneNumber    String // Telefone do usuário
-  messageText    String // Texto da mensagem enviada
-  detectedIntent String? // Intenção detectada pelo NLP (se houver)
-  confidence     Float? // Confiança da detecção (0-1)
-  wasProcessed   Boolean    @default(false) // Se foi processado pela IA depois
-  addedToContext Boolean    @default(false) // Se foi adicionado ao contexto de treinamento
-  userFeedback   String? // Feedback do usuário sobre o que queria fazer
-  metadata       Json? // Dados adicionais (contexto, tentativas, etc)
-  createdAt      DateTime   @default(now())
-
-  @@index([userCacheId])
-  @@index([phoneNumber])
-  @@index([wasProcessed])
-  @@index([addedToContext])
-  @@index([createdAt])
-  @@map("unrecognized_messages")
-}
-
-// Configurações de Provedores de IA
-model AIProviderConfig {
-  id          String  @id @default(uuid())
-  provider    String  @unique // openai, google_gemini, groq, deepseek
-  displayName String // Nome amigável para exibição
-  enabled     Boolean @default(true) // Se o provider está ativo
-  apiKey      String? // API Key (pode ser null se desabilitado)
-  baseUrl     String? // URL base da API (ex: https://api.deepseek.com)
-
-  // Modelos por tipo de operação
-  textModel   String? // Modelo para texto (ex: gpt-4o, deepseek-chat)
-  visionModel String? // Modelo para visão/imagem
-  audioModel  String? // Modelo para áudio/transcrição
-
-  // Rate Limits
-  rpmLimit Int? @default(0) // Requests per minute (0 = ilimitado)
-  tpmLimit Int? @default(0) // Tokens per minute (0 = ilimitado)
-
-  // Custos (USD por 1M tokens)
-  inputCostPer1M  Decimal? @db.Decimal(10, 6) // Custo de input por 1M tokens
-  outputCostPer1M Decimal? @db.Decimal(10, 6) // Custo de output por 1M tokens
-  cacheCostPer1M  Decimal? @db.Decimal(10, 6) // Custo de cache hit por 1M tokens
-
-  // Features
-  supportsVision Boolean @default(false)
-  supportsAudio  Boolean @default(false)
-  supportsCache  Boolean @default(false)
-  cacheEnabled   Boolean @default(false) // Se cache está ativo
-
-  // Prioridade e fallback
-  priority        Int     @default(999) // Menor = maior prioridade
-  fallbackEnabled Boolean @default(true) // Se pode ser usado como fallback
-
-  // Metadata e controle
-  metadata      Json?     @default("{}") // Configurações extras
-  lastUsedAt    DateTime?
-  totalRequests Int       @default(0)
-  totalErrors   Int       @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([provider])
-  @@index([enabled])
-  @@index([priority])
-  @@map("ai_provider_configs")
-}
-
-// Configurações Globais de IA
-model AISettings {
-  id String @id @default(uuid())
-
-  // Providers por tipo de operação
-  textProvider     String @default("openai") // Provider para extração de texto
-  imageProvider    String @default("google_gemini") // Provider para análise de imagens
-  audioProvider    String @default("groq") // Provider para transcrição de áudio
-  categoryProvider String @default("groq") // Provider para sugestão de categorias
-
-  // Provider Principal (deprecated - usar os campos acima)
-  primaryProvider String @default("groq") // Provider padrão a ser usado
-
-  // Fallback
-  fallbackEnabled       Boolean  @default(true) // Se fallback está ativo
-  fallbackTextChain     String[] @default(["groq", "deepseek", "google_gemini", "openai"]) // Sequência para texto
-  fallbackImageChain    String[] @default(["google_gemini", "openai"]) // Sequência para imagem
-  fallbackAudioChain    String[] @default(["openai", "groq"]) // Sequência para áudio
-  fallbackCategoryChain String[] @default(["groq", "deepseek", "google_gemini", "openai"]) // Sequência para categorias
-
-  // Cache
-  cacheEnabled Boolean @default(false) // Se cache global está ativo
-  cacheTTL     Int     @default(3600) // TTL do cache em segundos (1 hora)
-
-  // Rate Limiting
-  rateLimitEnabled Boolean @default(true) // Se rate limiting está ativo
-
-  // RAG (Retrieval-Augmented Generation)
-  ragEnabled      Boolean @default(false) // Se RAG está ativo (busca vetorial)
-  ragAiEnabled    Boolean @default(false) // Se usa IA para embeddings (true) ou BM25 (false)
-  ragAiProvider   String  @default("groq") // Provider de IA para embeddings: "openai", "groq", "google_gemini"
-  ragProvider     String  @default("bm25") // Método: "openai" (com IA paga), "local" (sentence-transformers), "bm25" (sem IA)
-  ragThreshold    Float   @default(0.6) // Threshold de similaridade (0-1) - Reduzido para 60%
-  ragCacheEnabled Boolean @default(true) // Cache de embeddings
-
-  // Assistente Conversacional
-  assistantEnabled        Boolean @default(true) // Assistente humanizado ativo
-  assistantPersonality    String  @default("friendly") // "friendly", "professional", "casual"
-  assistantMaxHistoryMsgs Int     @default(5) // Máximo de mensagens no histórico de contexto
-
-  // Transaction Processing
-  autoRegisterThreshold  Float @default(0.90) @map("auto_register_threshold") // Registra automaticamente se confidence >= 90%
-  minConfidenceThreshold Float @default(0.50) @map("min_confidence_threshold") // Rejeita transações com confidence < 50%
-
-  // Segurança
-  securityEnabled          Boolean @default(true) // Camada de segurança ativa
-  securityMaxMessageLength Int     @default(500) // Tamanho máximo de mensagem
-  securityRateLimitMinute  Int     @default(20) // Máximo de mensagens por minuto
-  securityRateLimitHour    Int     @default(100) // Máximo de mensagens por hora
-  securityLogEvents        Boolean @default(true) // Logar eventos de segurança
-
-  // Metadata
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("ai_settings")
-}
-
-// Logs de Segurança (leve, auto-limpeza)
-model SecurityLog {
-  id        String           @id @default(uuid())
-  userId    String // ID do UserCache ou "unknown"
-  eventType String // injection_attempt, rate_limit_exceeded, suspicious_content, etc
-  details   String           @db.VarChar(500) // Primeiros 500 chars da mensagem
-  severity  SecuritySeverity @default(low)
-  createdAt DateTime         @default(now())
-
-  @@index([userId, createdAt])
-  @@index([eventType, createdAt])
-  @@index([severity, createdAt])
-  @@map("security_logs")
 }
 
 enum SecuritySeverity {
