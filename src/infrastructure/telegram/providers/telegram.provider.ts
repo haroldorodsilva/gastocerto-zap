@@ -23,9 +23,13 @@ export class TelegramProvider implements IMessagingProvider {
   private callbacks: MessagingCallbacks = {};
   private connected = false;
   private conflict409Count = 0;
-  private readonly MAX_409_ERRORS = 3; // Após 3 erros 409, desativar sessão
+  private readonly MAX_409_ERRORS = 3; // Após 3 erros 409, tentar reconexão
+  private readonly MAX_RECONNECT_ATTEMPTS = 2; // Máximo de tentativas de reconexão
+  private reconnectAttempts = 0;
+  private isReconnecting = false;
   private sessionId?: string;
   private sessionName?: string;
+  private lastConfig?: MessagingConnectionConfig;
 
   constructor(private readonly userRateLimiter: UserRateLimiterService) {}
 
@@ -35,6 +39,7 @@ export class TelegramProvider implements IMessagingProvider {
   ): Promise<void> {
     try {
       this.callbacks = callbacks;
+      this.lastConfig = config; // Salvar para reconexão
       this.sessionId = config.sessionId;
       this.sessionName = config.sessionName || 'Unknown'; // Nome do banco de dados
       const token = config.credentials?.token;
@@ -338,13 +343,11 @@ export class TelegramProvider implements IMessagingProvider {
       // Detectar erro 401 (Token inválido/expirado)
       if (errorMessage.includes('401 Unauthorized') || errorMessage.includes('ETELEGRAM: 401')) {
         this.logger.error(
-          `🚫 ERRO 401 - Token inválido na sessão ${sessionInfo}. ` +
-            `O bot será desconectado. Atualize o token via @BotFather e reative a sessão.`,
+          `� ERRO 401 CRÍTICO na sessão ${sessionInfo}. Tentando reconexão automática...`,
         );
 
-        // Desconectar imediatamente para parar o loop de erros
-        this.disconnect().catch(() => {});
-        this.callbacks.onError?.(error);
+        // Tentar reconexão automática
+        this.attemptReconnect('401 Unauthorized').catch(() => {});
         return;
       }
 
@@ -354,14 +357,12 @@ export class TelegramProvider implements IMessagingProvider {
 
         if (this.conflict409Count >= this.MAX_409_ERRORS) {
           this.logger.error(
-            `🚫 ERRO 409 RECORRENTE (${this.conflict409Count}x) na sessão ${sessionInfo}: ` +
-              `Outra instância está usando o mesmo token. ` +
-              `A sessão será desativada para evitar conflito. ` +
-              `Solução: Use tokens diferentes por ambiente (DEV/HLG/PROD).`,
+            `� ERRO 409 RECORRENTE (${this.conflict409Count}x) na sessão ${sessionInfo}. ` +
+              `Tentando reconexão automática...`,
           );
 
-          // Desconectar para parar o loop de erros
-          this.disconnect().catch(() => {});
+          // Tentar reconexão automática
+          this.attemptReconnect('409 Conflict').catch(() => {});
           return;
         }
 
@@ -376,6 +377,72 @@ export class TelegramProvider implements IMessagingProvider {
 
       this.callbacks.onError?.(error);
     });
+  }
+
+  /**
+   * Tenta reconectar automaticamente após erro crítico
+   */
+  private async attemptReconnect(errorType: string): Promise<void> {
+    if (this.isReconnecting) {
+      this.logger.warn(`Reconexão já em andamento para sessão ${this.sessionId}`);
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const sessionInfo = `${this.sessionName} (${this.sessionId})`;
+
+    if (this.reconnectAttempts > this.MAX_RECONNECT_ATTEMPTS) {
+      this.logger.error(
+        `❌ Máximo de ${this.MAX_RECONNECT_ATTEMPTS} tentativas de reconexão atingido para ${sessionInfo}. ` +
+          `Desativando sessão. Erro: ${errorType}`,
+      );
+
+      await this.disconnect();
+      this.callbacks.onError?.(new Error(`Max reconnection attempts reached: ${errorType}`));
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.logger.log(
+      `🔄 Tentativa ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} de reconexão para ${sessionInfo}...`,
+    );
+
+    try {
+      // Desconectar completamente
+      await this.disconnect();
+
+      // Aguardar antes de reconectar
+      const waitTime = this.reconnectAttempts * 2000; // 2s, 4s
+      this.logger.log(`⏳ Aguardando ${waitTime}ms antes de reconectar...`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+      // Tentar reconectar
+      if (this.lastConfig && this.callbacks) {
+        await this.initialize(this.lastConfig, this.callbacks);
+        this.logger.log(`✅ Reconexão bem-sucedida para ${sessionInfo}`);
+        this.reconnectAttempts = 0; // Reset contador em sucesso
+        this.conflict409Count = 0; // Reset contador 409
+      } else {
+        throw new Error('Config ou callbacks não disponíveis para reconexão');
+      }
+    } catch (error: any) {
+      this.logger.error(
+        `❌ Falha na tentativa ${this.reconnectAttempts} de reconexão: ${error.message}`,
+      );
+
+      // Se falhar, tentar novamente (se não atingiu o máximo)
+      if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
+        this.logger.log(`🔄 Agendando nova tentativa de reconexão...`);
+        setTimeout(() => {
+          this.isReconnecting = false;
+          this.attemptReconnect(errorType).catch(() => {});
+        }, 3000);
+      } else {
+        this.callbacks.onError?.(error);
+      }
+    } finally {
+      this.isReconnecting = false;
+    }
   }
 
   private async handleIncomingMessage(msg: TelegramBot.Message, type: MessageType): Promise<void> {

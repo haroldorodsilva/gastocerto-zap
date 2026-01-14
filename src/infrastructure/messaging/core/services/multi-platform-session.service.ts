@@ -416,38 +416,10 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     if (errorMsg.includes('401 Unauthorized') || errorMsg.includes('ETELEGRAM: 401')) {
       this.logger.error(
         `🚨 ERRO 401 - Sessão ${sessionId}: Token inválido ou expirado. ` +
-          `Desativando sessão automaticamente.`,
+          `O provider tentará reconexão automática.`,
       );
 
-      // Desativar sessão no banco
-      try {
-        if (sessionId.startsWith('telegram-')) {
-          await this.prisma.telegramSession.update({
-            where: { sessionId },
-            data: {
-              isActive: false,
-              status: SessionStatus.ERROR,
-            },
-          });
-
-          this.logger.warn(
-            `⚠️  Sessão ${sessionId} foi DESATIVADA por token inválido. Para reativar: ` +
-              `1) Atualize o token com um válido (@BotFather no Telegram), ` +
-              `2) Ative a sessão novamente via API: PATCH /telegram/${sessionId.split('-')[1]}`,
-          );
-        }
-
-        // Remover da memória
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          await session.provider.disconnect().catch(() => {});
-          this.sessions.delete(sessionId);
-          ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
-        }
-      } catch (dbError) {
-        this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
-      }
-
+      // Apenas logar - o provider cuidará da reconexão
       return; // Não emitir evento session.error para evitar spam
     }
 
@@ -455,38 +427,10 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     if (errorMsg.includes('409 Conflict')) {
       this.logger.error(
         `🚨 ERRO 409 CRÍTICO - Sessão ${sessionId}: Múltiplas instâncias detectadas. ` +
-          `Desativando sessão automaticamente para evitar loop de erros.`,
+          `O provider tentará reconexão automática.`,
       );
 
-      // Desativar sessão no banco
-      try {
-        if (sessionId.startsWith('telegram-')) {
-          await this.prisma.telegramSession.update({
-            where: { sessionId },
-            data: {
-              isActive: false,
-              status: SessionStatus.DISCONNECTED,
-            },
-          });
-
-          this.logger.warn(
-            `⚠️  Sessão ${sessionId} foi DESATIVADA. Para reativar: ` +
-              `1) Atualize o token para o ambiente correto (DEV/HLG/PROD), ` +
-              `2) Ative a sessão novamente via API/Admin`,
-          );
-        }
-
-        // Remover da memória
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          await session.provider.disconnect().catch(() => {});
-          this.sessions.delete(sessionId);
-          ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
-        }
-      } catch (dbError) {
-        this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
-      }
-
+      // Apenas logar - o provider cuidará da reconexão
       return; // Não emitir evento session.error para evitar spam
     }
 

@@ -2647,9 +2647,13 @@ isActive: ${dto.isActive}
 
     try {
       // Validações
-      if (!dto.keyword || !dto.categoryId || !dto.categoryName) {
-        throw new BadRequestException('keyword, categoryId e categoryName são obrigatórios');
+      if (!dto.keyword || !dto.categoryName) {
+        throw new BadRequestException('keyword e categoryName são obrigatórios');
       }
+
+      // categoryId é opcional - se não fornecido, usar vazio
+      const categoryId = dto.categoryId || '';
+      const subCategoryId = dto.subCategoryId || '';
 
       // Buscar todos usuários ativos com cache
       const activeUsers = await this.prisma.userCache.findMany({
@@ -2673,9 +2677,9 @@ isActive: ${dto.isActive}
           await this.ragService.addUserSynonym({
             userId: user.gastoCertoId,
             keyword: dto.keyword,
-            categoryId: dto.categoryId,
+            categoryId: categoryId,
             categoryName: dto.categoryName,
-            subCategoryId: dto.subCategoryId,
+            subCategoryId: subCategoryId,
             subCategoryName: dto.subCategoryName,
             confidence: dto.confidence ?? 1.0,
             source: 'ADMIN_APPROVED',
