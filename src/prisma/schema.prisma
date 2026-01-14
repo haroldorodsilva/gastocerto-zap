@@ -286,14 +286,25 @@ model RAGSearchLog {
 // Sinônimos personalizados por usuário para RAG
 // Permite que o sistema aprenda termos específicos de cada usuário
 // Ex: "pro labore" → Categoria "Receitas → Salário", "inss" → "Impostos → INSS"
+// 
+// ⚠️ SINÔNIMOS GLOBAIS (userId = NULL):
+//    - Usam NOMES das categorias (categoryName, subCategoryName)
+//    - categoryId/subCategoryId são opcionais
+//    - Matching por NOME para encontrar categoria nas categorias do usuário
+//    - Exemplo: "coca cola" → categoryName: "Alimentação", subCategoryName: "Lanches"
+// 
+// 📝 SINÔNIMOS PESSOAIS (userId = gastoCertoId):
+//    - Usam IDs específicos (categoryId obrigatório)
+//    - Matching direto por ID (mais preciso)
+//    - Exemplo: "refri" → categoryId: "uuid-123", subCategoryId: "uuid-456"
 model UserSynonym {
   id              String        @id @default(uuid())
-  userId          String // gastoCertoId do UserCache
-  keyword         String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook")
-  categoryId      String // ID da categoria mapeada na API externa
-  categoryName    String // Nome da categoria (cache para exibição)
-  subCategoryId   String? // ID da subcategoria (se houver)
-  subCategoryName String? // Nome da subcategoria (cache para exibição)
+  userId          String? // gastoCertoId do UserCache. NULL = sinônimo global (todos os usuários)
+  keyword         String // Palavra-chave normalizada (ex: "pro labore", "inss", "das", "notebook", "coca cola")
+  categoryId      String? // ID da categoria (obrigatório para sinônimos pessoais, opcional para globais)
+  categoryName    String // Nome da categoria (sempre obrigatório - usado para matching em globais)
+  subCategoryId   String? // ID da subcategoria (opcional)
+  subCategoryName String? // Nome da subcategoria (opcional - usado para matching em globais)
   confidence      Float         @default(1.0) // Confiança do mapeamento (0-1): USER_CONFIRMED=1.0, AI_SUGGESTED=0.7, AUTO_LEARNED=0.5
   source          SynonymSource @default(USER_CONFIRMED) // Origem do sinônimo
   usageCount      Int           @default(0) // Quantas vezes foi usado (para analytics)
@@ -301,9 +312,10 @@ model UserSynonym {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  @@unique([userId, keyword]) // Um usuário não pode ter keywords duplicadas
+  @@unique([userId, keyword]) // Um usuário não pode ter keywords duplicadas (aplica-se apenas quando userId não é NULL)
   @@index([userId]) // Buscar todos sinônimos de um usuário
   @@index([userId, keyword]) // Buscar sinônimo específico rapidamente
+  @@index([keyword], map: "user_synonyms_global_keyword_idx") // Buscar sinônimos globais
   @@index([usageCount]) // Analytics: sinônimos mais usados
   @@map("user_synonyms")
 }

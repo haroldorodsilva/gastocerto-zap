@@ -103,13 +103,26 @@ export class RagAdminController {
       `🏪 [TEST-MATCH] ActiveAccountId: ${userCache.activeAccountId || 'Não definido'}`,
     );
 
-    // Buscar sinônimos personalizados do usuário
+    // Buscar sinônimos personalizados do usuário E globais
     const userSynonyms = await this.prisma.userSynonym.findMany({
-      where: { userId: userCache.gastoCertoId },
-      orderBy: { confidence: 'desc' },
+      where: {
+        OR: [
+          { userId: userCache.gastoCertoId }, // Sinônimos do usuário
+          { userId: null }, // Sinônimos globais
+        ],
+      },
+      orderBy: [
+        { userId: 'asc' }, // Prioriza usuário sobre globais
+        { confidence: 'desc' },
+      ],
     });
 
-    this.logger.log(`📚 [TEST-MATCH] Sinônimos do usuário: ${userSynonyms.length}`);
+    const personalSynonyms = userSynonyms.filter((s) => s.userId === userCache.gastoCertoId);
+    const globalSynonyms = userSynonyms.filter((s) => s.userId === null);
+
+    this.logger.log(
+      `📚 [TEST-MATCH] Sinônimos encontrados: ${personalSynonyms.length} pessoais + ${globalSynonyms.length} globais`,
+    );
 
     // 🔥 INDEXAR CATEGORIAS (igual ao fluxo de mensagens)
     this.logger.log(`📦 [TEST-MATCH] Buscando e indexando categorias...`);
@@ -535,15 +548,16 @@ export class RagAdminController {
       `🌍 [GLOBAL-SYNONYM] Criando sinônimo global: "${keyword}" → ${categoryName}${subCategoryName ? ' > ' + subCategoryName : ''}`,
     );
 
-    // Criar sinônimo com userId = 'GLOBAL' para aplicar a todos
+    // Criar sinônimo com userId = null para aplicar a todos
     // Usa NOMES como referência, não IDs (cada usuário tem IDs diferentes)
+    // categoryId/subCategoryId são opcionais - matching é feito por nome
     const synonym = await this.prisma.userSynonym.create({
       data: {
-        userId: 'GLOBAL',
+        userId: null,
         keyword: keyword.toLowerCase().trim(),
-        categoryId: 'GLOBAL', // ID placeholder (matching é por nome)
+        categoryId: null, // Sinônimos globais não precisam de ID - matching é por nome
         categoryName: categoryName.trim(),
-        subCategoryId: subCategoryName ? 'GLOBAL' : null,
+        subCategoryId: null,
         subCategoryName: subCategoryName?.trim() || null,
         confidence: 1.0,
         source: 'ADMIN_APPROVED',

@@ -602,7 +602,7 @@ export class RAGService {
       // Para sinônimos de USUÁRIO: match por ID (mais preciso)
       const userSynonymMatch = userSynonyms.find((syn) => {
         if (syn.isGlobal) {
-          // Sinônimo GLOBAL: match por NOME (normalizado)
+          // Sinônimo GLOBAL (userId null): match por NOME (normalizado)
           const synCatNorm = this.normalize(syn.categoryName);
           const catNorm = this.normalize(category.name);
 
@@ -1237,7 +1237,7 @@ export class RAGService {
             },
             {
               // Sinônimos globais (aplicados a todos)
-              userId: 'GLOBAL',
+              userId: null,
               OR: queryTokens.map((token) => ({
                 keyword: {
                   contains: token,
@@ -1269,7 +1269,7 @@ export class RAGService {
         });
 
         this.logger.log(
-          `📚 Encontrados ${synonyms.length} sinônimos (${synonyms.filter((s) => s.userId === userId).length} do usuário, ${synonyms.filter((s) => s.userId === 'GLOBAL').length} globais)`,
+          `📚 Encontrados ${synonyms.length} sinônimos (${synonyms.filter((s) => s.userId === userId).length} do usuário, ${synonyms.filter((s) => s.userId === null).length} globais)`,
         );
       }
 
@@ -1280,7 +1280,7 @@ export class RAGService {
         subCategoryId: s.subCategoryId || undefined,
         subCategoryName: s.subCategoryName || undefined,
         confidence: s.confidence,
-        isGlobal: s.userId === 'GLOBAL',
+        isGlobal: s.userId === null,
       }));
     } catch (error) {
       this.logger.error('Erro ao buscar sinônimos personalizados:', error);

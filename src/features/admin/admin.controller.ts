@@ -1906,15 +1906,16 @@ isActive: ${dto.isActive}
     this.logger.log(`➕ Admin adicionando sinônimo global: ${body.term} → ${body.targetCategory}`);
 
     try {
-      // Criar sinônimo global (userId = 'GLOBAL')
+      // Criar sinônimo global (userId = null)
+      // categoryId é opcional - matching é feito por categoryName
       const synonym = await this.prisma.userSynonym.create({
         data: {
-          userId: 'GLOBAL',
+          userId: null,
           keyword: body.term.toLowerCase().trim(),
-          categoryId: body.targetCategory,
+          categoryId: null, // Sinônimos globais não usam ID - matching por nome
           categoryName: body.targetCategory,
-          subCategoryId: body.targetSubCategory || '',
-          subCategoryName: body.targetSubCategory || '',
+          subCategoryId: null,
+          subCategoryName: body.targetSubCategory || null,
           confidence: 1.0,
           source: 'ADMIN_APPROVED',
         },
