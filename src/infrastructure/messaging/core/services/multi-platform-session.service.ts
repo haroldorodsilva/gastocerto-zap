@@ -49,7 +49,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   async onModuleDestroy() {
     this.logger.log('🛑 MultiPlatformSessionService destroying - cleaning up sessions');
 
-    // Desconectar todas as sessões
+    // Desconectar todas as sessões SEM desativar isActive
     const disconnectPromises: Promise<void>[] = [];
 
     for (const [sessionId, session] of this.sessions.entries()) {
@@ -59,7 +59,34 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
             this.logger.log(`🧹 Disconnecting session: ${sessionId} (${session.platform})`);
             await session.provider.disconnect();
             ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
-            this.logger.log(`✅ Session ${sessionId} disconnected successfully`);
+
+            // Atualizar apenas o status para DISCONNECTED, MAS manter isActive = true
+            // para que reconecte automaticamente no próximo deploy
+            if (session.platform === MessagingPlatform.TELEGRAM) {
+              await this.prisma.telegramSession
+                .update({
+                  where: { sessionId },
+                  data: {
+                    status: SessionStatus.DISCONNECTED,
+                    // isActive permanece como está (true) para auto-reconectar
+                  },
+                })
+                .catch(() => {});
+            } else {
+              await this.prisma.whatsAppSession
+                .update({
+                  where: { sessionId },
+                  data: {
+                    status: SessionStatus.DISCONNECTED,
+                    // isActive permanece como está (true) para auto-reconectar
+                  },
+                })
+                .catch(() => {});
+            }
+
+            this.logger.log(
+              `✅ Session ${sessionId} disconnected (isActive mantido para auto-reconexão)`,
+            );
           } catch (error) {
             this.logger.error(`❌ Error disconnecting session ${sessionId}:`, error);
           }
@@ -72,12 +99,9 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
 
     this.sessions.clear();
 
-    // ℹ️ NÃO alteramos isActive no banco de dados aqui!
-    // Motivo: Quando o container subir novamente, ele precisa saber quais
-    // sessões estavam ativas para reconectá-las automaticamente.
-    // Apenas desconectamos os providers (stopPolling, etc).
-
-    this.logger.log('✅ MultiPlatformSessionService cleanup complete');
+    this.logger.log(
+      '✅ MultiPlatformSessionService cleanup complete - sessões mantidas ativas para reconexão automática',
+    );
   }
 
   /**
