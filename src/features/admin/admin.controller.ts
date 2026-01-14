@@ -2386,6 +2386,111 @@ isActive: ${dto.isActive}
   }
 
   /**
+   * Listar todos os sinônimos com paginação e filtros
+   * GET /admin/synonyms
+   */
+  @Get('synonyms')
+  async listSynonyms(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('order') order?: string,
+    @Query('source') source?: string,
+    @Query('userId') userId?: string,
+    @Query('keyword') keyword?: string,
+  ) {
+    this.logger.log('📋 Admin solicitou lista de sinônimos');
+
+    try {
+      const pageNum = parseInt(page || '1');
+      const limitNum = parseInt(limit || '20');
+      const skip = (pageNum - 1) * limitNum;
+      const sortField = sortBy || 'createdAt';
+      const sortOrder = order === 'asc' ? 'asc' : 'desc';
+
+      // Construir filtros
+      const where: any = {};
+
+      if (source) {
+        where.source = source;
+      }
+
+      if (userId) {
+        where.userId = userId;
+      }
+
+      if (keyword) {
+        where.keyword = {
+          contains: keyword,
+          mode: 'insensitive',
+        };
+      }
+
+      // Buscar sinônimos
+      const [synonyms, total] = await Promise.all([
+        this.prisma.userSynonym.findMany({
+          where,
+          orderBy: {
+            [sortField]: sortOrder,
+          },
+          skip,
+          take: limitNum,
+          select: {
+            id: true,
+            userId: true,
+            keyword: true,
+            categoryName: true,
+            subCategoryName: true,
+            confidence: true,
+            source: true,
+            usageCount: true,
+            lastUsedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+        this.prisma.userSynonym.count({ where }),
+      ]);
+
+      const totalPages = Math.ceil(total / limitNum);
+
+      this.logger.log(
+        `✅ Retornando ${synonyms.length} sinônimos (página ${pageNum}/${totalPages})`,
+      );
+
+      return {
+        success: true,
+        data: synonyms,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages,
+          hasNextPage: pageNum < totalPages,
+          hasPreviousPage: pageNum > 1,
+        },
+        filters: {
+          source,
+          userId,
+          keyword,
+          sortBy: sortField,
+          order: sortOrder,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao listar sinônimos:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao listar sinônimos',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
    * Criar novo sinônimo
    * POST /admin/synonyms
    */
