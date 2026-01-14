@@ -344,7 +344,10 @@ export class TelegramProvider implements IMessagingProvider {
       const sessionInfo = `${this.sessionName || 'Unknown'} (${this.sessionId || 'Unknown'})`;
 
       // Detectar erro 400 Logged out (após logout forçado)
-      if (errorMessage.includes('400 Logged out') || errorMessage.includes('ETELEGRAM: 400 Logged out')) {
+      if (
+        errorMessage.includes('400 Logged out') ||
+        errorMessage.includes('ETELEGRAM: 400 Logged out')
+      ) {
         // Silenciar esse erro - é esperado após logout forçado
         // O processo de reconexão já está em andamento
         return;
@@ -393,12 +396,12 @@ export class TelegramProvider implements IMessagingProvider {
    * Força logout no Telegram para desconectar todas as instâncias ativas
    * Útil quando há erro 409 (conflito de múltiplas instâncias)
    */
-  private async forceLogoutFromTelegram(): Promise<void> {
+  private async forceLogoutFromTelegram(): Promise<boolean> {
     const sessionInfo = `${this.sessionName} (${this.sessionId})`;
 
     if (!this.bot || !this.lastConfig?.credentials?.token) {
       this.logger.warn(`⚠️  Bot ou token não disponível para forçar logout de ${sessionInfo}`);
-      return;
+      return false;
     }
 
     try {
@@ -417,11 +420,17 @@ export class TelegramProvider implements IMessagingProvider {
 
       if (data.ok) {
         this.logger.log(`✅ Logout forçado com sucesso para ${sessionInfo}`);
+        return true;
+      } else if (data.error_code === 400 && data.description?.includes('Logged out')) {
+        this.logger.log(`ℹ️  Bot já estava deslogado para ${sessionInfo}`);
+        return false; // Já estava deslogado, não precisa esperar tanto
       } else {
         this.logger.warn(`⚠️  Logout retornou: ${JSON.stringify(data)}`);
+        return false;
       }
     } catch (error: any) {
       this.logger.warn(`⚠️  Erro ao forçar logout (ignorando): ${error.message}`);
+      return false;
       // Não lançar erro - continuar com o processo de reconexão
     }
   }
@@ -479,17 +488,24 @@ export class TelegramProvider implements IMessagingProvider {
 
     try {
       // Se for erro 409, forçar logout no Telegram para desconectar outras instâncias
+      let needsLongerWait = false;
       if (errorType.includes('409 Conflict')) {
-        await this.forceLogoutFromTelegram();
+        const loggedOut = await this.forceLogoutFromTelegram();
+        needsLongerWait = loggedOut; // Se fez logout, precisa esperar mais
       }
 
       // Desconectar completamente
       await this.disconnect();
 
       // Aguardar antes de reconectar (aumentar progressivamente)
-      const waitTime = Math.min(this.reconnectAttempts * 3000, 10000); // 3s, 6s, max 10s
-      this.logger.log(`⏳ Aguardando ${waitTime}ms antes de reconectar...`);
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      // Se fez logout com sucesso, aguardar mais tempo para o Telegram processar
+      let baseWaitTime = Math.min(this.reconnectAttempts * 3000, 10000); // 3s, 6s, max 10s
+      if (needsLongerWait) {
+        baseWaitTime += 5000; // +5s extra se fez logout (para o Telegram processar)
+      }
+
+      this.logger.log(`⏳ Aguardando ${baseWaitTime}ms antes de reconectar...`);
+      await new Promise((resolve) => setTimeout(resolve, baseWaitTime));
 
       // Tentar reconectar
       if (this.lastConfig && this.callbacks) {
