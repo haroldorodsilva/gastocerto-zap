@@ -24,8 +24,11 @@ export class TelegramProvider implements IMessagingProvider {
   private connected = false;
   private conflict409Count = 0;
   private readonly MAX_409_ERRORS = 3; // Após 3 erros 409, tentar reconexão
-  private readonly MAX_RECONNECT_ATTEMPTS = 2; // Máximo de tentativas de reconexão
+  private readonly MAX_RECONNECT_ATTEMPTS = 2; // Máximo de tentativas de reconexão por erro
+  private readonly MAX_TOTAL_RECONNECTS = 3; // Máximo de reconexões no total em 5 minutos
   private reconnectAttempts = 0;
+  private totalReconnects = 0;
+  private lastReconnectTime = 0;
   private isReconnecting = false;
   private sessionId?: string;
   private sessionName?: string;
@@ -380,11 +383,71 @@ export class TelegramProvider implements IMessagingProvider {
   }
 
   /**
+   * Força logout no Telegram para desconectar todas as instâncias ativas
+   * Útil quando há erro 409 (conflito de múltiplas instâncias)
+   */
+  private async forceLogoutFromTelegram(): Promise<void> {
+    const sessionInfo = `${this.sessionName} (${this.sessionId})`;
+
+    if (!this.bot || !this.lastConfig?.credentials?.token) {
+      this.logger.warn(`⚠️  Bot ou token não disponível para forçar logout de ${sessionInfo}`);
+      return;
+    }
+
+    try {
+      this.logger.log(
+        `🔌 Forçando logout de todas as instâncias no Telegram para ${sessionInfo}...`,
+      );
+
+      // Usar logOut para forçar desconexão de todas as instâncias
+      // Isso faz uma chamada direta à API do Telegram
+      const token = this.lastConfig.credentials.token;
+      const response = await fetch(`https://api.telegram.org/bot${token}/logOut`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (data.ok) {
+        this.logger.log(`✅ Logout forçado com sucesso para ${sessionInfo}`);
+      } else {
+        this.logger.warn(`⚠️  Logout retornou: ${JSON.stringify(data)}`);
+      }
+    } catch (error: any) {
+      this.logger.warn(`⚠️  Erro ao forçar logout (ignorando): ${error.message}`);
+      // Não lançar erro - continuar com o processo de reconexão
+    }
+  }
+
+  /**
    * Tenta reconectar automaticamente após erro crítico
    */
   private async attemptReconnect(errorType: string): Promise<void> {
     if (this.isReconnecting) {
       this.logger.warn(`Reconexão já em andamento para sessão ${this.sessionId}`);
+      return;
+    }
+
+    // Verificar se já ultrapassou o limite total de reconexões em 5 minutos
+    const now = Date.now();
+    const fiveMinutes = 5 * 60 * 1000;
+
+    if (now - this.lastReconnectTime > fiveMinutes) {
+      // Reset contador se passou mais de 5 minutos
+      this.totalReconnects = 0;
+    }
+
+    this.totalReconnects++;
+    this.lastReconnectTime = now;
+
+    if (this.totalReconnects > this.MAX_TOTAL_RECONNECTS) {
+      this.logger.error(
+        `❌ Máximo de ${this.MAX_TOTAL_RECONNECTS} reconexões em 5 minutos atingido para ${this.sessionName} (${this.sessionId}). ` +
+          `Possível loop infinito detectado. Desativando sessão. Erro: ${errorType}`,
+      );
+
+      await this.disconnect();
+      this.callbacks.onError?.(new Error(`Reconnection loop detected: ${errorType}`));
       return;
     }
 
@@ -404,15 +467,20 @@ export class TelegramProvider implements IMessagingProvider {
 
     this.isReconnecting = true;
     this.logger.log(
-      `🔄 Tentativa ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} de reconexão para ${sessionInfo}...`,
+      `🔄 Tentativa ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} de reconexão para ${sessionInfo} (Total: ${this.totalReconnects})...`,
     );
 
     try {
+      // Se for erro 409, forçar logout no Telegram para desconectar outras instâncias
+      if (errorType.includes('409 Conflict')) {
+        await this.forceLogoutFromTelegram();
+      }
+
       // Desconectar completamente
       await this.disconnect();
 
-      // Aguardar antes de reconectar
-      const waitTime = this.reconnectAttempts * 2000; // 2s, 4s
+      // Aguardar antes de reconectar (aumentar progressivamente)
+      const waitTime = Math.min(this.reconnectAttempts * 3000, 10000); // 3s, 6s, max 10s
       this.logger.log(`⏳ Aguardando ${waitTime}ms antes de reconectar...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
 
@@ -436,7 +504,7 @@ export class TelegramProvider implements IMessagingProvider {
         setTimeout(() => {
           this.isReconnecting = false;
           this.attemptReconnect(errorType).catch(() => {});
-        }, 3000);
+        }, 5000); // Aguardar 5s antes de tentar novamente
       } else {
         this.callbacks.onError?.(error);
       }

@@ -412,6 +412,47 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     // Log apenas mensagem essencial do erro
     const errorMsg = error.message || String(error);
 
+    // Detectar loop de reconexão infinito
+    if (
+      errorMsg.includes('Reconnection loop detected') ||
+      errorMsg.includes('Max reconnection attempts reached')
+    ) {
+      this.logger.error(
+        `🚨 LOOP DE RECONEXÃO DETECTADO - Sessão ${sessionId}. Desativando sessão permanentemente.`,
+      );
+
+      // Desativar sessão no banco
+      try {
+        if (sessionId.startsWith('telegram-')) {
+          await this.prisma.telegramSession.update({
+            where: { sessionId },
+            data: {
+              isActive: false,
+              status: SessionStatus.ERROR,
+            },
+          });
+
+          this.logger.error(
+            `❌ Sessão ${sessionId} DESATIVADA por loop de reconexão. ` +
+              `Há outra instância rodando com o mesmo token. ` +
+              `Verifique se há múltiplos ambientes usando o mesmo token.`,
+          );
+        }
+
+        // Remover da memória
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          await session.provider.disconnect().catch(() => {});
+          this.sessions.delete(sessionId);
+          ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+        }
+      } catch (dbError: any) {
+        this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
+      }
+
+      return; // Não emitir evento session.error para evitar spam
+    }
+
     // Detectar erro 401 (Token inválido/expirado)
     if (errorMsg.includes('401 Unauthorized') || errorMsg.includes('ETELEGRAM: 401')) {
       this.logger.error(
