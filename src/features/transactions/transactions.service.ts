@@ -164,7 +164,9 @@ export class TransactionsService {
       }
 
       // 2. Analisar intenção com NLP
-      const intentResult = await this.intentAnalyzer.analyzeIntent(text, phoneNumber, user.id);
+      // Usar platformId real (chatId do Telegram, número do WhatsApp, etc) ao invés de user.phoneNumber
+      const actualPhoneNumber = platformId || phoneNumber;
+      const intentResult = await this.intentAnalyzer.analyzeIntent(text, actualPhoneNumber, user.id);
 
       this.logger.log(
         `🎯 Intent: ${intentResult.intent} | Confiança: ${(intentResult.confidence * 100).toFixed(1)}%`,

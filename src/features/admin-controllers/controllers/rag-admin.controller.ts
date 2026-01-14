@@ -41,7 +41,7 @@ export class RagAdminController {
    * Útil para simular processamento e analisar resultados
    *
    * POST /admin/rag/test-match
-   * Body: { userId: string, query: string }
+   * Body: { userId: string, query: string, accountId?: string }
    *
    * Retorna:
    * - matches: categorias encontradas com scores
@@ -53,7 +53,7 @@ export class RagAdminController {
    */
   @Post('test-match')
   @HttpCode(HttpStatus.OK)
-  async testMatch(@Body() body: { userId: string; query: string }): Promise<{
+  async testMatch(@Body() body: { userId: string; query: string; accountId?: string }): Promise<{
     matches: any[];
     suggestions: any[];
     userSynonyms: any[];
@@ -74,11 +74,14 @@ export class RagAdminController {
       }>;
     };
   }> {
-    const { userId, query } = body;
+    const { userId, query, accountId } = body;
     const startTime = Date.now();
 
     this.logger.log(`🔍 [TEST-MATCH] Iniciando teste para userId: ${userId}`);
     this.logger.log(`💬 [TEST-MATCH] Query: "${query}"`);
+    if (accountId) {
+      this.logger.log(`🏦 [TEST-MATCH] AccountId especificado: ${accountId} (teste de perfil)`);
+    }
 
     // Buscar categorias do usuário
     const userCache = await this.prisma.userCache.findUnique({
@@ -134,24 +137,30 @@ export class RagAdminController {
       );
 
       if (categoriesResponse?.accounts?.length > 0) {
-        // Encontrar a conta ativa
-        const activeAccount = categoriesResponse.accounts.find(
-          (acc) => acc.id === userCache.activeAccountId,
-        );
+        // Usar accountId fornecido para teste, ou fallback para activeAccountId
+        const targetAccountId = accountId || userCache.activeAccountId;
 
-        if (activeAccount && activeAccount.categories.length > 0) {
+        // Encontrar a conta especificada (para teste) ou a conta ativa (default)
+        const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
+
+        if (targetAccount && targetAccount.categories.length > 0) {
           // Expandir categorias (criar entrada para cada subcategoria)
-          const userCategories = expandCategoriesForRAG(activeAccount.categories);
+          const userCategories = expandCategoriesForRAG(targetAccount.categories);
 
           // Indexar no Redis
           await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
 
           this.logger.log(
-            `✅ [TEST-MATCH] ${userCategories.length} categorias indexadas no Redis (conta: ${activeAccount.name})`,
+            `✅ [TEST-MATCH] ${userCategories.length} categorias indexadas no Redis (conta: ${targetAccount.name})`,
           );
+          if (accountId) {
+            this.logger.log(
+              `🧪 [TEST-MATCH] MODO TESTE: Usando categorias do perfil "${targetAccount.name}" (não alterará dados do usuário)`,
+            );
+          }
         } else {
           this.logger.warn(
-            `⚠️ [TEST-MATCH] Conta ativa não encontrada ou sem categorias (accountId: ${userCache.activeAccountId})`,
+            `⚠️ [TEST-MATCH] Conta não encontrada ou sem categorias (accountId: ${targetAccountId})`,
           );
         }
       } else {
@@ -225,6 +234,7 @@ export class RagAdminController {
         .slice(0, 10); // Top 10 mais próximos
 
       topNonMatching = categoriesWithScores.map(
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         ({ matchedTokens, ...rest }: { matchedTokens: any }) => rest,
       );
     }
@@ -304,13 +314,13 @@ export class RagAdminController {
    * Mostra scores de TODAS as categorias avaliadas
    *
    * POST /admin/rag/analyze
-   * Body: { userId: string, query: string }
+   * Body: { userId: string, query: string, accountId?: string }
    *
    * Retorna lista ordenada por score de TODAS categorias
    */
   @Post('analyze')
   @HttpCode(HttpStatus.OK)
-  async analyzeMatch(@Body() body: { userId: string; query: string }): Promise<{
+  async analyzeMatch(@Body() body: { userId: string; query: string; accountId?: string }): Promise<{
     query: string;
     queryNormalized: string;
     queryTokens: string[];
@@ -324,9 +334,12 @@ export class RagAdminController {
       reason: string;
     }>;
   }> {
-    const { userId, query } = body;
+    const { userId, query, accountId } = body;
 
     this.logger.log(`🔬 [ANALYZE] Iniciando análise detalhada para userId: ${userId}`);
+    if (accountId) {
+      this.logger.log(`🏦 [ANALYZE] AccountId especificado: ${accountId} (teste de perfil)`);
+    }
 
     const userCache = await this.prisma.userCache.findUnique({
       where: { gastoCertoId: userId },
@@ -350,14 +363,23 @@ export class RagAdminController {
       );
 
       if (categoriesResponse?.accounts?.length > 0) {
-        const activeAccount = categoriesResponse.accounts.find(
-          (acc) => acc.id === userCache.activeAccountId,
-        );
+        // Usar accountId fornecido para teste, ou fallback para activeAccountId
+        const targetAccountId = accountId || userCache.activeAccountId;
 
-        if (activeAccount && activeAccount.categories.length > 0) {
-          const userCategories = expandCategoriesForRAG(activeAccount.categories);
+        // Encontrar a conta especificada (para teste) ou a conta ativa (default)
+        const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
+
+        if (targetAccount && targetAccount.categories.length > 0) {
+          const userCategories = expandCategoriesForRAG(targetAccount.categories);
           await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
-          this.logger.log(`✅ [ANALYZE] ${userCategories.length} categorias indexadas`);
+          this.logger.log(
+            `✅ [ANALYZE] ${userCategories.length} categorias indexadas (conta: ${targetAccount.name})`,
+          );
+          if (accountId) {
+            this.logger.log(
+              `🧪 [ANALYZE] MODO TESTE: Usando categorias do perfil "${targetAccount.name}" (não alterará dados do usuário)`,
+            );
+          }
         }
       }
     } catch (indexError) {

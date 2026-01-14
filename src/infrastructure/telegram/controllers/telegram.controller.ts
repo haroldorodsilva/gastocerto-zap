@@ -88,17 +88,56 @@ export class TelegramController {
 
     try {
       const session = await this.telegramSessionsService.findById(id);
+
+      if (!session.token) {
+        throw new HttpException(
+          {
+            statusCode: HttpStatus.BAD_REQUEST,
+            message:
+              'Token do bot não configurado. Atualize a sessão com um token válido do @BotFather',
+            error: 'Token Ausente',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
       await this.multiPlatformService.startTelegramSession(session.sessionId);
       return this.telegramSessionsService.findById(id);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to activate Telegram session ${id}:`, error.message);
+
+      // Mensagem de erro mais específica baseada no tipo de erro
+      let errorMessage = error.message || 'Erro ao ativar sessão do Telegram';
+      let errorType = 'Erro de Ativação';
+      let statusCode = HttpStatus.BAD_REQUEST;
+
+      // Detectar erros específicos
+      if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+        errorMessage =
+          'Token do bot inválido. Verifique o token no @BotFather e atualize a sessão.';
+        errorType = 'Token Inválido';
+      } else if (errorMessage.includes('409') || errorMessage.includes('Conflict')) {
+        errorMessage =
+          'Bot já está sendo usado em outra instância. Use o endpoint /force-reconnect para resolver.';
+        errorType = 'Conflito de Instâncias';
+        statusCode = HttpStatus.CONFLICT;
+      } else if (errorMessage.includes('token not found')) {
+        errorMessage = 'Token do bot não encontrado. Configure o token antes de ativar.';
+        errorType = 'Token Não Encontrado';
+      } else if (errorMessage.includes('network') || errorMessage.includes('timeout')) {
+        errorMessage = 'Erro de conexão com o Telegram. Verifique a internet e tente novamente.';
+        errorType = 'Erro de Conexão';
+        statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+      }
+
       throw new HttpException(
         {
-          statusCode: HttpStatus.BAD_REQUEST,
-          message: error.message || 'Failed to activate Telegram session',
-          error: 'Bad Request',
+          statusCode,
+          message: errorMessage,
+          error: errorType,
+          details: error.message,
         },
-        HttpStatus.BAD_REQUEST,
+        statusCode,
       );
     }
   }
@@ -120,7 +159,7 @@ export class TelegramController {
   /**
    * Força reconexão de uma sessão após desativar todas as outras com mesmo token
    * POST /telegram/:id/force-reconnect
-   * 
+   *
    * Use este endpoint quando tiver erro 409 (múltiplas instâncias).
    * Ele desativa todas as outras sessões com o mesmo token e ativa apenas esta.
    */
@@ -135,7 +174,7 @@ export class TelegramController {
 
     try {
       const targetSession = await this.telegramSessionsService.findById(id);
-      
+
       if (!targetSession.token) {
         throw new HttpException(
           {
@@ -158,7 +197,7 @@ export class TelegramController {
       // 2. Desativar todas as outras sessões com o mesmo token
       for (const session of sessionsWithSameToken) {
         this.logger.log(`🔴 Deactivating conflicting session: ${session.id} (${session.name})`);
-        
+
         try {
           // Parar a sessão se estiver ativa
           await this.multiPlatformService.stopSession(session.sessionId);

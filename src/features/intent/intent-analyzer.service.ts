@@ -278,6 +278,7 @@ export class IntentAnalyzerService {
     this.logger.log(`================================================\n`);
 
     // Registrar mensagem não reconhecida para análise futura
+    // Usa phoneNumber que é o identificador real da plataforma (chatId do Telegram, número do WhatsApp, etc)
     await this.logUnrecognizedMessage(
       text,
       phoneNumber,
