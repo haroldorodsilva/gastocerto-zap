@@ -131,16 +131,32 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   /**
    * Inicia sessão do Telegram
    */
-  async startTelegramSession(sessionId: string): Promise<void> {
+  async startTelegramSession(sessionId: string, forceReconnect = false): Promise<void> {
     try {
       this.logger.log(`🚀 Starting Telegram session: ${sessionId}`);
 
       // ⚠️ VERIFICAR SINGLETON GLOBAL (previne duplicação em watch mode)
+      // Se forceReconnect=true, remover do Map e reconectar
       if (ACTIVE_SESSIONS_GLOBAL.has(sessionId)) {
-        this.logger.warn(
-          `⚠️  Telegram session ${sessionId} is already running globally, skipping initialization`,
-        );
-        return;
+        if (!forceReconnect) {
+          this.logger.warn(
+            `⚠️  Telegram session ${sessionId} is already running globally, skipping initialization`,
+          );
+          return;
+        } else {
+          this.logger.log(
+            `🔄 Force reconnect: removendo ${sessionId} do Map global e reconectando...`,
+          );
+          ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+          // Limpar sessão existente também
+          const existingSession = this.sessions.get(sessionId);
+          if (existingSession) {
+            try {
+              await existingSession.provider.disconnect();
+            } catch {}
+            this.sessions.delete(sessionId);
+          }
+        }
       }
 
       // ⚠️ VERIFICAR SE JÁ ESTÁ RODANDO LOCALMENTE
@@ -423,6 +439,21 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
 
     // Detectar erro 400 Logged out (após logout forçado)
     if (errorMsg.includes('400 Logged out') || errorMsg.includes('ETELEGRAM: 400 Logged out')) {
+      // Remover do Map global para permitir reconexão futura
+      this.logger.log(
+        `🧹 Removendo sessão ${sessionId} do Map global devido a erro 400 Logged out`,
+      );
+      ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
+
+      // Limpar sessão local também
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        try {
+          await session.provider.disconnect();
+        } catch {}
+        this.sessions.delete(sessionId);
+      }
+
       // Silenciar esse erro - é esperado após logout forçado no provider
       return;
     }

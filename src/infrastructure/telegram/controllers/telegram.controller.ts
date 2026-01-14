@@ -121,7 +121,9 @@ export class TelegramController {
             // Parar a sessão se estiver ativa
             await this.multiPlatformService.stopSession(conflictingSession.sessionId);
           } catch (error: any) {
-            this.logger.warn(`Could not stop session ${conflictingSession.sessionId}: ${error.message}`);
+            this.logger.warn(
+              `Could not stop session ${conflictingSession.sessionId}: ${error.message}`,
+            );
           }
         }
 
