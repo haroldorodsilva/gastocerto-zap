@@ -79,6 +79,20 @@ export class TelegramSessionsService {
   }
 
   /**
+   * Busca todas as sessões com o mesmo token
+   * @param token - Token do Telegram Bot
+   * @param excludeId - ID da sessão para excluir da busca (opcional)
+   */
+  async findByToken(token: string, excludeId?: string): Promise<TelegramSession[]> {
+    return this.prisma.telegramSession.findMany({
+      where: {
+        token,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+    });
+  }
+
+  /**
    * Atualiza sessão
    */
   async update(id: string, dto: UpdateTelegramSessionDto): Promise<TelegramSession> {
