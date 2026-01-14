@@ -1304,33 +1304,43 @@ export class RAGService {
     try {
       const normalizedKeyword = this.normalize(params.keyword);
 
-      await this.prisma.userSynonym.upsert({
+      // Verificar se já existe
+      const existing = await this.prisma.userSynonym.findFirst({
         where: {
-          userId_keyword: {
-            userId: params.userId,
-            keyword: normalizedKeyword,
-          },
-        },
-        create: {
           userId: params.userId,
           keyword: normalizedKeyword,
-          categoryId: params.categoryId,
-          categoryName: params.categoryName,
-          subCategoryId: params.subCategoryId,
-          subCategoryName: params.subCategoryName,
-          confidence: params.confidence ?? 1.0,
-          source: params.source ?? 'USER_CONFIRMED',
-        },
-        update: {
-          categoryId: params.categoryId,
-          categoryName: params.categoryName,
-          subCategoryId: params.subCategoryId,
-          subCategoryName: params.subCategoryName,
-          confidence: params.confidence ?? 1.0,
-          source: params.source ?? 'USER_CONFIRMED',
-          updatedAt: new Date(),
         },
       });
+
+      if (existing) {
+        // Atualizar existente
+        await this.prisma.userSynonym.update({
+          where: { id: existing.id },
+          data: {
+            categoryId: params.categoryId,
+            categoryName: params.categoryName,
+            subCategoryId: params.subCategoryId,
+            subCategoryName: params.subCategoryName,
+            confidence: params.confidence ?? 1.0,
+            source: params.source ?? 'USER_CONFIRMED',
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        // Criar novo
+        await this.prisma.userSynonym.create({
+          data: {
+            userId: params.userId,
+            keyword: normalizedKeyword,
+            categoryId: params.categoryId,
+            categoryName: params.categoryName,
+            subCategoryId: params.subCategoryId,
+            subCategoryName: params.subCategoryName,
+            confidence: params.confidence ?? 1.0,
+            source: params.source ?? 'USER_CONFIRMED',
+          },
+        });
+      }
 
       this.logger.log(
         `✅ Sinônimo adicionado: "${params.keyword}" → ${params.categoryName}${params.subCategoryName ? ' → ' + params.subCategoryName : ''}`,
