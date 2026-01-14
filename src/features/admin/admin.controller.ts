@@ -2286,7 +2286,6 @@ isActive: ${dto.isActive}
 
         // Extrair subcategoria do metadata
         const metadata = log.metadata as any;
-        const subCategoryId = metadata?.subCategoryId || log.finalCategoryId;
         const subCategoryName = metadata?.subCategoryName || metadata?.subCategory?.name;
 
         if (!keyword || !categoryName) continue;
@@ -2380,151 +2379,6 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao buscar sugestões de sinônimos',
-        error: error.message,
-        timestamp: new Date().toISOString(),
-      };
-    }
-  }
-
-  /**
-   * Listar todos os sinônimos com filtros
-   * GET /admin/synonyms?page=1&limit=50&sortBy=createdAt&order=desc&type=global|personal&userId=xxx&keyword=xxx
-   */
-  @Get('synonyms')
-  async listAllSynonyms(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('sortBy') sortBy?: string,
-    @Query('order') order?: string,
-    @Query('type') type?: string, // 'global' | 'personal' | 'all'
-    @Query('userId') userId?: string,
-    @Query('keyword') keyword?: string,
-    @Query('categoryName') categoryName?: string,
-    @Query('source') source?: string,
-  ) {
-    this.logger.log(`📋 Admin solicitou lista de sinônimos (filtros aplicados)`);
-
-    try {
-      const pageNum = parseInt(page) || 1;
-      const limitNum = parseInt(limit) || 50;
-      const skip = (pageNum - 1) * limitNum;
-      const sortField = sortBy || 'createdAt';
-      const sortOrder = order === 'asc' ? 'asc' : 'desc';
-
-      // Construir filtros
-      const where: any = {};
-
-      // Filtro por tipo (global/personal)
-      if (type === 'global') {
-        where.userId = null;
-      } else if (type === 'personal') {
-        where.userId = { not: null };
-      }
-
-      // Filtro por usuário específico
-      if (userId) {
-        where.userId = userId;
-      }
-
-      // Filtro por keyword
-      if (keyword) {
-        where.keyword = {
-          contains: keyword.toLowerCase(),
-        };
-      }
-
-      // Filtro por nome da categoria
-      if (categoryName) {
-        where.categoryName = {
-          contains: categoryName,
-        };
-      }
-
-      // Filtro por source
-      if (source) {
-        where.source = source;
-      }
-
-      // Buscar sinônimos com paginação
-      const [synonyms, totalCount] = await Promise.all([
-        this.prisma.userSynonym.findMany({
-          where,
-          orderBy: { [sortField]: sortOrder },
-          skip,
-          take: limitNum,
-          select: {
-            id: true,
-            userId: true,
-            keyword: true,
-            categoryId: true,
-            categoryName: true,
-            subCategoryId: true,
-            subCategoryName: true,
-            confidence: true,
-            source: true,
-            usageCount: true,
-            lastUsedAt: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        }),
-        this.prisma.userSynonym.count({ where }),
-      ]);
-
-      // Buscar dados dos usuários (apenas para sinônimos pessoais)
-      const userIds = [...new Set(synonyms.map((s) => s.userId).filter((id) => id !== null))];
-      const users = await this.prisma.userCache.findMany({
-        where: {
-          gastoCertoId: {
-            in: userIds,
-          },
-        },
-        select: {
-          gastoCertoId: true,
-          name: true,
-          phoneNumber: true,
-        },
-      });
-
-      const usersMap = new Map(users.map((u) => [u.gastoCertoId, u]));
-
-      // Enriquecer sinônimos com dados do usuário
-      const enrichedSynonyms = synonyms.map((syn) => ({
-        ...syn,
-        isGlobal: syn.userId === null,
-        user: syn.userId ? usersMap.get(syn.userId) || null : null,
-      }));
-
-      const totalPages = Math.ceil(totalCount / limitNum);
-
-      return {
-        success: true,
-        data: enrichedSynonyms,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total: totalCount,
-          totalPages,
-          hasNext: pageNum < totalPages,
-          hasPrev: pageNum > 1,
-        },
-        filters: {
-          type: type || 'all',
-          userId,
-          keyword,
-          categoryName,
-          source,
-          sortBy: sortField,
-          order: sortOrder,
-        },
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error: any) {
-      this.logger.error('❌ Erro ao listar sinônimos:', error);
-
-      return {
-        success: false,
-        message: 'Erro ao listar sinônimos',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
@@ -2668,7 +2522,7 @@ isActive: ${dto.isActive}
   }
 
   /**
-   * Criar sinônimo global (userId = null, matching por nome)
+   * Criar sinônimo global para todos usuários
    * POST /admin/synonyms/global
    */
   @Post('synonyms/global')
@@ -2677,75 +2531,63 @@ isActive: ${dto.isActive}
     @Body()
     dto: {
       keyword: string;
-      categoryId?: string; // Opcional para globais
+      categoryId: string;
       categoryName: string;
       subCategoryId?: string;
       subCategoryName?: string;
       confidence?: number;
-      source?: string;
     },
   ) {
     this.logger.log(`🌍 Admin criando sinônimo global: "${dto.keyword}" → ${dto.categoryName}`);
 
     try {
       // Validações
-      if (!dto.keyword || !dto.categoryName) {
-        throw new BadRequestException('keyword e categoryName são obrigatórios');
+      if (!dto.keyword || !dto.categoryId || !dto.categoryName) {
+        throw new BadRequestException('keyword, categoryId e categoryName são obrigatórios');
       }
 
-      const normalizedKeyword = dto.keyword.toLowerCase().trim();
-
-      // Verificar se já existe sinônimo global com essa keyword
-      const existing = await this.prisma.userSynonym.findFirst({
+      // Buscar todos usuários ativos com cache
+      const activeUsers = await this.prisma.userCache.findMany({
         where: {
-          userId: null,
-          keyword: normalizedKeyword,
+          isActive: true,
+        },
+        select: {
+          gastoCertoId: true,
         },
       });
 
-      if (existing) {
-        // Atualizar existente
-        await this.prisma.userSynonym.update({
-          where: { id: existing.id },
-          data: {
-            categoryId: dto.categoryId || null,
-            categoryName: dto.categoryName,
-            subCategoryId: dto.subCategoryId || null,
-            subCategoryName: dto.subCategoryName || null,
-            confidence: dto.confidence ?? 1.0,
-            source: (dto.source as any) ?? 'ADMIN_APPROVED',
-            updatedAt: new Date(),
-          },
-        });
+      const results = {
+        created: 0,
+        failed: 0,
+        totalUsers: activeUsers.length,
+      };
 
-        return {
-          success: true,
-          message: `Sinônimo global atualizado: "${dto.keyword}"`,
-          synonym: existing,
-          timestamp: new Date().toISOString(),
-        };
-      } else {
-        // Criar novo sinônimo global (userId = null)
-        const synonym = await this.prisma.userSynonym.create({
-          data: {
-            userId: null, // Sinônimo global
-            keyword: normalizedKeyword,
-            categoryId: dto.categoryId || null,
+      // Criar sinônimo para cada usuário
+      for (const user of activeUsers) {
+        try {
+          await this.ragService.addUserSynonym({
+            userId: user.gastoCertoId,
+            keyword: dto.keyword,
+            categoryId: dto.categoryId,
             categoryName: dto.categoryName,
-            subCategoryId: dto.subCategoryId || null,
-            subCategoryName: dto.subCategoryName || null,
+            subCategoryId: dto.subCategoryId,
+            subCategoryName: dto.subCategoryName,
             confidence: dto.confidence ?? 1.0,
-            source: (dto.source as any) ?? 'ADMIN_APPROVED',
-          },
-        });
-
-        return {
-          success: true,
-          message: `Sinônimo global criado: "${dto.keyword}"`,
-          synonym,
-          timestamp: new Date().toISOString(),
-        };
+            source: 'ADMIN_APPROVED',
+          });
+          results.created++;
+        } catch (error) {
+          results.failed++;
+          // Não logar cada erro individual para não poluir logs
+        }
       }
+
+      return {
+        success: true,
+        message: `Sinônimo global criado para ${results.created} usuários`,
+        ...results,
+        timestamp: new Date().toISOString(),
+      };
     } catch (error: any) {
       this.logger.error('❌ Erro ao criar sinônimo global:', error);
 
@@ -2830,26 +2672,22 @@ isActive: ${dto.isActive}
         };
       }
 
-      // Buscar dados do usuário (se não for global)
-      let user = null;
-      if (synonym.userId) {
-        user = await this.prisma.userCache.findUnique({
-          where: { gastoCertoId: synonym.userId },
-          select: {
-            gastoCertoId: true,
-            name: true,
-            phoneNumber: true,
-          },
-        });
-      }
+      // Buscar dados do usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: synonym.userId },
+        select: {
+          gastoCertoId: true,
+          name: true,
+          phoneNumber: true,
+        },
+      });
 
       await this.prisma.userSynonym.delete({
         where: { id },
       });
 
-      const synonymType = synonym.userId ? 'pessoal' : 'global';
       this.logger.log(
-        `✅ Sinônimo ${synonymType} deletado: "${synonym.keyword}" → ${synonym.categoryName} (user: ${user?.name || 'GLOBAL'})`,
+        `✅ Sinônimo deletado: "${synonym.keyword}" → ${synonym.categoryName} (user: ${user?.name || 'N/A'})`,
       );
 
       return {
@@ -3009,8 +2847,8 @@ isActive: ${dto.isActive}
         take: 10,
       });
 
-      // Buscar dados dos usuários (filtrar nulls - sinônimos globais)
-      const userIds = [...new Set(topKeywordsRaw.map((k) => k.userId).filter((id) => id !== null))];
+      // Buscar dados dos usuários
+      const userIds = [...new Set(topKeywordsRaw.map((k) => k.userId))];
       const users = await this.prisma.userCache.findMany({
         where: {
           gastoCertoId: {
@@ -3036,8 +2874,7 @@ isActive: ${dto.isActive}
         source: k.source,
         createdAt: k.createdAt,
         lastUsedAt: k.lastUsedAt,
-        isGlobal: k.userId === null, // Indicador de sinônimo global
-        user: k.userId ? usersMap.get(k.userId) || null : null,
+        user: usersMap.get(k.userId) || null,
       }));
 
       // Top categorias (com mais sinônimos)
@@ -3080,8 +2917,8 @@ isActive: ${dto.isActive}
         take: 10,
       });
 
-      // Buscar dados dos usuários dos sinônimos recentes (filtrar nulls - sinônimos globais)
-      const recentUserIds = [...new Set(recentSynonymsRaw.map((s) => s.userId).filter((id) => id !== null))];
+      // Buscar dados dos usuários dos sinônimos recentes
+      const recentUserIds = [...new Set(recentSynonymsRaw.map((s) => s.userId))];
       const recentUsers = await this.prisma.userCache.findMany({
         where: {
           gastoCertoId: {
@@ -3105,8 +2942,7 @@ isActive: ${dto.isActive}
         usageCount: s.usageCount,
         source: s.source,
         createdAt: s.createdAt,
-        isGlobal: s.userId === null, // Indicador de sinônimo global
-        user: s.userId ? recentUsersMap.get(s.userId) || null : null,
+        user: recentUsersMap.get(s.userId) || null,
       }));
 
       const recentlyCreated = await this.prisma.userSynonym.count({
@@ -3309,21 +3145,11 @@ isActive: ${dto.isActive}
       });
 
       // 8. Buscar categorias do usuário (via API GastoCerto)
-      let categories: any[] = [];
       let accounts: any[] = [];
 
       try {
         // Buscar contas do usuário
         accounts = await this.cacheService['gastoCertoApi'].getUserAccounts(userId);
-
-        // Se tiver conta ativa, buscar categorias dessa conta
-        if (user.activeAccountId) {
-          const accountCategories = await this.cacheService['gastoCertoApi'].getAccountCategories(
-            userId,
-            user.activeAccountId,
-          );
-          categories = accountCategories || [];
-        }
       } catch (error) {
         this.logger.warn(`⚠️ Erro ao buscar categorias/contas da API: ${error.message}`);
       }
@@ -3426,13 +3252,6 @@ isActive: ${dto.isActive}
           })),
           unrecognizedMessages,
           onboardingSessions,
-          categories: categories.map((cat) => ({
-            id: cat.id || cat.categoryId,
-            name: cat.name || cat.categoryName,
-            type: cat.type,
-            accountId: cat.accountId,
-            subCategories: cat.subCategories || [],
-          })),
           accounts: accounts.map((acc) => ({
             id: acc.id,
             name: acc.name,
@@ -3525,6 +3344,64 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao sincronizar categorias',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * GET /admin/users/:userId/accounts/:accountId/categories
+   * Retorna as categorias de uma conta específica
+   */
+  @Get('users/:userId/accounts/:accountId/categories')
+  async getAccountCategories(
+    @Param('userId') userId: string,
+    @Param('accountId') accountId: string,
+  ) {
+    try {
+      this.logger.log(`📂 Buscando categorias da conta ${accountId} para usuário: ${userId}`);
+
+      // 1. Verificar se usuário existe
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: userId },
+      });
+
+      if (!user) {
+        throw new NotFoundException('Usuário não encontrado');
+      }
+
+      // 2. Buscar categorias da conta específica
+      const categories = await this.cacheService['gastoCertoApi'].getAccountCategories(
+        userId,
+        accountId,
+      );
+
+      this.logger.log(`✅ ${categories.length} categorias encontradas para conta ${accountId}`);
+
+      return {
+        success: true,
+        data: {
+          userId,
+          accountId,
+          totalCategories: categories.length,
+          categories: categories.map((cat) => ({
+            id: cat.id,
+            name: cat.name,
+            type: cat.type,
+            icon: cat.icon,
+            color: cat.color,
+            subCategories: cat.subCategories || [],
+          })),
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error('❌ Erro ao buscar categorias da conta:', error);
+
+      return {
+        success: false,
+        message: 'Erro ao buscar categorias da conta',
         error: error.message,
         timestamp: new Date().toISOString(),
       };

@@ -894,14 +894,15 @@ export class IntentAnalyzerService {
   private isShowInvoiceByCardNameRequest(text: string): boolean {
     const invoiceKeywords = ['fatura', 'faturas'];
     const hasInvoiceKeyword = invoiceKeywords.some((k) => text.includes(k));
-    
+
     // Verificar se não é comando de lista genérica
-    const isGenericList = text.includes('minhas faturas') || 
-                          text.includes('listar faturas') ||
-                          text.includes('todas as faturas') ||
-                          /ver fatura \d/.test(text) || // "ver fatura 1"
-                          /pagar fatura \d/.test(text); // "pagar fatura 1"
-    
+    const isGenericList =
+      text.includes('minhas faturas') ||
+      text.includes('listar faturas') ||
+      text.includes('todas as faturas') ||
+      /ver fatura \d/.test(text) || // "ver fatura 1"
+      /pagar fatura \d/.test(text); // "pagar fatura 1"
+
     // Se tem "fatura" mas não é lista genérica, pode ser busca por nome
     // Ex: "fatura nubank", "ver fatura itau", "fatura do inter"
     return hasInvoiceKeyword && !isGenericList && text.length > 6;
