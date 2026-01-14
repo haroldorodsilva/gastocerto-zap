@@ -191,8 +191,47 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       // Buscar token do banco de dados (tabela telegram_sessions)
       const session = await this.prisma.telegramSession.findUnique({
         where: { sessionId },
-        select: { token: true, name: true },
+        select: { token: true, name: true, id: true },
       });
+
+      if (!session?.token) {
+        throw new Error(
+          `Telegram bot token not found for session ${sessionId}. Create session with token first.`,
+        );
+      }
+
+      // 🆕 Desativar todas as outras sessões com o mesmo token (prevenir erro 409)
+      const sessionsWithSameToken = await this.prisma.telegramSession.findMany({
+        where: {
+          token: session.token,
+          id: { not: session.id },
+        },
+      });
+
+      if (sessionsWithSameToken.length > 0) {
+        this.logger.log(
+          `🔴 Encontradas ${sessionsWithSameToken.length} sessão(ões) conflitante(s) com o mesmo token. Desativando...`,
+        );
+
+        for (const conflictingSession of sessionsWithSameToken) {
+          this.logger.log(
+            `🔴 Desativando sessão conflitante: ${conflictingSession.sessionId} (${conflictingSession.name})`,
+          );
+
+          try {
+            // Parar a sessão se estiver ativa
+            await this.stopSession(conflictingSession.sessionId);
+          } catch (error: any) {
+            this.logger.warn(
+              `Could not stop session ${conflictingSession.sessionId}: ${error.message}`,
+            );
+          }
+        }
+
+        // Aguardar um pouco para garantir que tudo foi desconectado
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        this.logger.log(`✅ Sessões conflitantes desativadas`);
+      }
 
       if (!session?.token) {
         throw new Error(
@@ -411,6 +450,12 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   private async handleError(sessionId: string, error: Error): Promise<void> {
     // Log apenas mensagem essencial do erro
     const errorMsg = error.message || String(error);
+
+    // Detectar erro 400 Logged out (após logout forçado)
+    if (errorMsg.includes('400 Logged out') || errorMsg.includes('ETELEGRAM: 400 Logged out')) {
+      // Silenciar esse erro - é esperado após logout forçado no provider
+      return;
+    }
 
     // Detectar loop de reconexão infinito
     if (

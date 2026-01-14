@@ -101,6 +101,35 @@ export class TelegramController {
         );
       }
 
+      // 🆕 Desativar todas as outras sessões com o mesmo token (prevenir erro 409)
+      const sessionsWithSameToken = await this.telegramSessionsService.findByToken(
+        session.token,
+        id, // exclude this ID
+      );
+
+      if (sessionsWithSameToken.length > 0) {
+        this.logger.log(
+          `🔴 Desativando ${sessionsWithSameToken.length} sessão(ões) conflitante(s) com o mesmo token...`,
+        );
+
+        for (const conflictingSession of sessionsWithSameToken) {
+          this.logger.log(
+            `🔴 Desativando sessão conflitante: ${conflictingSession.id} (${conflictingSession.name})`,
+          );
+
+          try {
+            // Parar a sessão se estiver ativa
+            await this.multiPlatformService.stopSession(conflictingSession.sessionId);
+          } catch (error: any) {
+            this.logger.warn(`Could not stop session ${conflictingSession.sessionId}: ${error.message}`);
+          }
+        }
+
+        // Aguardar um pouco para garantir que tudo foi desconectado
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      // Iniciar a sessão target
       await this.multiPlatformService.startTelegramSession(session.sessionId);
       return this.telegramSessionsService.findById(id);
     } catch (error: any) {

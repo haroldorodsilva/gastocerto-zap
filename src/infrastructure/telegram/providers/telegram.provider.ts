@@ -343,10 +343,17 @@ export class TelegramProvider implements IMessagingProvider {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const sessionInfo = `${this.sessionName || 'Unknown'} (${this.sessionId || 'Unknown'})`;
 
+      // Detectar erro 400 Logged out (após logout forçado)
+      if (errorMessage.includes('400 Logged out') || errorMessage.includes('ETELEGRAM: 400 Logged out')) {
+        // Silenciar esse erro - é esperado após logout forçado
+        // O processo de reconexão já está em andamento
+        return;
+      }
+
       // Detectar erro 401 (Token inválido/expirado)
       if (errorMessage.includes('401 Unauthorized') || errorMessage.includes('ETELEGRAM: 401')) {
         this.logger.error(
-          `� ERRO 401 CRÍTICO na sessão ${sessionInfo}. Tentando reconexão automática...`,
+          `🚨 ERRO 401 CRÍTICO na sessão ${sessionInfo}. Tentando reconexão automática...`,
         );
 
         // Tentar reconexão automática
