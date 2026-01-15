@@ -3,17 +3,19 @@
 
 # Configuração do Node.js
 [phases.setup]
-nixPkgs = ["nodejs_20", "openssl"]
+nixPkgs = ["nodejs_20", "openssl", "yarn"]
 
-# Instalação de dependências com npm
+# Instalação de dependências com yarn
 [phases.install]
-cmds = ["npm ci --legacy-peer-deps"]
+cmds = ["yarn install --frozen-lockfile"]
 
 # Build da aplicação
 [phases.build]
 cmds = [
   "npx prisma generate",
-  "npm run build"
+  "yarn build",
+  "yarn db:deploy",
+  "yarn db:seed"
 ]
 
 # Comando de inicialização
