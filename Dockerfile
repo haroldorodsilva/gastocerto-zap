@@ -74,9 +74,10 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 
-# Use tini as init system
+# Use tini as init system (propagates signals correctly)
 ENTRYPOINT ["/sbin/tini", "--"]
 
 # Start application
-# Run database migrations before starting the app (app won't start if migration fails)
-CMD ["sh", "-c", "npm run db:deploy && node dist/main.js"]
+# IMPORTANTE: Usar 'exec' para que node receba SIGTERM diretamente
+# Migrations rodam antes e, se falharem, container não inicia
+CMD ["sh", "-c", "npm run db:deploy && exec node dist/main.js"]

@@ -348,8 +348,15 @@ export class TelegramProvider implements IMessagingProvider {
         errorMessage.includes('400 Logged out') ||
         errorMessage.includes('ETELEGRAM: 400 Logged out')
       ) {
-        // Silenciar esse erro - é esperado após logout forçado
-        // O processo de reconexão já está em andamento
+        this.logger.error(
+          `🚨 ERRO 400 LOGGED OUT na sessão ${sessionInfo}. ` +
+            `O bot foi desautorizado. É necessário gerar um novo token no BotFather. ` +
+            `Execute: npm run script:fix-telegram-logout`,
+        );
+
+        // Não tentar reconexão - erro é irrecuperável sem novo token
+        this.connected = false;
+        this.callbacks.onError?.(new Error('Bot logged out - token revoked'));
         return;
       }
 

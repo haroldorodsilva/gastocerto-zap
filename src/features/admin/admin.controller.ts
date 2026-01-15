@@ -2938,29 +2938,19 @@ isActive: ${dto.isActive}
           source: true,
           createdAt: true,
           lastUsedAt: true,
+          user: {
+            select: {
+              gastoCertoId: true,
+              name: true,
+              phoneNumber: true,
+            },
+          },
         },
         orderBy: {
           usageCount: 'desc',
         },
         take: 10,
       });
-
-      // Buscar dados dos usuários
-      const userIds = [...new Set(topKeywordsRaw.map((k) => k.userId))];
-      const users = await this.prisma.userCache.findMany({
-        where: {
-          gastoCertoId: {
-            in: userIds,
-          },
-        },
-        select: {
-          gastoCertoId: true,
-          name: true,
-          phoneNumber: true,
-        },
-      });
-
-      const usersMap = new Map(users.map((u) => [u.gastoCertoId, u]));
 
       const topKeywords = topKeywordsRaw.map((k) => ({
         id: k.id,
@@ -2972,7 +2962,7 @@ isActive: ${dto.isActive}
         source: k.source,
         createdAt: k.createdAt,
         lastUsedAt: k.lastUsedAt,
-        user: usersMap.get(k.userId) || null,
+        user: k.user || null,
       }));
 
       // Top categorias (com mais sinônimos)
@@ -3008,29 +2998,19 @@ isActive: ${dto.isActive}
           usageCount: true,
           source: true,
           createdAt: true,
+          user: {
+            select: {
+              gastoCertoId: true,
+              name: true,
+              phoneNumber: true,
+            },
+          },
         },
         orderBy: {
           createdAt: 'desc',
         },
         take: 10,
       });
-
-      // Buscar dados dos usuários dos sinônimos recentes
-      const recentUserIds = [...new Set(recentSynonymsRaw.map((s) => s.userId))];
-      const recentUsers = await this.prisma.userCache.findMany({
-        where: {
-          gastoCertoId: {
-            in: recentUserIds,
-          },
-        },
-        select: {
-          gastoCertoId: true,
-          name: true,
-          phoneNumber: true,
-        },
-      });
-
-      const recentUsersMap = new Map(recentUsers.map((u) => [u.gastoCertoId, u]));
 
       const recentSynonyms = recentSynonymsRaw.map((s) => ({
         id: s.id,
@@ -3040,7 +3020,7 @@ isActive: ${dto.isActive}
         usageCount: s.usageCount,
         source: s.source,
         createdAt: s.createdAt,
-        user: recentUsersMap.get(s.userId) || null,
+        user: s.user || null,
       }));
 
       const recentlyCreated = await this.prisma.userSynonym.count({

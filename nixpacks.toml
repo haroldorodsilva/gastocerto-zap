@@ -1,0 +1,28 @@
+# Configuração Nixpacks para GastoCerto Zap
+# Referência: https://nixpacks.com/docs/configuration
+
+# Configuração do Node.js
+[phases.setup]
+nixPkgs = ["nodejs_20", "openssl"]
+
+# Instalação de dependências
+[phases.install]
+cmds = [
+  "npm ci --legacy-peer-deps"
+]
+
+# Build da aplicação
+[phases.build]
+cmds = [
+  "npx prisma generate",
+  "npm run build"
+]
+
+# Comando de inicialização
+[start]
+cmd = "node dist/main.js"
+
+# Variáveis de ambiente padrão (podem ser sobrescritas no Coolify)
+[variables]
+NODE_ENV = "production"
+PORT = "3000"

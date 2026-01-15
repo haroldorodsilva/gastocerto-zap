@@ -37,7 +37,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   logger.log(`🚀 GastoCerto-ZAP running on port ${port}`);
   logger.log(`📊 Environment: ${nodeEnv}`);
@@ -47,11 +47,11 @@ async function bootstrap() {
 
   // 🛑 Configurar listeners para graceful shutdown
   const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
-  
+
   signals.forEach((signal) => {
     process.on(signal, async () => {
       logger.warn(`\n⚠️  Received ${signal}, starting graceful shutdown...`);
-      
+
       try {
         logger.log('🧹 Closing application and disconnecting all services...');
         await app.close();
