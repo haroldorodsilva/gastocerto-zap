@@ -8,7 +8,7 @@ nixPkgs = ["nodejs_20", "openssl"]
 # Instalação de dependências
 [phases.install]
 cmds = [
-  "npm ci --legacy-peer-deps"
+  "yarn install --frozen-lockfile"
 ]
 
 # Build da aplicação
