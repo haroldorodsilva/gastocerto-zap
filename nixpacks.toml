@@ -5,13 +5,15 @@
 [phases.setup]
 nixPkgs = ["nodejs_20", "openssl"]
 
-# Deixar Nixpacks detectar automaticamente yarn.lock e instalar dependências
+# Instalação de dependências com npm
+[phases.install]
+cmds = ["npm ci --legacy-peer-deps"]
 
 # Build da aplicação
 [phases.build]
 cmds = [
   "npx prisma generate",
-  "yarn build"
+  "npm run build"
 ]
 
 # Comando de inicialização
