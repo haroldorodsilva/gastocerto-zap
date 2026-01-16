@@ -1,0 +1,73 @@
+name: Deploy to Coolify
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - dev
+  workflow_dispatch: # Permite execução manual
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - production
+          - development
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.ref_name == 'main' || github.ref_name == 'master' && 'Production' || 'Development' }}
+    runs-on: ubuntu-latest
+    environment: 
+      name: ${{ (github.ref_name == 'main' || github.ref_name == 'master') && 'production' || 'development' }}
+    
+    steps:
+      - name: 🔍 Determine Environment
+        id: env
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "master" ]]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+            echo "webhook_url=${{ secrets.COOLIFY_WEBHOOK_URL_PROD }}" >> $GITHUB_OUTPUT
+            echo "emoji=🚀" >> $GITHUB_OUTPUT
+          else
+            echo "environment=development" >> $GITHUB_OUTPUT
+            echo "webhook_url=${{ secrets.COOLIFY_WEBHOOK_URL_DEV }}" >> $GITHUB_OUTPUT
+            echo "emoji=🧪" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: ${{ steps.env.outputs.emoji }} Deploy to ${{ steps.env.outputs.environment }}
+        run: |
+          response=$(curl -X POST "${{ steps.env.outputs.webhook_url }}" \
+            -H "Content-Type: application/json" \
+            -w "\n%{http_code}" \
+            -d '{
+              "ref": "${{ github.ref }}",
+              "repository": "${{ github.repository }}",
+              "commit": "${{ github.sha }}",
+              "pusher": "${{ github.actor }}",
+              "environment": "${{ steps.env.outputs.environment }}"
+            }')
+          
+          http_code=$(echo "$response" | tail -n1)
+          
+          if [[ $http_code -ge 200 && $http_code -lt 300 ]]; then
+            echo "✅ Webhook called successfully (HTTP $http_code)"
+          else
+            echo "⚠️ Webhook returned HTTP $http_code"
+            exit 1
+          fi
+      
+      - name: ✅ Deployment Summary
+        run: |
+          echo "## 🎉 Deploy triggered successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌍 Environment | **${{ steps.env.outputs.environment }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌿 Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Pushed by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏰ Time | $(date -u +'%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
