@@ -193,6 +193,7 @@ export type IncomeKeyword = (typeof INCOME_KEYWORDS)[number];
  * Comandos para visualizar perfil atual (PERMITIDO no WebChat)
  */
 export const WEBCHAT_SHOW_PROFILE_COMMANDS = [
+  'perfil',
   'qual perfil',
   'perfil atual',
   'meu perfil',
@@ -200,6 +201,8 @@ export const WEBCHAT_SHOW_PROFILE_COMMANDS = [
   'conta atual',
   'qual o perfil',
   'perfil ativo',
+  'conta',
+  'conta ativa',
 ] as const;
 
 /**

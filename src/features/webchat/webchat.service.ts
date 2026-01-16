@@ -652,10 +652,10 @@ export class WebChatService {
       if (!accounts || accounts.length === 0) {
         return {
           success: true,
-          messageType: 'info',
+          messageType: 'info' as const,
           message: this.removeEmojis('Você ainda não possui perfis cadastrados.'),
           formatting: {
-            color: 'info',
+            color: 'info' as const,
           },
         };
       }
@@ -668,7 +668,7 @@ export class WebChatService {
           this.logger.log(`✅ [WebChat] Perfil do x-account encontrado: ${currentAccount.name}`);
           return {
             success: true,
-            messageType: 'info',
+            messageType: 'info' as const,
             message: this.removeEmojis(
               `Você está trabalhando no perfil:\n\n` +
                 `${currentAccount.name}\n\n` +
@@ -681,7 +681,7 @@ export class WebChatService {
               },
             },
             formatting: {
-              color: 'info',
+              color: 'info' as const,
             },
           };
         } else {
@@ -691,13 +691,13 @@ export class WebChatService {
           );
           return {
             success: false,
-            messageType: 'error',
+            messageType: 'error' as const,
             message: this.removeEmojis(
               `Perfil selecionado não encontrado.\n\n` +
                 `Por favor, selecione um perfil válido no menu.`,
             ),
             formatting: {
-              color: 'error',
+              color: 'error' as const,
             },
           };
         }
@@ -709,23 +709,23 @@ export class WebChatService {
       );
       return {
         success: true,
-        messageType: 'info',
+        messageType: 'info' as const,
         message: this.removeEmojis(
           `Para visualizar o perfil atual, por favor selecione um perfil no menu da interface.\n\n` +
             `Você possui ${accounts.length} perfil(is) disponível(is).`,
         ),
         formatting: {
-          color: 'info',
+          color: 'info' as const,
         },
       };
     } catch (error) {
       this.logger.error(`❌ [WebChat] Erro ao buscar perfil atual:`, error);
       return {
         success: false,
-        messageType: 'error',
+        messageType: 'error' as const,
         message: this.removeEmojis('Erro ao buscar informações do perfil.'),
         formatting: {
-          color: 'error',
+          color: 'error' as const,
         },
       };
     }
