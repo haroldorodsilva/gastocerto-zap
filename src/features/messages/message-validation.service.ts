@@ -247,6 +247,7 @@ export class MessageValidationService {
       const result = await this.messageLearningService.processLearningMessage(
         phoneNumber,
         messageText,
+        user.activeAccountId, // Passar activeAccountId do usuário
       );
 
       if (!result.success) {

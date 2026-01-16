@@ -162,26 +162,18 @@ export class TransactionRegistrationService {
     try {
       this.logger.log(`📝 [Registration] Processando texto de ${phoneNumber}: "${text}"`);
 
-      // 0. Usar accountId passado ou validar conta ativa
-      let activeAccountId: string;
-
-      if (accountId) {
-        // Usar accountId contextual do provider (não valida, apenas usa)
-        activeAccountId = accountId;
-        this.logger.debug(`🏦 Usando accountId contextual: ${activeAccountId}`);
-      } else {
-        // Fallback: validar conta ativa do banco
-        const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
-        if (!accountValidation.valid) {
-          return {
-            success: false,
-            message: accountValidation.message || '❌ Conta ativa não encontrada.',
-            requiresConfirmation: false,
-          };
-        }
-        activeAccountId = accountValidation.accountId;
-        this.logger.debug(`🏦 Usando conta ativa do banco: ${activeAccountId}`);
+      // 0. Usar accountId passado (OBRIGATÓRIO - não busca do cache)
+      if (!accountId) {
+        this.logger.error(`❌ AccountId não fornecido para ${phoneNumber}`);
+        return {
+          success: false,
+          message: '❌ Erro interno: conta não identificada.',
+          requiresConfirmation: false,
+        };
       }
+
+      const activeAccountId = accountId;
+      this.logger.debug(`🏦 Usando accountId: ${activeAccountId}`);
 
       // 1. Buscar categorias do usuário (APENAS da conta ativa)
       const categoriesData = await this.userCache.getUserCategories(phoneNumber, activeAccountId);
@@ -495,7 +487,7 @@ export class TransactionRegistrationService {
 
       if (creditCardDetection.usesCreditCard) {
         // 💳 VALIDAÇÃO DE CARTÃO: Verificar cartões disponíveis e aplicar regras
-        const cardValidation = await this.validateCreditCardUsage(user);
+        const cardValidation = await this.validateCreditCardUsage(user, activeAccountId);
 
         if (!cardValidation.success) {
           // Retornar erro se não passou na validação
@@ -647,6 +639,7 @@ export class TransactionRegistrationService {
           messageId,
           user,
           platform,
+          activeAccountId, // Passar accountId contextual
         );
 
         if (!confirmResult.success || !confirmResult.confirmationId) {
@@ -672,7 +665,14 @@ export class TransactionRegistrationService {
       }
 
       // 5. Sempre criar confirmação (a lógica de auto-register está no createConfirmation)
-      return await this.createConfirmation(phoneNumber, extractedData, messageId, user, platform);
+      return await this.createConfirmation(
+        phoneNumber,
+        extractedData,
+        messageId,
+        user,
+        platform,
+        activeAccountId, // Passar accountId contextual
+      );
     } catch (error) {
       this.logger.error(`❌ Erro ao processar texto:`, error);
       throw error;
@@ -699,26 +699,18 @@ export class TransactionRegistrationService {
     try {
       this.logger.log(`🖼️ [Registration] Processando imagem de ${phoneNumber}`);
 
-      // 0. Usar accountId passado ou validar conta ativa
-      let activeAccountId: string;
-
-      if (accountId) {
-        // Usar accountId contextual do provider (não valida, apenas usa)
-        activeAccountId = accountId;
-        this.logger.debug(`🏦 Usando accountId contextual: ${activeAccountId}`);
-      } else {
-        // Fallback: validar conta ativa do banco
-        const accountValidation = await this.validateAccountBeforeTransaction(phoneNumber);
-        if (!accountValidation.valid) {
-          return {
-            success: false,
-            message: accountValidation.message || '❌ Conta ativa não encontrada.',
-            requiresConfirmation: false,
-          };
-        }
-        activeAccountId = accountValidation.accountId;
-        this.logger.debug(`🏦 Usando conta ativa do banco: ${activeAccountId}`);
+      // 0. Usar accountId passado (OBRIGATÓRIO - não busca do cache)
+      if (!accountId) {
+        this.logger.error(`❌ AccountId não fornecido para ${phoneNumber}`);
+        return {
+          success: false,
+          message: '❌ Erro interno: conta não identificada.',
+          requiresConfirmation: false,
+        };
       }
+
+      const activeAccountId = accountId;
+      this.logger.debug(`🏦 Usando accountId: ${activeAccountId}`);
 
       // 1. Extrair dados da imagem via IA
       this.logger.log(`🤖 Analisando imagem com IA...`);
@@ -795,7 +787,14 @@ export class TransactionRegistrationService {
       }
 
       // 4. Sempre pedir confirmação para imagens (mesmo com alta confiança)
-      return await this.createConfirmation(phoneNumber, extractedData, messageId, user, platform);
+      return await this.createConfirmation(
+        phoneNumber,
+        extractedData,
+        messageId,
+        user,
+        platform,
+        activeAccountId, // Passar accountId contextual
+      );
     } catch (error) {
       this.logger.error(`❌ Erro ao processar imagem:`, error);
       throw error;
@@ -866,6 +865,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    accountId?: string, // accountId contextual
   ): Promise<{
     success: boolean;
     message: string;
@@ -923,6 +923,7 @@ export class TransactionRegistrationService {
         messageId,
         user,
         platform,
+        accountId, // Passar accountId contextual (se disponível)
       );
       return {
         ...confirmation,
@@ -940,6 +941,7 @@ export class TransactionRegistrationService {
     messageId: string,
     user?: UserCache, // User opcional para incluir userId
     platform: string = 'whatsapp',
+    accountId?: string, // accountId contextual (se não fornecido, busca do cache)
   ): Promise<{
     success: boolean;
     message: string;
@@ -959,31 +961,29 @@ export class TransactionRegistrationService {
       // Converter amount de reais para centavos (IA retorna em reais)
       const amountInCents = Math.round(data.amount * 100);
 
-      // Buscar conta ativa se user disponível
-      let accountId: string | undefined;
-      if (user) {
-        try {
-          const activeAccount = await this.userCache.getActiveAccount(phoneNumber);
-          accountId = activeAccount?.id;
-
-          // 🔍 LOG DE DEBUG: Rastrear conta ativa sendo usada
-          this.logger.log(
-            `👤 [PERFIL DEBUG] Conta ativa para transação: ` +
-              `phoneNumber=${phoneNumber}, ` +
-              `accountId=${accountId || 'NENHUMA'}, ` +
-              `accountName=${activeAccount?.name || 'N/A'}, ` +
-              `userId=${user.gastoCertoId}`,
-          );
-        } catch (error) {
-          this.logger.warn(`Não foi possível buscar conta ativa: ${error.message}`);
-        }
+      // Usar accountId passado (OBRIGATÓRIO - não busca do cache)
+      if (!accountId) {
+        this.logger.error(
+          `❌ AccountId não fornecido em createConfirmation para ${phoneNumber}`,
+        );
+        throw new Error('AccountId é obrigatório para criar confirmação');
       }
+
+      const finalAccountId = accountId;
+
+      // 🔍 LOG DE DEBUG: Rastrear conta sendo usada
+      this.logger.log(
+        `👤 [PERFIL DEBUG] Conta para transação: ` +
+          `phoneNumber=${phoneNumber}, ` +
+          `accountId=${finalAccountId}, ` +
+          `userId=${user?.gastoCertoId || 'N/A'}`,
+      );
 
       // Resolver IDs de categoria e subcategoria ANTES de criar confirmação
       let categoryId: string | undefined;
       let subCategoryId: string | undefined;
 
-      if (user && accountId) {
+      if (user && finalAccountId) {
         try {
           this.logger.debug(
             `📊 [DEBUG] Dados extraídos ANTES de resolver IDs: category="${data.category}", subCategory="${data.subCategory}"`,
@@ -991,7 +991,7 @@ export class TransactionRegistrationService {
 
           const resolved = await this.resolveCategoryAndSubcategory(
             user.gastoCertoId,
-            accountId,
+            finalAccountId,
             data.category,
             data.subCategory,
             data.type, // ⭐ Passar tipo da transação para filtrar categorias
@@ -1020,7 +1020,7 @@ export class TransactionRegistrationService {
               category: data.category,
               categoryId,
               subCategoryId,
-              accountId,
+              accountId: finalAccountId,
               description: data.description,
               date: validDate,
               extractedData: {
@@ -1044,7 +1044,7 @@ export class TransactionRegistrationService {
                   type?: string;
                   isPrimary?: boolean;
                 }>;
-                const activeAcc = accounts.find((acc) => acc.id === accountId);
+                const activeAcc = accounts.find((acc) => acc.id === finalAccountId);
                 if (activeAcc) {
                   accountName = activeAcc.name;
                 }
@@ -1089,7 +1089,7 @@ export class TransactionRegistrationService {
         phoneNumber,
         platform, // Usar platform da mensagem
         userId: user?.id, // Incluir userId se user disponível
-        accountId, // Incluir accountId da conta ativa
+        accountId: finalAccountId, // Incluir accountId contextual ou do cache
         messageId,
         type: data.type as any,
         amount: amountInCents,
@@ -2282,7 +2282,10 @@ export class TransactionRegistrationService {
    * 3. Se não tem cartão → retornar erro
    * 4. Se tem 2+ cartões → pedir escolha
    */
-  private async validateCreditCardUsage(user: UserCache): Promise<{
+  private async validateCreditCardUsage(
+    user: UserCache,
+    accountId: string,
+  ): Promise<{
     success: boolean;
     message: string;
     creditCardId?: string;
@@ -2306,17 +2309,10 @@ export class TransactionRegistrationService {
         };
       }
 
-      // 2. Buscar cartões disponíveis
-      const activeAccount = await this.userCache.getActiveAccountByUserId(user.gastoCertoId);
-      if (!activeAccount) {
-        this.logger.error(`❌ [VALIDATE CARD] Conta ativa não encontrada`);
-        return {
-          success: false,
-          message: '❌ Erro ao obter conta ativa. Tente novamente.',
-        };
-      }
+      // 2. Buscar cartões disponíveis (usando accountId específico)
+      this.logger.log(`💳 [VALIDATE CARD] Buscando cartões do accountId: ${accountId}`);
 
-      const cardsResult = await this.gastoCertoApi.listCreditCards(activeAccount.id);
+      const cardsResult = await this.gastoCertoApi.listCreditCards(accountId);
       this.logger.log(`💳 [VALIDATE CARD] Cartões encontrados: ${JSON.stringify(cardsResult)}`);
 
       if (!cardsResult.success || !cardsResult.data || cardsResult.data.length === 0) {

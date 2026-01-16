@@ -7,6 +7,8 @@ import {
 } from '@infrastructure/messaging/message.interface';
 import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
 
+export { IFilteredMessage, MessageType };
+
 @Injectable()
 export class MessageFilterService implements IMessageFilter {
   private readonly logger = new Logger(MessageFilterService.name);

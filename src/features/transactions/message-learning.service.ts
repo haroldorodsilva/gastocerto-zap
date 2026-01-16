@@ -63,6 +63,7 @@ export class MessageLearningService {
   async processLearningMessage(
     phoneNumber: string,
     messageText: string,
+    accountId?: string, // accountId contextual
   ): Promise<{
     success: boolean;
     message: string;
@@ -77,6 +78,12 @@ export class MessageLearningService {
     const user = await this.userCacheService.getUser(phoneNumber);
     if (!user) {
       return { success: false, message: '❌ Usuário não encontrado.' };
+    }
+
+    // Usar accountId passado ou fallback para activeAccountId do usuário
+    const effectiveAccountId = accountId || user.activeAccountId;
+    if (!effectiveAccountId) {
+      return { success: false, message: '❌ Conta não identificada.' };
     }
 
     // Tentar processar como resposta (1/2/3)
@@ -115,7 +122,7 @@ export class MessageLearningService {
     // Não processou como resposta - tentar como correção manual
     const categories = await this.userCacheService.getUserCategories(
       phoneNumber,
-      user.activeAccountId,
+      effectiveAccountId, // Usar accountId contextual
     );
 
     const correctionResult = await this.ragLearningService.processCorrection(

@@ -69,7 +69,7 @@ export class WebChatService {
    * Processa mensagem do chat web
    * @param userId - ID do usuário no GastoCerto (extraído do JWT)
    * @param messageText - Mensagem enviada pelo usuário
-   * @param accountId - ID da conta/perfil ativo (opcional, do header x-account)
+   * @param accountId - ID da conta/perfil ativo (OBRIGATÓRIO, do header x-account)
    */
   async processMessage(
     userId: string,
@@ -77,8 +77,23 @@ export class WebChatService {
     accountId?: string,
   ): Promise<WebChatResponse> {
     this.logger.log(
-      `📝 [WebChat] Processando mensagem - userId: ${userId}, accountId: ${accountId || 'default'}`,
+      `📝 [WebChat] Processando mensagem - userId: ${userId}, accountId: ${accountId || 'NÃO FORNECIDO'}`,
     );
+
+    // Validar se accountId foi fornecido
+    if (!accountId) {
+      this.logger.warn(`⚠️ [WebChat] AccountId não fornecido no header x-account`);
+      return {
+        success: false,
+        messageType: 'error',
+        message: this.removeEmojis(
+          '⚠️ Por favor, selecione um perfil antes de enviar mensagens.',
+        ),
+        formatting: {
+          color: 'warning',
+        },
+      };
+    }
 
     try {
       // 1. Buscar usuário pelo gastoCertoId
@@ -197,6 +212,7 @@ export class WebChatService {
         const learningResult = await this.messageLearningService.processLearningMessage(
           phoneNumber,
           messageText,
+          accountId, // Passar accountId contextual
         );
 
         if (learningResult.success) {
