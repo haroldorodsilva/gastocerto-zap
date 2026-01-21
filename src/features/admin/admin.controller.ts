@@ -3318,6 +3318,7 @@ isActive: ${dto.isActive}
           email: user.email,
           name: user.name,
           hasActiveSubscription: user.hasActiveSubscription,
+          canUseGastoZap: user.canUseGastoZap,
           isBlocked: user.isBlocked,
           isActive: user.isActive,
           activeAccountId: user.activeAccountId,
@@ -3325,6 +3326,14 @@ isActive: ${dto.isActive}
           lastSyncAt: user.lastSyncAt,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
+          subscriptionInfo: {
+            canUseService: user.canUseGastoZap,
+            hasActiveSubscription: user.hasActiveSubscription,
+            isBlocked: user.isBlocked,
+            isActive: user.isActive,
+            lastSync: user.updatedAt,
+            needsSync: this.cacheService.needsSync(user),
+          },
         },
         stats,
         data: {
@@ -3360,6 +3369,101 @@ isActive: ${dto.isActive}
       return {
         success: false,
         message: 'Erro ao buscar resumo do usuário',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * POST /admin/users/:userId/sync-cache
+   * Limpa cache do usuário e busca dados atualizados da API
+   * Útil para forçar refresh de dados de assinatura, contas, etc.
+   */
+  @Post('users/:userId/sync-cache')
+  async syncUserCache(@Param('userId') userId: string) {
+    this.logger.log(`🔄 Admin solicitou sync completo do cache: ${userId}`);
+
+    try {
+      // 1. Buscar usuário
+      const user = await this.prisma.userCache.findUnique({
+        where: { gastoCertoId: userId },
+      });
+
+      if (!user) {
+        return {
+          success: false,
+          message: 'Usuário não encontrado',
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // 2. Limpar cache Redis
+      const redisClient = this.redisService.getClient();
+      const cacheKeys = [
+        `user:${userId}`,
+        `user:${user.phoneNumber}`,
+        user.whatsappId ? `user:${user.whatsappId}` : null,
+        user.telegramId ? `user:${user.telegramId}` : null,
+      ].filter(Boolean);
+
+      for (const key of cacheKeys) {
+        await redisClient.del(key);
+      }
+
+      this.logger.log(`🗑️ Cache Redis limpo: ${cacheKeys.length} chaves`);
+
+      // 3. Buscar dados atualizados da API
+      const apiUser = await this.cacheService['gastoCertoApi'].getUserById(userId);
+
+      // 4. Sincronizar status de assinatura
+      const subscriptionStatus =
+        await this.cacheService['gastoCertoApi'].getSubscriptionStatus(userId);
+
+      // 5. Atualizar banco de dados
+      const updatedUser = await this.prisma.userCache.update({
+        where: { gastoCertoId: userId },
+        data: {
+          name: apiUser.name,
+          email: apiUser.email,
+          phoneNumber: apiUser.phoneNumber || user.phoneNumber,
+          hasActiveSubscription: subscriptionStatus.isActive,
+          canUseGastoZap: subscriptionStatus.canUseGastoZap,
+          isActive: apiUser.isActive ?? true,
+          isBlocked: apiUser.isBlocked ?? false,
+          accounts: apiUser.accounts as any,
+          categories: apiUser.categories as any,
+          preferences: apiUser.preferences as any,
+          lastSyncAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+
+      this.logger.log(`✅ Cache sincronizado com sucesso: ${userId}`);
+
+      return {
+        success: true,
+        message: 'Cache sincronizado com sucesso',
+        data: {
+          userId: updatedUser.gastoCertoId,
+          name: updatedUser.name,
+          email: updatedUser.email,
+          hasActiveSubscription: updatedUser.hasActiveSubscription,
+          canUseGastoZap: updatedUser.canUseGastoZap,
+          isActive: updatedUser.isActive,
+          isBlocked: updatedUser.isBlocked,
+          lastSyncAt: updatedUser.lastSyncAt,
+          updatedAt: updatedUser.updatedAt,
+          cacheKeysCleared: cacheKeys.length,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao sincronizar cache: ${error.message}`, error.stack);
+
+      return {
+        success: false,
+        message: 'Erro ao sincronizar cache',
         error: error.message,
         timestamp: new Date().toISOString(),
       };
