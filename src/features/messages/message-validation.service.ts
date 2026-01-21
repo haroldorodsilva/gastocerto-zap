@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
+import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { UserCache } from '@prisma/client';
 
@@ -65,6 +66,7 @@ export class MessageValidationService {
     private readonly userCacheService: UserCacheService,
     private readonly onboardingService: OnboardingService,
     private readonly messageLearningService: MessageLearningService,
+    private readonly gastoCertoApi: GastoCertoApiService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -168,19 +170,40 @@ export class MessageValidationService {
         };
       }
 
-      // 6. Verificar assinatura ativa
-      if (!user.hasActiveSubscription) {
-        this.logger.warn(`💳 [${platform}] User ${platformId} has no active subscription`);
+      // 6. Verificar assinatura ativa e permissão de uso (canUseGastoZap)
+      if (!user.hasActiveSubscription || !user.canUseGastoZap) {
+        this.logger.warn(
+          `💳 [${platform}] User ${platformId} cannot use service | ` +
+            `hasActiveSubscription=${user.hasActiveSubscription} | ` +
+            `canUseGastoZap=${user.canUseGastoZap}`,
+        );
+
+        // Buscar mensagem personalizada da API
+        let message =
+          '💳 *Assinatura Inativa*\n\n' +
+          'Sua assinatura expirou ou está inativa.\n\n' +
+          '🔄 Para continuar usando o GastoZap, renove sua assinatura:\n' +
+          '👉 https://gastocerto.com/assinatura\n\n' +
+          '❓ Dúvidas? Fale conosco: suporte@gastocerto.com';
+
+        // Tentar obter mensagem personalizada da API (sem bloquear)
+        try {
+          const status = await this.gastoCertoApi.getSubscriptionStatus(user.gastoCertoId);
+          if (status.message) {
+            message = status.message;
+            if (status.purchaseUrl) {
+              message += `\n\n👉 ${status.purchaseUrl}`;
+            }
+          }
+        } catch (error) {
+          this.logger.warn(`⚠️ Não foi possível obter mensagem da API: ${error.message}`);
+        }
+
         return {
           isValid: false,
           action: ValidationAction.NO_SUBSCRIPTION,
           user,
-          message:
-            '💳 *Assinatura Inativa*\n\n' +
-            'Sua assinatura expirou ou está inativa.\n\n' +
-            '🔄 Para continuar usando o GastoCerto, renove sua assinatura:\n' +
-            '👉 https://gastocerto.com/assinatura\n\n' +
-            '❓ Dúvidas? Fale conosco: suporte@gastocerto.com',
+          message,
         };
       }
 

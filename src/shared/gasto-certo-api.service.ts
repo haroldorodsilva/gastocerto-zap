@@ -339,32 +339,57 @@ export class GastoCertoApiService {
   }
 
   /**
-   * Verifica se usuário tem assinatura ativa
+   * Verifica status de assinatura completo (canUseGastoZap + purchaseUrl)
    */
-  async hasActiveSubscription(userId: string): Promise<boolean> {
+  async getSubscriptionStatus(userId: string): Promise<{
+    isActive: boolean;
+    canUseGastoZap: boolean;
+    purchaseUrl?: string;
+    message?: string;
+  }> {
     try {
-      this.logger.debug(`Verificando assinatura do usuário: ${userId}`);
+      this.logger.debug(`Verificando status de assinatura completo: ${userId}`);
 
       const hmacHeaders = this.serviceAuthService.generateAuthHeaders();
 
       const response = await firstValueFrom(
-        this.httpService.get<{ isActive: boolean }>(
-          `${this.baseUrl}/external/subscriptions/${userId}/status`,
-          {
-            headers: {
-              ...hmacHeaders,
-              'Content-Type': 'application/json',
-            },
-            timeout: this.timeout,
+        this.httpService.get<{
+          isActive: boolean;
+          canUseGastoZap: boolean;
+          purchaseUrl?: string;
+          message?: string;
+        }>(`${this.baseUrl}/external/subscriptions/${userId}/status`, {
+          headers: {
+            ...hmacHeaders,
+            'Content-Type': 'application/json',
           },
-        ),
+          timeout: this.timeout,
+        }),
       );
 
-      return response.data.isActive;
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao verificar status de assinatura: ${error.message}`);
+
+      // Graceful degradation: permitir uso em caso de erro
+      return {
+        isActive: false,
+        canUseGastoZap: true,
+        message: 'Não foi possível verificar sua assinatura. Tente novamente mais tarde.',
+      };
+    }
+  }
+
+  /**
+   * Verifica se usuário tem assinatura ativa (método legacy)
+   * @deprecated Use getSubscriptionStatus() para obter informações completas
+   */
+  async hasActiveSubscription(userId: string): Promise<boolean> {
+    try {
+      const status = await this.getSubscriptionStatus(userId);
+      return status.isActive;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao verificar assinatura: ${error.message}`);
-
-      // Em caso de erro, retornar false (não bloquear usuário)
       return false;
     }
   }

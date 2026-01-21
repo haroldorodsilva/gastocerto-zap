@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
 import { SessionStatus } from '@prisma/client';
@@ -74,11 +80,16 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
     this.logger.log('✅ WhatsAppSessionManager initialized');
     // Auto-restore active sessions on startup
     await this.restoreActiveSessions();
+
+    // Após 5 segundos, fazer force restart nas sessões ativas
+    setTimeout(async () => {
+      await this.forceRestartActiveSessions();
+    }, 5000);
   }
 
   /**
    * Destruição do módulo - desconecta todas as sessões WhatsApp
-   * 
+   *
    * IMPORTANTE: NÃO alteramos isActive no banco!
    * Apenas desconectamos os sockets para liberar recursos.
    * Quando o container subir novamente, ele reconecta automaticamente
@@ -94,18 +105,18 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
         (async () => {
           try {
             this.logger.log(`🧹 Disconnecting WhatsApp session: ${sessionId}`);
-            
+
             // Marcar como parada intencional para evitar auto-reconexão
             this.stoppingSessions.add(sessionId);
-            
+
             // Fechar socket (sem fazer logout, preserva credenciais)
             sock.end(undefined);
-            
+
             this.logger.log(`✅ WhatsApp session ${sessionId} disconnected`);
           } catch (error) {
             this.logger.error(`❌ Error disconnecting WhatsApp session ${sessionId}:`, error);
           }
-        })()
+        })(),
       );
     }
 
@@ -244,6 +255,53 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
       this.logger.log('✅ Session restoration completed');
     } catch (error) {
       this.logger.error(`❌ Failed to restore sessions: ${error.message}`);
+    }
+  }
+
+  /**
+   * Force restart de todas as sessões ativas
+   * Executado após delay de 5 segundos do startup
+   */
+  private async forceRestartActiveSessions(): Promise<void> {
+    try {
+      this.logger.log('🔄 Starting force restart for active sessions (5s delay completed)...');
+
+      // Buscar sessões ativas
+      const activeSessions = await this.prisma.whatsAppSession.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+
+      this.logger.log(`🔥 Found ${activeSessions.length} active session(s) for force restart`);
+
+      if (activeSessions.length === 0) {
+        this.logger.log('ℹ️ No active sessions to force restart');
+        return;
+      }
+
+      // Force restart cada sessão
+      for (const session of activeSessions) {
+        try {
+          this.logger.log(`🔄 Force restarting session: ${session.sessionId}`);
+
+          // Parar e iniciar novamente (force restart)
+          await this.stopSession(session.sessionId);
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // 1s entre stop e start
+          await this.startSession(session.sessionId);
+
+          // Pequeno delay entre restarts
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        } catch (error) {
+          this.logger.error(
+            `❌ Failed to force restart session ${session.sessionId}: ${error.message}`,
+          );
+        }
+      }
+
+      this.logger.log('✅ Force restart completed for all active sessions');
+    } catch (error) {
+      this.logger.error(`❌ Failed to force restart sessions: ${error.message}`);
     }
   }
 

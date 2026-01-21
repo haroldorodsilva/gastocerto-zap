@@ -3100,6 +3100,20 @@ isActive: ${dto.isActive}
         };
       }
 
+      // 🔄 Sincronizar status de assinatura se necessário (1h)
+      if (this.cacheService.needsSync(user)) {
+        this.logger.log(`⏰ [Admin] Syncing subscription status for ${userId}`);
+        await this.cacheService.syncSubscriptionStatus(userId);
+
+        // Recarregar usuário com dados atualizados
+        const updatedUser = await this.prisma.userCache.findUnique({
+          where: { gastoCertoId: userId },
+        });
+        if (updatedUser) {
+          Object.assign(user, updatedUser);
+        }
+      }
+
       // 2. RAG Search Logs (últimos 50)
       const ragLogs = await this.prisma.rAGSearchLog.findMany({
         where: { userId },

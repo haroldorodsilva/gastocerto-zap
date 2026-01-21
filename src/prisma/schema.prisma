@@ -68,6 +68,7 @@ model UserCache {
   email                    String
   name                     String
   hasActiveSubscription    Boolean                   @default(false)
+  canUseGastoZap           Boolean                   @default(false)
   activeAccountId          String?
   accounts                 Json                      @default("[]")
   categories               Json                      @default("[]")

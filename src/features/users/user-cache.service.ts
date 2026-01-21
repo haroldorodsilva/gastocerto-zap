@@ -254,6 +254,7 @@ export class UserCacheService {
             email: apiUser.email,
             name: apiUser.name,
             hasActiveSubscription: apiUser.hasActiveSubscription ?? false,
+            canUseGastoZap: apiUser.hasActiveSubscription ?? false,
             isBlocked: apiUser.isBlocked ?? existing.isBlocked ?? false,
             isActive: apiUser.isActive ?? existing.isActive ?? true,
             accounts: accounts as any,
@@ -272,6 +273,7 @@ export class UserCacheService {
           email: apiUser.email,
           name: apiUser.name,
           hasActiveSubscription: apiUser.hasActiveSubscription ?? false,
+          canUseGastoZap: apiUser.hasActiveSubscription ?? false,
           isBlocked: apiUser.isBlocked ?? false,
           isActive: apiUser.isActive ?? true,
           accounts: accounts as any,
@@ -519,6 +521,47 @@ export class UserCacheService {
       await this.updateUserCache(phoneNumber, { hasActiveSubscription });
     } catch (error) {
       this.logger.error(`Erro ao atualizar status de assinatura:`, error);
+    }
+  }
+
+  /**
+   * Verifica se usuário precisa sincronizar (última atualização > 1h)
+   */
+  needsSync(user: { updatedAt?: Date }): boolean {
+    if (!user.updatedAt) {
+      return true; // Nunca sincronizou
+    }
+
+    const oneHourAgo = Date.now() - 60 * 60 * 1000; // 1 hora em ms
+    return user.updatedAt.getTime() < oneHourAgo;
+  }
+
+  /**
+   * Sincroniza status de assinatura do usuário
+   * Busca dados atualizados da API e atualiza cache local
+   */
+  async syncSubscriptionStatus(gastoCertoId: string): Promise<void> {
+    try {
+      this.logger.log(`⏰ Sincronizando status de assinatura: ${gastoCertoId}`);
+
+      // 1. Buscar status atual na API
+      const status = await this.gastoCertoApi.getSubscriptionStatus(gastoCertoId);
+
+      // 2. Atualizar cache local (PostgreSQL + Redis)
+      await this.updateUserCache(gastoCertoId, {
+        hasActiveSubscription: status.isActive,
+        canUseGastoZap: status.canUseGastoZap,
+        updatedAt: new Date(), // Resetar timer
+      });
+
+      this.logger.log(
+        `✅ Status sincronizado: ${gastoCertoId} | ` +
+          `canUseGastoZap=${status.canUseGastoZap} | ` +
+          `hasActiveSubscription=${status.isActive}`,
+      );
+    } catch (error) {
+      this.logger.error(`❌ Erro ao sincronizar status de assinatura: ${error.message}`);
+      // Não lançar erro - manter status anterior em caso de falha
     }
   }
 

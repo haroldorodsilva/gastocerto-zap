@@ -168,6 +168,22 @@ export class WhatsAppMessageHandler {
       // ✨ NOVO: Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
 
+      // 🔄 SINCRONIZAÇÃO: Verificar se precisa sincronizar status (1h)
+      if (validation.user && this.userCacheService.needsSync(validation.user)) {
+        this.logger.log(`⏰ [WhatsApp] Syncing subscription status for ${phoneNumber}`);
+        await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
+        
+        // Revalidar usuário com dados atualizados
+        const updatedValidation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
+        
+        // Se agora não pode usar, bloquear
+        if (updatedValidation.action === ValidationAction.NO_SUBSCRIPTION) {
+          this.logger.warn(`[WhatsApp] 💳 User ${phoneNumber} subscription expired`);
+          this.sendMessage(phoneNumber, updatedValidation.message!);
+          return;
+        }
+      }
+
       // Tratar ações conforme resultado da validação
       switch (validation.action) {
         case ValidationAction.ONBOARDING:
