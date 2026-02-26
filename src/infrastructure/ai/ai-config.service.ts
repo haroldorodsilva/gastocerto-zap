@@ -1,10 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@core/database/prisma.service';
+import { CryptoService } from '../../common/services/crypto.service';
 import { AIProviderConfig, AISettings } from '@prisma/client';
 
 /**
  * Serviço para gerenciar configurações de provedores de IA
  * Permite configuração dinâmica via banco de dados
+ *
+ * API keys são criptografadas no banco via CryptoService (AES-256-GCM).
+ * - No write (update): apiKey é criptografada antes de salvar
+ * - No read (cache): apiKey é descriptografada ao carregar
+ * - Compatível com legado: chaves plain-text são lidas normalmente
  */
 @Injectable()
 export class AIConfigService {
@@ -13,7 +19,10 @@ export class AIConfigService {
   private cacheTimestamp: number = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cryptoService: CryptoService,
+  ) {}
 
   /**
    * Busca configuração de um provider específico
@@ -62,15 +71,23 @@ export class AIConfigService {
 
   /**
    * Atualiza configuração de um provider
+   * Se apiKey for fornecida, ela é criptografada antes de salvar no banco
    */
   async updateProviderConfig(
     provider: string,
     data: Partial<AIProviderConfig>,
   ): Promise<AIProviderConfig> {
+    // Criptografar apiKey antes de salvar no banco
+    const dataToSave = { ...data };
+    if (dataToSave.apiKey && !this.cryptoService.isEncrypted(dataToSave.apiKey)) {
+      dataToSave.apiKey = this.cryptoService.encrypt(dataToSave.apiKey);
+      this.logger.log(`🔒 API Key criptografada para provider: ${provider}`);
+    }
+
     const updated = await this.prisma.aIProviderConfig.update({
       where: { provider },
       data: {
-        ...data,
+        ...dataToSave,
         updatedAt: new Date(),
       },
     });
@@ -155,6 +172,7 @@ export class AIConfigService {
 
   /**
    * Atualiza cache com dados do banco
+   * Descriptografa apiKeys ao carregar no cache
    */
   private async refreshCache(): Promise<void> {
     try {
@@ -162,6 +180,10 @@ export class AIConfigService {
 
       this.configCache.clear();
       configs.forEach((config) => {
+        // Descriptografar apiKey ao carregar no cache
+        if (config.apiKey) {
+          config.apiKey = this.cryptoService.decrypt(config.apiKey);
+        }
         this.configCache.set(config.provider, config);
       });
 

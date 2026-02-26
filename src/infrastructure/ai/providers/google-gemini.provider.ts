@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CryptoService } from '../../../common/services/crypto.service';
 import { IAIProvider, TransactionData, UserContext, TransactionType } from '../ai.interface';
 import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
@@ -33,7 +34,10 @@ export class GoogleGeminiProvider implements IAIProvider {
   private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
   private initialized = false;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private cryptoService: CryptoService,
+  ) {
     // Inicialização assíncrona será feita no primeiro uso
   }
 
@@ -53,8 +57,8 @@ export class GoogleGeminiProvider implements IAIProvider {
       });
 
       if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco
-        this.apiKey = providerConfig.apiKey;
+        // Usar configuração do banco (descriptografar se necessário)
+        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
         this.model = providerConfig.textModel || 'gemini-1.5-flash';
         this.logger.log(`✅ Google Gemini Provider inicializado via BANCO - Modelo: ${this.model}`);
       } else {

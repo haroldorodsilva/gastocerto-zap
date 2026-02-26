@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // @ts-ignore - groq-sdk não instalado ainda
 import Groq from 'groq-sdk';
+import { CryptoService } from '../../../common/services/crypto.service';
 import {
   IAIProvider,
   TransactionData,
@@ -9,10 +10,7 @@ import {
   UserContext,
   AIProviderType,
 } from '../ai.interface';
-import {
-  getTransactionSystemPrompt,
-  TRANSACTION_USER_PROMPT_TEMPLATE,
-} from '../prompts';
+import { getTransactionSystemPrompt, TRANSACTION_USER_PROMPT_TEMPLATE } from '../prompts';
 
 /**
  * Groq Provider - Especializado em ÁUDIO
@@ -40,7 +38,10 @@ export class GroqProvider implements IAIProvider {
   private readonly baseUrl = 'https://api.groq.com/openai/v1';
   private initialized = false;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private cryptoService: CryptoService,
+  ) {
     // Inicialização assíncrona será feita no primeiro uso
   }
 
@@ -60,8 +61,8 @@ export class GroqProvider implements IAIProvider {
       });
 
       if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco
-        this.apiKey = providerConfig.apiKey;
+        // Usar configuração do banco (descriptografar se necessário)
+        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
         this.model = providerConfig.textModel || 'llama-3.1-70b-versatile';
         this.logger.log(`✅ Groq Provider inicializado via BANCO - Modelo: ${this.model}`);
         this.logger.log(`🎤 Whisper GRÁTIS disponível!`);

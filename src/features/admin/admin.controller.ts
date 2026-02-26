@@ -41,6 +41,19 @@ export class AdminController {
   ) {}
 
   /**
+   * Mascara uma API key para exibição segura
+   * Ex: "sk-proj-abc123xyz" → "sk-p****xyz"
+   */
+  private maskApiKey(key: string): string {
+    if (!key) return '';
+    // Se a key está criptografada (enc:...), mostrar apenas que está criptografada
+    if (key.startsWith('enc:')) return '🔒 [encrypted]';
+    // Mostrar primeiros 4 e últimos 4 caracteres
+    if (key.length <= 8) return '****';
+    return `${key.substring(0, 4)}****${key.substring(key.length - 4)}`;
+  }
+
+  /**
    * Limpa todo o cache Redis
    * POST /admin/cache/clear
    * Header: x-admin-key: <ADMIN_API_KEY>
@@ -735,6 +748,7 @@ export class AdminController {
   /**
    * Lista configurações de provedores de IA
    * GET /admin/ai-providers
+   * apiKey é mascarada na resposta (mostra apenas últimos 4 caracteres)
    */
   @Get('ai-providers')
   async listAIProviders() {
@@ -745,9 +759,15 @@ export class AdminController {
         orderBy: { priority: 'asc' },
       });
 
+      // Mascarar apiKey na resposta
+      const maskedProviders = providers.map((p) => ({
+        ...p,
+        apiKey: p.apiKey ? this.maskApiKey(p.apiKey) : null,
+      }));
+
       return {
         success: true,
-        data: providers,
+        data: maskedProviders,
       };
     } catch (error: any) {
       this.logger.error('❌ Erro ao buscar provedores de IA:', error);
@@ -758,6 +778,7 @@ export class AdminController {
   /**
    * Busca configuração de um provider específico
    * GET /admin/ai-providers/:provider
+   * apiKey é mascarada na resposta
    */
   @Get('ai-providers/:provider')
   async getAIProvider(@Param('provider') provider: string) {
@@ -775,7 +796,10 @@ export class AdminController {
 
       return {
         success: true,
-        data: config,
+        data: {
+          ...config,
+          apiKey: config.apiKey ? this.maskApiKey(config.apiKey) : null,
+        },
       };
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar provider ${provider}:`, error);
@@ -786,6 +810,7 @@ export class AdminController {
   /**
    * Atualiza configuração de um provider
    * PUT /admin/ai-providers/:provider
+   * apiKey é criptografada pelo AIConfigService antes de salvar
    */
   @Put('ai-providers/:provider')
   @HttpCode(HttpStatus.OK)
@@ -797,7 +822,10 @@ export class AdminController {
 
       return {
         success: true,
-        data: updated,
+        data: {
+          ...updated,
+          apiKey: updated.apiKey ? this.maskApiKey(updated.apiKey) : null,
+        },
         message: 'Configuração atualizada com sucesso',
       };
     } catch (error: any) {

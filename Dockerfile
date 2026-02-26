@@ -34,6 +34,9 @@ RUN npx prisma generate
 # Build the application
 RUN yarn build
 
+# Compile seed separately (webpack doesn't include it)
+RUN npx tsc src/prisma/seed.ts --outDir dist/seed --esModuleInterop --skipLibCheck --resolveJsonModule
+
 # ===================================
 # STAGE 3: Production
 # ===================================
@@ -59,6 +62,10 @@ COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/src/prisma ./src/prisma
 
+# Copy startup script
+COPY --from=builder --chown=nestjs:nodejs /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
+RUN chmod +x scripts/docker-entrypoint.sh
+
 # Set environment
 ENV NODE_ENV=production \
     PORT=3000 \
@@ -77,7 +84,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Use tini as init system (propagates signals correctly)
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# Start application
-# IMPORTANTE: Usar 'exec' para que node receba SIGTERM diretamente
-# Migrations rodam antes e, se falharem, container não inicia
-CMD ["sh", "-c", "npm run db:deploy && exec node dist/main.js"]
+# Start application via entrypoint script:
+# 1. prisma migrate deploy (migrations)
+# 2. node dist/seed/seed.js (seed idempotente)
+# 3. exec node dist/main.js (app com exec para receber SIGTERM)
+CMD ["./scripts/docker-entrypoint.sh"]

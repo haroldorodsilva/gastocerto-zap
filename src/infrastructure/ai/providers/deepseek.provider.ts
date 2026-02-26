@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
+import { CryptoService } from '../../../common/services/crypto.service';
 import { IAIProvider, TransactionData, UserContext, AIProviderType } from '../ai.interface';
 import {
   TRANSACTION_SYSTEM_PROMPT,
@@ -33,7 +34,10 @@ export class DeepSeekProvider implements IAIProvider {
   private apiKey: string;
   private initialized = false;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private cryptoService: CryptoService,
+  ) {
     this.baseUrl = this.configService.get<string>(
       'ai.deepseek.baseUrl',
       'https://api.deepseek.com',
@@ -66,8 +70,8 @@ export class DeepSeekProvider implements IAIProvider {
       });
 
       if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco
-        this.apiKey = providerConfig.apiKey;
+        // Usar configuração do banco (descriptografar se necessário)
+        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
         this.model = providerConfig.textModel || this.model;
         this.logger.log(`✅ DeepSeek Provider inicializado via BANCO - Modelo: ${this.model}`);
       } else {

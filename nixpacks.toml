@@ -13,14 +13,13 @@ cmds = ["yarn install --frozen-lockfile"]
 [phases.build]
 cmds = [
   "npx prisma generate",
-  "yarn build",
-  "yarn db:deploy",
-  "yarn db:seed"
+  "yarn build"
 ]
 
 # Comando de inicialização
+# Migrations e seed rodam no startup (DB precisa estar acessível)
 [start]
-cmd = "node dist/main.js"
+cmd = "npx prisma migrate deploy --schema=src/prisma/schema.prisma && yarn db:seed && node dist/main.js"
 
 # Variáveis de ambiente padrão (podem ser sobrescritas no Coolify)
 [variables]

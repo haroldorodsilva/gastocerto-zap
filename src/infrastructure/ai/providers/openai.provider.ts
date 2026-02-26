@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
+import { CryptoService } from '../../../common/services/crypto.service';
 import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
 import {
   getTransactionSystemPrompt,
@@ -21,7 +22,10 @@ export class OpenAIProvider implements IAIProvider {
   private apiKey: string;
   private initialized = false;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private cryptoService: CryptoService,
+  ) {
     // Inicialização assíncrona será feita no primeiro uso
     this.client = new OpenAI({ apiKey: 'sk-dummy-key-not-configured' });
   }
@@ -42,8 +46,8 @@ export class OpenAIProvider implements IAIProvider {
       });
 
       if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco
-        this.apiKey = providerConfig.apiKey;
+        // Usar configuração do banco (descriptografar se necessário)
+        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
         this.model = providerConfig.textModel || 'gpt-4o-mini';
         this.visionModel = providerConfig.visionModel || 'gpt-4o';
         this.whisperModel = providerConfig.audioModel || 'whisper-1';
@@ -94,10 +98,14 @@ export class OpenAIProvider implements IAIProvider {
       this.logger.debug(`Extraindo transação de: "${text}"`);
 
       const userPrompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
-      
-      this.logger.debug(`📤 [OpenAI] Prompt enviado com ${userContext?.categories?.length || 0} categorias`);
+
+      this.logger.debug(
+        `📤 [OpenAI] Prompt enviado com ${userContext?.categories?.length || 0} categorias`,
+      );
       if (userContext?.categories && userContext.categories.length > 0) {
-        this.logger.debug(`📂 [OpenAI] Primeira categoria: ${userContext.categories[0].name} com ${userContext.categories[0].subCategories?.length || 0} subcategorias`);
+        this.logger.debug(
+          `📂 [OpenAI] Primeira categoria: ${userContext.categories[0].name} com ${userContext.categories[0].subCategories?.length || 0} subcategorias`,
+        );
       }
 
       const response = await this.client.chat.completions.create({
@@ -117,7 +125,7 @@ export class OpenAIProvider implements IAIProvider {
       this.logger.log(
         `✅ Transação extraída em ${processingTime}ms - Tipo: ${result.type}, Valor: ${result.amount}`,
       );
-      
+
       this.logger.debug(`📝 [OpenAI] Resposta completa: ${JSON.stringify(result, null, 2)}`);
 
       return result;
