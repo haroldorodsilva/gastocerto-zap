@@ -19,6 +19,7 @@ import { CreditCardParserService } from '../../../src/features/transactions/serv
 import { CreditCardInvoiceCalculatorService } from '../../../src/features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from '../../../src/features/transactions/services/payment-status-resolver.service';
 import { CreditCardService } from '../../../src/features/credit-cards/credit-card.service';
+import { RecurringTransactionService } from '../../../src/features/transactions/services/recurring-transaction.service';
 
 describe('TransactionRegistrationService - RAG Integration', () => {
   let service: TransactionRegistrationService;
@@ -32,10 +33,11 @@ describe('TransactionRegistrationService - RAG Integration', () => {
     phoneNumber: '5511999999999',
     gastoCertoId: 'gc-123',
     whatsappId: 'wa-123',
-    telegramId: null,
+    telegramId: 'tg-123',
     name: 'João Silva',
     email: 'joao@example.com',
     hasActiveSubscription: true,
+    canUseGastoZap: true,
     isBlocked: false,
     isActive: true,
     activeAccountId: 'acc-123',
@@ -250,6 +252,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         { provide: CreditCardInvoiceCalculatorService, useValue: mockCreditCardInvoiceCalculatorService },
         { provide: PaymentStatusResolverService, useValue: mockPaymentStatusResolverService },
         { provide: CreditCardService, useValue: mockCreditCardService },
+        { provide: RecurringTransactionService, useValue: { detectRecurring: jest.fn().mockReturnValue({ isRecurring: false, confidence: 0 }), processRecurring: jest.fn() } },
       ],
     }).compile();
 
@@ -321,6 +324,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Ontem gastei 11 de rotativo',
         'msg-123',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert
@@ -367,6 +372,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Gastei 50',
         'msg-456',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert
@@ -405,6 +412,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Gastei 30 em comida',
         'msg-789',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert - deve processar normalmente mesmo com erro no RAG
@@ -455,6 +464,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Gastei 150 de gasolina',
         'msg-999',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert
@@ -499,6 +510,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Gastei 100 em algo',
         'msg-111',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert - deve usar categoria original da IA, não do RAG
@@ -548,6 +561,8 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         'Ontem gastei 11 de rotativo',
         'msg-final',
         mockUser,
+        'whatsapp',
+        'acc-123',
       );
 
       // Assert - validar todo o fluxo
@@ -628,6 +643,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-subcategory',
           mockUser,
           'whatsapp', // ✅ Platform parameter
+          'acc-123',
         );
 
         // Assert
@@ -696,6 +712,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-ai-subcat',
           mockUser,
           'telegram',
+          'acc-123',
         );
 
         // Assert
@@ -740,6 +757,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-whatsapp',
           mockUser,
           'whatsapp', // ✅ Platform from message context
+          'acc-123',
         );
 
         // Assert
@@ -785,6 +803,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-telegram',
           mockUser,
           'telegram', // ✅ Platform from Telegram message
+          'acc-123',
         );
 
         // Assert
@@ -831,6 +850,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-rag-threshold',
           mockUser,
           'whatsapp',
+          'acc-123',
         );
 
         // Assert
@@ -881,6 +901,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           'msg-rag-fail',
           mockUser,
           'whatsapp',
+          'acc-123',
         );
 
         // Assert
@@ -935,6 +956,7 @@ describe('TransactionRegistrationService - RAG Integration', () => {
           '460',
           mockUser,
           'whatsapp', // ANTES: vinha como 'telegram' (bug corrigido)
+          'acc-123',
         );
 
         // Assert

@@ -3,7 +3,6 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
 import { Cache } from 'cache-manager';
 import { RAGService } from './rag.service';
-import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.constants';
 
 /**
  * RAGLearningService
@@ -586,39 +585,12 @@ export class RAGLearningService {
   }
 
   /**
-   * Extrai o termo principal de uma frase (substantivo principal)
+   * Extrai o termo principal de uma frase (substantivo principal).
+   * Delega para RAGService.extractMainTermFromText() para manter lógica unificada.
    */
   private extractMainTerm(text: string): string | null {
-    this.logger.debug(`🔍 [extractMainTerm] Input text: "${text}"`);
-
-    // Tokenizar texto
-    const allTokens = text
-      .toLowerCase()
-      .replace(/[^\w\s]/g, '')
-      .split(/\s+/)
-      .filter((t) => t.length > 0);
-
-    this.logger.debug(`🔍 [extractMainTerm] All tokens: [${allTokens.join(', ')}]`);
-
-    // Filtrar usando constante centralizada (remove temporais + verbos + números)
-    const filteredTokens = allTokens.filter(
-      (t) =>
-        t.length > 2 &&
-        !FILTER_WORDS_FOR_TERM_DETECTION.includes(t) &&
-        isNaN(Number(t)) &&
-        // Stopwords adicionais
-        !['um', 'uma', 'por', 'de', 'da', 'do', 'na', 'no', 'em'].includes(t),
-    );
-
-    this.logger.debug(
-      `🔍 [extractMainTerm] Filtered tokens: [${filteredTokens.join(', ')}] ` +
-        `(removed: ${allTokens.filter((t) => !filteredTokens.includes(t)).join(', ')})`,
-    );
-
-    const result = filteredTokens[0] || null;
-    this.logger.debug(`🔍 [extractMainTerm] Result: "${result}"`);
-
-    return result;
+    this.logger.debug(`🔍 [extractMainTerm] Delegando para RAGService: "${text}"`);
+    return this.ragService.extractMainTermFromText(text);
   }
 
   /**

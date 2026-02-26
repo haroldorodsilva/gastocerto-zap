@@ -5,7 +5,7 @@ import { OnboardingStateService } from '../../../src/features/onboarding/onboard
 import { GastoCertoApiService } from '../../../src/shared/gasto-certo-api.service';
 import { UserCacheService } from '../../../src/features/users/user-cache.service';
 import { PrismaService } from '../../../src/core/database/prisma.service';
-import { MessageContextService } from '../../../src/infrastructure/messaging/messages/services/message-context.service';
+import { MessageContextService } from '../../../src/infrastructure/messaging/messages/message-context.service';
 import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
 
 describe('OnboardingService', () => {

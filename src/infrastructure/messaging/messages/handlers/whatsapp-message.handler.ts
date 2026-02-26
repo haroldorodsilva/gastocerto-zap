@@ -172,10 +172,13 @@ export class WhatsAppMessageHandler {
       if (validation.user && this.userCacheService.needsSync(validation.user)) {
         this.logger.log(`⏰ [WhatsApp] Syncing subscription status for ${phoneNumber}`);
         await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
-        
+
         // Revalidar usuário com dados atualizados
-        const updatedValidation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
-        
+        const updatedValidation = await this.messageValidation.validateUser(
+          phoneNumber,
+          'whatsapp',
+        );
+
         // Se agora não pode usar, bloquear
         if (updatedValidation.action === ValidationAction.NO_SUBSCRIPTION) {
           this.logger.warn(`[WhatsApp] 💳 User ${phoneNumber} subscription expired`);
@@ -341,6 +344,17 @@ export class WhatsAppMessageHandler {
         `[WhatsApp] Error processing message from ${phoneNumber}: ${error.message}`,
         error.stack,
       );
+
+      // 🆕 Notificar usuário sobre o erro (antes ficava silencioso)
+      try {
+        this.sendMessage(
+          phoneNumber,
+          '❌ Desculpe, ocorreu um erro ao processar sua mensagem.\n\n' +
+            'Por favor, tente novamente em alguns instantes.',
+        );
+      } catch (replyError) {
+        this.logger.error(`[WhatsApp] Failed to send error reply: ${replyError.message}`);
+      }
     }
   }
 
@@ -420,7 +434,7 @@ export class WhatsAppMessageHandler {
         'no',
       ];
 
-      const isConfirmationResponse = confirmationWords.some((word) => normalized.includes(word));
+      const isConfirmationResponse = confirmationWords.some((word) => normalized === word);
 
       return isConfirmationResponse ? { id: confirmation.id } : null;
     } catch (error) {

@@ -71,6 +71,7 @@ export interface TransactionData {
   fixedFrequency?: 'MONTHLY' | 'WEEKLY' | 'ANNUAL' | 'BIENNIAL';
   installments?: number;
   installmentNumber?: number;
+  installmentValueType?: 'INSTALLMENT_VALUE' | 'GROSS_VALUE';
   creditCardId?: string;
   paymentStatus?: 'PENDING' | 'DONE';
   invoiceMonth?: string; // Mês da fatura (YYYY-MM)

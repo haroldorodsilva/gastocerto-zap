@@ -68,7 +68,13 @@ export class TransactionsService {
     platformId?: string,
   ): void {
     const targetId = platformId || phoneNumber;
-    const eventName = platform === 'telegram' ? 'telegram.reply' : 'whatsapp.reply';
+    // Mapear plataforma para evento correto
+    const eventNameMap: Record<string, string> = {
+      telegram: 'telegram.reply',
+      whatsapp: 'whatsapp.reply',
+      webchat: 'whatsapp.reply', // WebChat HTTP não usa eventos, mas emite para log/rastreabilidade
+    };
+    const eventName = eventNameMap[platform] || 'whatsapp.reply';
 
     this.logger.debug(`📤 Emitindo evento ${eventName} para ${phoneNumber}`);
 

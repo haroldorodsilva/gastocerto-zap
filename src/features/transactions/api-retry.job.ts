@@ -4,30 +4,36 @@ import { PrismaService } from '@core/database/prisma.service';
 import { ConfirmationStatus } from '@prisma/client';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
+import { RedisService } from '@common/services/redis.service';
 
 @Injectable()
 export class ApiRetryJob {
   private readonly logger = new Logger(ApiRetryJob.name);
   private readonly MAX_RETRY_ATTEMPTS = 5;
-  private isRunning = false;
+  private readonly LOCK_KEY = 'lock:api-retry-job';
+  private readonly LOCK_TTL_SECONDS = 120; // 2 min max
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly registrationService: TransactionRegistrationService,
     private readonly discordNotification: DiscordNotificationService,
+    private readonly redisService: RedisService,
   ) {}
 
   /**
-   * Job que roda a cada 5 minutos para retentar enviar transações confirmadas para API
+   * Job que roda a cada 5 minutos para retentar enviar transações confirmadas para API.
+   * Usa lock distribuído (Redis SET NX EX) para evitar execução duplicada em multi-instância.
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async retryFailedApiSends() {
-    if (this.isRunning) {
-      this.logger.debug('⏭️  Job já está rodando, pulando execução');
+    // Adquirir lock distribuído via Redis
+    const client = this.redisService.getClient();
+    const acquired = await client.set(this.LOCK_KEY, process.pid.toString(), 'EX', this.LOCK_TTL_SECONDS, 'NX');
+
+    if (!acquired) {
+      this.logger.debug('⏭️  Lock distribuído já adquirido por outra instância, pulando execução');
       return;
     }
-
-    this.isRunning = true;
 
     try {
       this.logger.log(`\n🔄 ========== RETRY API JOB ==========`);
@@ -65,7 +71,8 @@ export class ApiRetryJob {
     } catch (error) {
       this.logger.error('❌ Erro no job de retry:', error);
     } finally {
-      this.isRunning = false;
+      // Liberar lock distribuído
+      await client.del(this.LOCK_KEY);
     }
   }
 

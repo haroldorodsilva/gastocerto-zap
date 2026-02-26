@@ -40,6 +40,9 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
+# Lock files (project uses yarn)
+package-lock.json
+
 # Prisma
 prisma/dev.db
 prisma/dev.db-journal

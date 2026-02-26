@@ -24,6 +24,7 @@ import { FixedTransactionParserService } from '@features/transactions/services/p
 import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
 import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from './services/payment-status-resolver.service';
+import { RecurringTransactionService } from './services/recurring-transaction.service';
 import { AiModule } from '../../infrastructure/ai/ai.module';
 import { RAGModule } from '@infrastructure/rag/rag.module';
 import { UsersModule } from '@features/users/users.module';
@@ -108,6 +109,7 @@ import { PrismaService } from '@core/database/prisma.service';
     CreditCardParserService,
     CreditCardInvoiceCalculatorService,
     PaymentStatusResolverService,
+    RecurringTransactionService,
     PrismaService,
   ],
   exports: [

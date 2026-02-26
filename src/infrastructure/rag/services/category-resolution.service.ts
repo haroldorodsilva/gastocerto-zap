@@ -162,24 +162,26 @@ export class CategoryResolutionService {
 
     this.logger.debug(`🤖 Fallback para IA...`);
 
+    // Capturar tempo do RAG antes de chamar IA
+    const ragResponseTime = Date.now() - startTime;
+
     try {
-      // Simular chamada de IA (você deve adaptar para seu provider)
-      // const aiResult = await options.aiProvider.suggestCategory(options.text);
+      // Chamar IA real via provider passado nas options
+      const aiStartTime = Date.now();
+      const aiSuggestion = await options.aiProvider.suggestCategory(options.text);
+      const aiResponseTime = Date.now() - aiStartTime;
 
-      // MOCK para exemplo (substitua pela chamada real)
       const aiResult = {
-        categoryId: 'ai_cat_123',
-        categoryName: 'Transporte',
-        subCategoryId: 'ai_sub_456',
-        subCategoryName: 'Combustível',
-        confidence: 0.82,
-        inputTokens: 50,
-        outputTokens: 20,
-        model: 'gpt-4o-mini',
-        provider: 'openai',
+        categoryId: aiSuggestion?.categoryId || 'unknown',
+        categoryName: aiSuggestion?.categoryName || 'Outros',
+        subCategoryId: aiSuggestion?.subCategoryId,
+        subCategoryName: aiSuggestion?.subCategoryName,
+        confidence: aiSuggestion?.confidence || 0.5,
+        inputTokens: aiSuggestion?.inputTokens || 0,
+        outputTokens: aiSuggestion?.outputTokens || 0,
+        model: aiSuggestion?.model || 'unknown',
+        provider: aiSuggestion?.provider || 'unknown',
       };
-
-      const aiResponseTime = Date.now() - startTime;
 
       // Log RAG com contexto de fallback (step 1/2)
       const ragSearchLogId = await this.ragService.logSearchWithContext({
@@ -189,7 +191,7 @@ export class CategoryResolutionService {
         success: false, // RAG falhou
         threshold: minConfidence,
         ragMode: 'BM25',
-        responseTime: aiResponseTime - (aiResponseTime - startTime), // Apenas tempo do RAG
+        responseTime: ragResponseTime, // Apenas tempo do RAG (antes da chamada IA)
         flowStep: 1,
         totalSteps: 2,
         aiProvider: aiResult.provider,
@@ -279,19 +281,38 @@ export class CategoryResolutionService {
     this.logger.log(`🔍 [HYBRID] Resolvendo categoria: "${options.text}"`);
 
     // Executar RAG e IA em paralelo
-    const [ragMatches, aiResult] = await Promise.all([
+    if (!options.aiProvider) {
+      this.logger.warn(`⚠️ [HYBRID] aiProvider não fornecido, usando apenas RAG`);
+      return this.resolveCategory({ ...options, useAiFallback: false });
+    }
+
+    const [ragMatches, aiSuggestion] = await Promise.all([
       this.ragService.findSimilarCategories(options.text, options.userId, { minScore: 0.25 }),
-      // Simulação de IA (adapte para seu provider)
-      Promise.resolve({
-        categoryId: 'ai_cat_123',
-        categoryName: 'Transporte',
-        confidence: 0.8,
-        inputTokens: 50,
-        outputTokens: 20,
-        model: 'gpt-4o-mini',
-        provider: 'openai',
+      options.aiProvider.suggestCategory(options.text).catch((err: any) => {
+        this.logger.warn(`⚠️ [HYBRID] Erro na IA:`, err);
+        return null;
       }),
     ]);
+
+    const aiResult = aiSuggestion
+      ? {
+          categoryId: aiSuggestion.categoryId || 'unknown',
+          categoryName: aiSuggestion.categoryName || 'Outros',
+          confidence: aiSuggestion.confidence || 0.5,
+          inputTokens: aiSuggestion.inputTokens || 0,
+          outputTokens: aiSuggestion.outputTokens || 0,
+          model: aiSuggestion.model || 'unknown',
+          provider: aiSuggestion.provider || 'unknown',
+        }
+      : {
+          categoryId: 'unknown',
+          categoryName: 'Outros',
+          confidence: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          model: 'unknown',
+          provider: 'unknown',
+        };
 
     const bestRagMatch = ragMatches.length > 0 ? ragMatches[0] : null;
     const ragScore = bestRagMatch?.score || 0;

@@ -74,6 +74,10 @@ export class CreateTransactionConfirmationDto {
 
   @IsString()
   @IsOptional()
+  installmentValueType?: 'INSTALLMENT_VALUE' | 'GROSS_VALUE'; // Tipo do valor informado
+
+  @IsString()
+  @IsOptional()
   creditCardId?: string; // ID do cartão de crédito usado
 
   @IsString()

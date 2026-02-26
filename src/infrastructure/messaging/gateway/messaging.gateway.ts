@@ -27,7 +27,9 @@ interface ClientData {
  */
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: process.env.CORS_ORIGINS
+      ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+      : '*',
     credentials: true,
   },
   namespace: '/ws',

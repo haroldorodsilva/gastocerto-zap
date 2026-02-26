@@ -5,7 +5,7 @@ import { OnboardingStateService } from '@features/onboarding/onboarding-state.se
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessageContextService } from '@infrastructure/messaging/messages/services/message-context.service';
+import { MessageContextService } from '@infrastructure/messaging/messages/message-context.service';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { MessageType } from '@infrastructure/messaging/message.interface';
 import { RAGService } from '@infrastructure/rag/services/rag.service';

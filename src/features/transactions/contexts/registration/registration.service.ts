@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional, forwardRef, Inject } from '@nestjs/common';
+import { Injectable, Logger, Optional, forwardRef, Inject, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@core/database/prisma.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
@@ -34,6 +34,7 @@ import { CreditCardParserService } from '@features/transactions/services/parsers
 import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from '../../services/payment-status-resolver.service';
 import { CreditCardService } from '@features/credit-cards/credit-card.service';
+import { RecurringTransactionService } from '../../services/recurring-transaction.service';
 
 /**
  * TransactionRegistrationService
@@ -47,7 +48,7 @@ import { CreditCardService } from '@features/credit-cards/credit-card.service';
  * - Comunicação com GastoCerto API
  */
 @Injectable()
-export class TransactionRegistrationService {
+export class TransactionRegistrationService implements OnModuleInit {
   private readonly logger = new Logger(TransactionRegistrationService.name);
   private autoRegisterThreshold: number; // Removido readonly para permitir atualização do banco
   private minConfidenceThreshold: number; // Removido readonly para permitir atualização do banco
@@ -69,12 +70,13 @@ export class TransactionRegistrationService {
     private readonly invoiceCalculator: CreditCardInvoiceCalculatorService,
     private readonly paymentStatusResolver: PaymentStatusResolverService,
     private readonly creditCardService: CreditCardService,
+    private readonly recurringService: RecurringTransactionService,
     @Optional()
     @Inject(forwardRef(() => MessageLearningService))
     private readonly messageLearningService?: MessageLearningService,
     @Optional() private readonly ragService?: RAGService,
   ) {
-    // Valores temporários até carregar do banco
+    // Valores temporários até carregar do banco via onModuleInit
     this.autoRegisterThreshold = 0.9;
     this.minConfidenceThreshold = 0.5;
 
@@ -84,9 +86,14 @@ export class TransactionRegistrationService {
         `messageLearningService=${!!messageLearningService}, ` +
         `ragService=${!!ragService}`,
     );
+  }
 
-    // Carregar configurações do banco
-    this.loadSettings();
+  /**
+   * Lifecycle hook — garante que as configurações sejam carregadas
+   * ANTES do serviço receber qualquer requisição
+   */
+  async onModuleInit(): Promise<void> {
+    await this.loadSettings();
   }
 
   /**
@@ -295,6 +302,9 @@ export class TransactionRegistrationService {
         `🔍 [DEBUG] aiSettings.ragEnabled=${aiSettings.ragEnabled}, this.ragService=${!!this.ragService}, gastoCertoId=${user.gastoCertoId}`,
       );
 
+      // 🆕 Detectar tipo de transação UMA VEZ e reutilizar em todas as fases RAG
+      const detectedType = ragEnabled ? await this.detectTransactionType(text) : null;
+
       if (ragEnabled) {
         try {
           const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido de 0.65 para 0.60
@@ -306,9 +316,6 @@ export class TransactionRegistrationService {
           if (aiSettings.ragAiEnabled) {
             // NOVO: Busca vetorial com embeddings de IA
             this.logger.log(`🤖 Usando busca vetorial com IA (${aiSettings.ragAiProvider})...`);
-
-            // 🆕 Detectar tipo de transação da mensagem antes do RAG
-            const detectedType = await this.detectTransactionType(text);
 
             // Obter AI provider configurado para RAG
             const ragProvider = await this.aiFactory.getProvider(
@@ -324,9 +331,6 @@ export class TransactionRegistrationService {
           } else {
             // Original: Busca BM25 (sem IA)
             this.logger.log(`📊 Usando busca BM25 (sem IA)...`);
-
-            // 🆕 Detectar tipo de transação da mensagem antes do RAG
-            const detectedType = await this.detectTransactionType(text);
 
             this.logger.log(
               `📊 [DEBUG] Chamando ragService.findSimilarCategories com userId=${user.gastoCertoId}, text="${text}", type=${detectedType}`,
@@ -387,9 +391,6 @@ export class TransactionRegistrationService {
           try {
             const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido para 0.60
             this.logger.log(`🔍 FASE 3: Revalidando categoria da IA com RAG...`);
-
-            // 🆕 Detectar tipo antes de revalidar com RAG
-            const detectedType = await this.detectTransactionType(text);
 
             const ragMatches = await this.ragService.findSimilarCategories(
               text,
@@ -470,8 +471,10 @@ export class TransactionRegistrationService {
       if (installmentDetection.isInstallment) {
         extractedData.installments = installmentDetection.installments;
         extractedData.installmentNumber = 1;
+        extractedData.installmentValueType = installmentDetection.installmentValueType;
         this.logger.log(
           `💳 Parcelamento detectado: ${installmentDetection.installments}x` +
+            ` | tipo: ${installmentDetection.installmentValueType}` +
             ` (padrão: "${installmentDetection.matchedPattern}")`,
         );
       }
@@ -1144,8 +1147,15 @@ export class TransactionRegistrationService {
 
       // Transação parcelada
       if (data.installments && data.installments > 1) {
-        const installmentValue = data.amount / data.installments;
+        const isInstallmentValue = data.installmentValueType === 'INSTALLMENT_VALUE';
+        const installmentValue = isInstallmentValue
+          ? data.amount
+          : data.amount / data.installments;
+        const totalValue = isInstallmentValue
+          ? data.amount * data.installments
+          : data.amount;
         additionalInfo += `\n💳 *Parcelamento:* ${data.installments}x de R$ ${installmentValue.toFixed(2)}`;
+        additionalInfo += `\n💰 *Valor total:* R$ ${totalValue.toFixed(2)}`;
         if (data.installmentNumber) {
           additionalInfo += ` (parcela ${data.installmentNumber}/${data.installments})`;
         }
@@ -1206,308 +1216,7 @@ export class TransactionRegistrationService {
     );
   }
 
-  /**
-   * � FASE 8: Cria próximas ocorrências para transações fixas/recorrentes
-   *
-   * Quando o usuário confirma uma transação fixa (ex: assinatura mensal), este método:
-   * 1. Determina a frequência (MONTHLY, WEEKLY, ANNUAL, BIENNIAL)
-   * 2. Calcula as próximas N datas baseado na frequência
-   * 3. Cria transações futuras na API
-   * 4. Limite padrão: 6 meses (ou 26 semanas se semanal)
-   */
-  private async createRecurringOccurrences(confirmation: any): Promise<void> {
-    try {
-      const frequency = confirmation.fixedFrequency;
-      const occurrencesLimit = this.getOccurrencesLimit(frequency);
-
-      this.logger.log(
-        `🔄 [RECURRING] Criando ocorrências futuras: ${occurrencesLimit} ocorrências (${frequency})`,
-      );
-
-      // Buscar usuário
-      const user = await this.userCache.getUser(confirmation.phoneNumber);
-      if (!user) {
-        this.logger.warn(`⚠️ [RECURRING] Usuário não encontrado: ${confirmation.phoneNumber}`);
-        return;
-      }
-
-      // Usar accountId da confirmação
-      const accountId = confirmation.accountId;
-      if (!accountId) {
-        this.logger.warn(`⚠️ [RECURRING] Confirmação sem accountId`);
-        return;
-      }
-
-      // Data base da primeira ocorrência
-      const baseDate = new Date(confirmation.date);
-
-      // Criar próximas ocorrências
-      const occurrencesToCreate = [];
-      for (let i = 1; i <= occurrencesLimit; i++) {
-        const occurrenceDate = this.calculateNextOccurrenceDate(baseDate, frequency, i);
-        occurrencesToCreate.push({
-          occurrenceNumber: i + 1, // +1 porque a primeira já foi criada
-          date: occurrenceDate,
-        });
-      }
-
-      // Criar cada ocorrência na API
-      for (const occurrence of occurrencesToCreate) {
-        const dto: CreateGastoCertoTransactionDto = {
-          userId: user.gastoCertoId,
-          accountId,
-          categoryId: confirmation.categoryId,
-          subCategoryId: confirmation.subCategoryId || undefined,
-          type: confirmation.type,
-          amount: confirmation.amount,
-          description: confirmation.description
-            ? `${confirmation.description} (${this.formatFrequency(frequency)})`
-            : `Recorrência ${this.formatFrequency(frequency)}`,
-          date: occurrence.date.toISOString().split('T')[0], // YYYY-MM-DD
-          source: confirmation.platform || 'whatsapp',
-        };
-
-        try {
-          const response = await this.gastoCertoApi.createTransaction(dto);
-          this.logger.log(
-            `✅ [RECURRING] Ocorrência ${occurrence.occurrenceNumber} criada: ${occurrence.date.toISOString().split('T')[0]}`,
-          );
-
-          // Opcional: Salvar no banco para rastreamento
-          await this.prisma.transactionConfirmation.create({
-            data: {
-              phoneNumber: confirmation.phoneNumber,
-              platform: confirmation.platform || 'whatsapp',
-              messageId: `${confirmation.messageId}_recurring_${occurrence.occurrenceNumber}`,
-              type: confirmation.type,
-              amount: confirmation.amount,
-              category: confirmation.category,
-              categoryId: confirmation.categoryId,
-              subCategoryId: confirmation.subCategoryId,
-              subCategoryName: confirmation.subCategoryName,
-              description: dto.description,
-              date: occurrence.date,
-              extractedData: confirmation.extractedData,
-              confirmedAt: new Date(),
-              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h de expiração
-              apiSent: true,
-              apiSentAt: new Date(),
-              // Campos de recorrência
-              isFixed: true,
-              fixedFrequency: frequency,
-              paymentStatus: 'PENDING',
-            },
-          });
-        } catch (error) {
-          this.logger.error(
-            `❌ [RECURRING] Erro ao criar ocorrência ${occurrence.occurrenceNumber}:`,
-            error,
-          );
-          // Continua criando as outras ocorrências mesmo se uma falhar
-        }
-      }
-
-      this.logger.log(
-        `✅ [RECURRING] Processo concluído: ${occurrencesToCreate.length} ocorrências criadas`,
-      );
-    } catch (error) {
-      this.logger.error(`❌ [RECURRING] Erro ao criar ocorrências recorrentes:`, error);
-      // Não propaga erro para não bloquear confirmação principal
-    }
-  }
-
-  /**
-   * Determina quantas ocorrências futuras criar baseado na frequência
-   */
-  private getOccurrencesLimit(frequency: string): number {
-    switch (frequency) {
-      case 'WEEKLY':
-        return 12; // 12 semanas = ~3 meses
-      case 'MONTHLY':
-        return 6; // 6 meses
-      case 'ANNUAL':
-        return 2; // 2 anos
-      case 'BIENNIAL':
-        return 1; // 1 ocorrência (daqui a 2 anos)
-      default:
-        return 6;
-    }
-  }
-
-  /**
-   * Calcula a data da próxima ocorrência baseado na frequência
-   */
-  private calculateNextOccurrenceDate(
-    baseDate: Date,
-    frequency: string,
-    incrementCount: number,
-  ): Date {
-    const nextDate = new Date(baseDate);
-
-    switch (frequency) {
-      case 'WEEKLY':
-        nextDate.setDate(baseDate.getDate() + incrementCount * 7);
-        break;
-      case 'MONTHLY':
-        nextDate.setMonth(baseDate.getMonth() + incrementCount);
-        break;
-      case 'ANNUAL':
-        nextDate.setFullYear(baseDate.getFullYear() + incrementCount);
-        break;
-      case 'BIENNIAL':
-        nextDate.setFullYear(baseDate.getFullYear() + incrementCount * 2);
-        break;
-    }
-
-    return nextDate;
-  }
-
-  /**
-   * Formata a frequência para exibição
-   */
-  private formatFrequency(frequency: string): string {
-    const frequencyMap: Record<string, string> = {
-      WEEKLY: 'Semanal',
-      MONTHLY: 'Mensal',
-      ANNUAL: 'Anual',
-      BIENNIAL: 'Bienal',
-    };
-    return frequencyMap[frequency] || frequency;
-  }
-
-  /**
-   * �📦 FASE 7: Cria parcelas adicionais para transações parceladas
-   *
-   * Quando o usuário confirma uma transação parcelada (ex: 4x), este método:
-   * 1. Calcula as datas das próximas parcelas (incrementa mês a mês)
-   * 2. Cria N-1 transações adicionais na API (primeira já foi criada)
-   * 3. Cada parcela tem seu próprio installmentNumber (2/4, 3/4, 4/4)
-   * 4. Se for cartão, calcula o mês da fatura para cada parcela
-   */
-  private async createAdditionalInstallments(confirmation: any): Promise<void> {
-    try {
-      const totalInstallments = confirmation.installments;
-      const currentInstallmentNumber = confirmation.installmentNumber || 1;
-
-      this.logger.log(
-        `📦 [INSTALLMENTS] Criando parcelas adicionais: ${totalInstallments - currentInstallmentNumber} restantes`,
-      );
-
-      // Buscar usuário
-      const user = await this.userCache.getUser(confirmation.phoneNumber);
-      if (!user) {
-        this.logger.warn(`⚠️ [INSTALLMENTS] Usuário não encontrado: ${confirmation.phoneNumber}`);
-        return;
-      }
-
-      // Usar accountId da confirmação
-      const accountId = confirmation.accountId;
-      if (!accountId) {
-        this.logger.warn(`⚠️ [INSTALLMENTS] Confirmação sem accountId`);
-        return;
-      }
-
-      // Data base da primeira parcela
-      const baseDate = new Date(confirmation.date);
-
-      // Criar parcelas restantes (de installmentNumber+1 até totalInstallments)
-      const installmentsToCreate = [];
-      for (let i = currentInstallmentNumber + 1; i <= totalInstallments; i++) {
-        // Calcular data da parcela (adiciona meses)
-        const installmentDate = new Date(baseDate);
-        installmentDate.setMonth(baseDate.getMonth() + (i - currentInstallmentNumber));
-
-        // Calcular mês da fatura se for cartão
-        let invoiceMonth: string | undefined;
-        let invoiceMonthFormatted: string | undefined;
-        if (confirmation.creditCardId) {
-          // Buscar dia de fechamento do cartão
-          const closingDay = await this.invoiceCalculator.getCardClosingDay(
-            user.gastoCertoId,
-            confirmation.creditCardId,
-          );
-          const invoiceResult = this.invoiceCalculator.calculateInvoiceMonth(
-            installmentDate,
-            closingDay,
-          );
-          invoiceMonth = invoiceResult.invoiceMonth;
-          invoiceMonthFormatted = invoiceResult.invoiceMonthFormatted;
-        }
-
-        installmentsToCreate.push({
-          installmentNumber: i,
-          date: installmentDate,
-          invoiceMonth,
-          invoiceMonthFormatted,
-        });
-      }
-
-      // Criar cada parcela na API
-      for (const installment of installmentsToCreate) {
-        const dto: CreateGastoCertoTransactionDto = {
-          userId: user.gastoCertoId,
-          accountId,
-          categoryId: confirmation.categoryId,
-          subCategoryId: confirmation.subCategoryId || undefined,
-          type: confirmation.type,
-          amount: confirmation.amount, // Mesmo valor para cada parcela
-          description: confirmation.description
-            ? `${confirmation.description} (${installment.installmentNumber}/${totalInstallments})`
-            : `Parcela ${installment.installmentNumber}/${totalInstallments}`,
-          date: installment.date.toISOString().split('T')[0], // YYYY-MM-DD
-          source: confirmation.platform || 'whatsapp', // Campo obrigatório
-        };
-
-        try {
-          const response = await this.gastoCertoApi.createTransaction(dto);
-          this.logger.log(
-            `✅ [INSTALLMENTS] Parcela ${installment.installmentNumber}/${totalInstallments} criada com sucesso`,
-          );
-
-          // Opcional: Salvar no banco para rastreamento
-          await this.prisma.transactionConfirmation.create({
-            data: {
-              phoneNumber: confirmation.phoneNumber,
-              platform: confirmation.platform || 'whatsapp',
-              messageId: `${confirmation.messageId}_installment_${installment.installmentNumber}`,
-              type: confirmation.type,
-              amount: confirmation.amount,
-              category: confirmation.category,
-              categoryId: confirmation.categoryId,
-              subCategoryId: confirmation.subCategoryId,
-              subCategoryName: confirmation.subCategoryName,
-              description: dto.description,
-              date: installment.date,
-              extractedData: confirmation.extractedData,
-              confirmedAt: new Date(),
-              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h de expiração
-              apiSent: true,
-              apiSentAt: new Date(),
-              // Campos de parcelamento
-              installments: totalInstallments,
-              installmentNumber: installment.installmentNumber,
-              creditCardId: confirmation.creditCardId,
-              invoiceMonth: installment.invoiceMonth,
-              paymentStatus: 'PENDING',
-            },
-          });
-        } catch (error) {
-          this.logger.error(
-            `❌ [INSTALLMENTS] Erro ao criar parcela ${installment.installmentNumber}/${totalInstallments}:`,
-            error,
-          );
-          // Continua criando as outras parcelas mesmo se uma falhar
-        }
-      }
-
-      this.logger.log(
-        `✅ [INSTALLMENTS] Processo concluído: ${installmentsToCreate.length} parcelas criadas`,
-      );
-    } catch (error) {
-      this.logger.error(`❌ [INSTALLMENTS] Erro ao criar parcelas adicionais:`, error);
-      // Não propaga erro para não bloquear confirmação principal
-    }
-  }
+  // Recurring/installment logic delegated to RecurringTransactionService
 
   /**
    * Registra transação confirmada pelo usuário na API GastoCerto
@@ -1535,12 +1244,12 @@ export class TransactionRegistrationService {
 
         // 📦 FASE 7: Criar parcelas adicionais se transação for parcelada
         if (confirmation.installments && confirmation.installments > 1) {
-          await this.createAdditionalInstallments(confirmation);
+          await this.recurringService.createAdditionalInstallments(confirmation);
         }
 
         // 🔄 FASE 8: Criar próximas ocorrências se transação for fixa/recorrente
         if (confirmation.isFixed && confirmation.fixedFrequency) {
-          await this.createRecurringOccurrences(confirmation);
+          await this.recurringService.createRecurringOccurrences(confirmation);
         }
 
         const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';

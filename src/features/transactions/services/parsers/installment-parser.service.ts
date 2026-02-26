@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { TransactionInstallmentValue } from '../../../../types/transaction.types';
 
 export interface InstallmentDetectionResult {
   isInstallment: boolean;
   installments?: number;
+  installmentValueType?: TransactionInstallmentValue;
   confidence: number;
   matchedPattern?: string;
 }
@@ -32,6 +34,9 @@ export class InstallmentParserService {
 
     // Padrão: "5 parcelas" ou "3 parcela"
     /(\d{1,2})\s+parcelas?/i,
+
+    // Padrão: "6 vezes" ou "3 vezes de 50"
+    /(\d{1,2})\s+vezes?/i,
 
     // Padrão: "dividido em 4"
     /dividi[dr]o?\s+em\s+(\d{1,2})/i,
@@ -80,10 +85,14 @@ export class InstallmentParserService {
 
         // Validar: parcelas entre 2 e 24
         if (installments >= 2 && installments <= 24) {
-          this.logger.log(`✅ Parcelamento detectado: ${installments}x (padrão: ${pattern})`);
+          const valueType = this.detectInstallmentValueType(normalizedText, match);
+          this.logger.log(
+            `✅ Parcelamento detectado: ${installments}x | tipo: ${valueType} (padrão: ${pattern})`,
+          );
           return {
             isInstallment: true,
             installments,
+            installmentValueType: valueType,
             confidence: 0.9,
             matchedPattern: match[0],
           };
@@ -94,10 +103,16 @@ export class InstallmentParserService {
     // 2. Tentar números por extenso
     const installments = this.detectNumberWords(normalizedText);
     if (installments) {
-      this.logger.log(`✅ Parcelamento detectado: ${installments}x (por extenso)`);
+      // Para números por extenso, geralmente é valor total (GROSS_VALUE)
+      // Ex: "comprei celular de 1200 parcelado em dez vezes"
+      const valueType = this.detectInstallmentValueTypeByContext(normalizedText);
+      this.logger.log(
+        `✅ Parcelamento detectado: ${installments}x | tipo: ${valueType} (por extenso)`,
+      );
       return {
         isInstallment: true,
         installments,
+        installmentValueType: valueType,
         confidence: 0.85,
         matchedPattern: 'numero_extenso',
       };
@@ -136,6 +151,63 @@ export class InstallmentParserService {
     }
 
     return null;
+  }
+
+  /**
+   * Detecta se o valor informado é por parcela (INSTALLMENT_VALUE) ou total (GROSS_VALUE)
+   *
+   * Padrões INSTALLMENT_VALUE (valor é da parcela):
+   * - "10x de 50" → 50 é o valor de cada parcela
+   * - "5 parcelas de 100" → 100 é o valor de cada parcela  
+   * - "pagar 3x de 200" → 200 é o valor de cada parcela
+   *
+   * Padrões GROSS_VALUE (valor é total):
+   * - "comprei bike de 1000 em 10x" → 1000 é o valor total
+   * - "gastei 500 parcelado em 5" → 500 é o valor total
+   * - "TV de 3000 em 12 parcelas" → 3000 é o valor total
+   */
+  private detectInstallmentValueType(
+    text: string,
+    installmentMatch: RegExpMatchArray,
+  ): TransactionInstallmentValue {
+    // Padrão: "Nx de VALOR" → valor é por parcela (INSTALLMENT_VALUE)
+    // Ex: "10x de 50", "3 parcelas de 100", "dividido em 5x de 200"
+    const installmentValuePatterns = [
+      /\d+\s?x\s+de\s+/i, // "10x de 50"
+      /\d+\s+parcelas?\s+de\s+/i, // "5 parcelas de 100"
+      /\d+\s+vezes?\s+de\s+/i, // "3 vezes de 50"
+    ];
+
+    for (const pattern of installmentValuePatterns) {
+      if (pattern.test(text)) {
+        this.logger.debug(`💰 Valor é por PARCELA (padrão: ${pattern})`);
+        return TransactionInstallmentValue.INSTALLMENT_VALUE;
+      }
+    }
+
+    // Default: valor informado é o total (GROSS_VALUE)
+    // Ex: "comprei bike de 1000 em 10x", "gastei 500 em 3x"
+    return TransactionInstallmentValue.GROSS_VALUE;
+  }
+
+  /**
+   * Detecta installmentValueType para padrões com números por extenso
+   * Geralmente quando alguém diz "parcelado em cinco vezes" o valor é total
+   */
+  private detectInstallmentValueTypeByContext(text: string): TransactionInstallmentValue {
+    // "N vezes/parcelas de VALOR" → INSTALLMENT_VALUE
+    const installmentValuePatterns = [
+      /vezes?\s+de\s+r?\$?\s*\d/i, // "cinco vezes de 50"
+      /parcelas?\s+de\s+r?\$?\s*\d/i, // "três parcelas de 100"
+    ];
+
+    for (const pattern of installmentValuePatterns) {
+      if (pattern.test(text)) {
+        return TransactionInstallmentValue.INSTALLMENT_VALUE;
+      }
+    }
+
+    return TransactionInstallmentValue.GROSS_VALUE;
   }
 
   /**

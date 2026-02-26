@@ -5,6 +5,26 @@ import { Cache } from 'cache-manager';
 import { PrismaService } from '@core/database/prisma.service';
 import { CategoryMatch, RAGConfig, UserCategory } from './rag.interface';
 import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.constants';
+import { SYNONYM_ENTRIES } from '../data/synonym-entries';
+
+/**
+ * Helper: Constrói Map de sinônimos mesclando entradas duplicadas.
+ * Quando a mesma chave aparece múltiplas vezes, os arrays são merged (sem duplicatas).
+ * Isso evita que entradas posteriores sobrescrevam silenciosamente as anteriores.
+ */
+function buildMergedSynonymMap(entries: [string, string[]][]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const [key, values] of entries) {
+    const existing = map.get(key);
+    if (existing) {
+      const merged = [...new Set([...existing, ...values])];
+      map.set(key, merged);
+    } else {
+      map.set(key, [...new Set(values)]);
+    }
+  }
+  return map;
+}
 
 /**
  * RAGService - Retrieval-Augmented Generation
@@ -14,7 +34,7 @@ import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.
  * FEATURES:
  * - Tokenização e normalização de texto (lowercase, remove acentos)
  * - Matching fuzzy com sinônimos
- * - Scoring BM25: term frequency (TF) + inverse document frequency (IDF)
+ * - Scoring BM25: term frequency (TF) + inverse document frequency (IDF real)
  * - Cache de categorias por usuário (Redis ou Map)
  * - Sem dependências externas (OpenAI, pgvector, etc)
  * - ✨ Log de tentativas no banco para analytics
@@ -50,385 +70,9 @@ export class RAGService {
   private readonly categoryCache = new Map<string, UserCategory[]>();
 
   // Dicionário de sinônimos para melhorar matching
-  // Expandido baseado em categorias reais do sistema
-  private readonly synonyms = new Map<string, string[]>([
-    // Cartão e Finanças
-    ['cartao', ['credito', 'debito', 'fatura', 'anuidade', 'parcelamento']],
-    ['credito', ['cartao', 'debito', 'fatura']],
-    ['debito', ['cartao', 'credito', 'fatura']],
-    ['fatura', ['cartao', 'credito', 'debito', 'pagamento']],
-    ['anuidade', ['cartao', 'credito', 'debito']],
-    ['rotativo', ['cartao', 'credito', 'fatura']],
-    ['emprestimo', ['credito', 'financiamento', 'divida']],
-    ['financiamento', ['emprestimo', 'credito', 'divida']],
-    ['divida', ['emprestimo', 'financiamento', 'credito']],
-
-    // Alimentação
-    ['almoco', ['almoço', 'comida', 'refeicao', 'alimento']],
-    ['jantar', ['janta', 'comida', 'refeicao']],
-    ['supermercado', ['mercado', 'compras', 'alimentacao', 'feira', 'hortifruti']],
-    ['mercado', ['supermercado', 'compras', 'alimentacao', 'feira']],
-    ['compras', ['supermercado', 'mercado', 'alimentacao', 'mes', 'mês']],
-    [
-      'feira',
-      ['supermercado', 'mercado', 'compras', 'alimentacao', 'hortifruti', 'verduras', 'frutas'],
-    ],
-    ['hortifruti', ['feira', 'frutas', 'verduras', 'legumes', 'fruta', 'verdura']],
-    ['frutas', ['hortifruti', 'feira', 'fruta', 'banana', 'melancia', 'maca']],
-    ['fruta', ['hortifruti', 'feira', 'frutas', 'banana', 'melancia', 'maca']],
-    ['melancia', ['hortifruti', 'frutas', 'fruta', 'feira']],
-    ['verduras', ['hortifruti', 'feira', 'verdura', 'legumes', 'salada']],
-    ['verdura', ['hortifruti', 'feira', 'verduras', 'legumes', 'salada']],
-    ['padaria', ['pao', 'pães', 'cafe']],
-    ['pao', ['pães', 'padaria', 'paes']],
-    ['restaurante', ['comida', 'refeicao', 'jantar', 'bar', 'restaurantes']],
-    ['restaurantes', ['comida', 'refeicao', 'jantar', 'bar', 'restaurante']],
-    ['lanche', ['lanches', 'salgado', 'coxinha', 'pastel', 'sanduiche']],
-    ['lanches', ['lanche', 'salgado', 'coxinha', 'pastel', 'sanduiche']],
-    ['marmita', ['marmitex', 'quentinha', 'comida', 'marmitas', 'pedi']],
-    ['marmitex', ['marmita', 'quentinha', 'comida']],
-    ['pedi', ['pedido', 'pedir', 'marmita', 'delivery']],
-    ['sorvete', ['sorveteria', 'gelado', 'picole', 'picolé', 'acai', 'açai', 'tomei']],
-    ['sorveteria', ['sorvete', 'gelado', 'picole', 'picolé', 'acai', 'tomei']],
-    ['tomei', ['sorvete', 'sorveteria', 'gelado', 'tomar']],
-    ['agua', ['água', 'bebida', 'liquido', 'líquido']],
-    ['salgado', ['lanche', 'lanches', 'coxinha', 'pastel', 'esfirra']],
-    ['ifood', ['delivery', 'entrega', 'comida', 'pedido', 'rappi']],
-    ['delivery', ['entrega', 'pedido', 'ifood', 'rappi']],
-    ['comida', ['alimentacao', 'alimentação', 'refeicao', 'refeição', 'restaurante', 'viagem']],
-
-    // Investimentos e Financeiros
-    ['financiamento', ['financiamentos', 'parcela', 'prestacao', 'emprestimo', 'credito']],
-    ['financiamentos', ['financiamento', 'parcela', 'prestacao', 'emprestimo', 'credito']],
-    ['emprestimo', ['empréstimo', 'financiamento', 'financiamentos', 'credito', 'parcela']],
-    ['consorcio', ['consórcio', 'lance', 'contemplacao', 'cota']],
-    ['aplicacao', ['aplicação', 'investimento', 'investir', 'render', 'cdb']],
-    ['investimento', ['investir', 'aplicacao', 'aplicação', 'investimentos', 'reserva']],
-    ['reserva', ['investimento', 'aplicacao', 'aplicação', 'guardar', 'poupanca']],
-    ['caixinha', ['poupanca', 'poupança', 'guardar', 'reserva']],
-    ['aluguel', ['aluguel-recebido', 'locacao', 'locação', 'recebi', 'renda', 'imovel']],
-    ['recebi', ['recebido', 'renda', 'receber', 'aluguel', 'entrada']],
-
-    // Taxas e Documentos
-    ['ipva', ['imposto', 'carro', 'veiculo', 'veículo', 'licenciamento']],
-    ['licenciamento', ['documento', 'carro', 'veiculo', 'veículo', 'detran']],
-    ['documentacao', ['documentação', 'documento', 'documentos', 'papel', 'detran', 'carro']],
-    ['cartorio', ['cartório', 'documento', 'reconhecer', 'firma', 'autenticar']],
-    ['imposto', ['renda', 'ir', 'tributo', 'taxa']],
-    ['juros', ['multa', 'atraso', 'mora', 'juros']],
-    ['tarifa', ['bancaria', 'bancária', 'banco', 'taxa']],
-    ['taxa', ['taxas', 'cobranca', 'cobrança', 'tarifa', 'tributo']],
-
-    // Casa
-    [
-      'moveis',
-      ['móveis', 'cadeira', 'mesa', 'armario', 'armário', 'sofa', 'sofá', 'estante', 'cadeiras'],
-    ],
-    ['móveis', ['moveis', 'cadeira', 'mesa', 'armario', 'sofa', 'estante', 'cadeiras', 'mobilia']],
-    ['cadeira', ['moveis', 'móveis', 'mobilia', 'mobília', 'cadeiras', 'assento']],
-    ['cadeiras', ['cadeira', 'moveis', 'móveis', 'mobilia']],
-    ['mesa', ['moveis', 'móveis', 'mobilia', 'mobília']],
-    ['armario', ['armário', 'moveis', 'móveis', 'mobilia']],
-    ['reforma', ['reformar', 'construcao', 'construção', 'material', 'obra']],
-    ['material', ['reforma', 'construcao', 'obra', 'tijolo', 'cimento']],
-    ['utensilios', ['utensílios', 'cozinha', 'panela', 'prato', 'talher', 'faca']],
-    ['cozinha', ['utensilios', 'utensílios', 'panela', 'talher']],
-    ['panela', ['utensilios', 'cozinha', 'talher']],
-    ['toalha', ['toalhas', 'cama', 'banho', 'lencol', 'lençol', 'roupa-cama']],
-    ['toalhas', ['toalha', 'cama', 'banho', 'lencol', 'lençol', 'lençois', 'roupa-cama']],
-    ['lencol', ['lençol', 'toalha', 'toalhas', 'cama', 'banho', 'edredom', 'lençois']],
-    ['lençol', ['lencol', 'toalha', 'toalhas', 'cama', 'banho', 'lençois']],
-    ['lençois', ['lençóis', 'lencol', 'lençol', 'toalhas', 'cama', 'banho']],
-    ['cama', ['banho', 'toalhas', 'lençois', 'lençol', 'quarto']],
-    ['banho', ['cama', 'toalhas', 'banheiro', 'lençol']],
-    ['chave', ['fenda', 'ferramenta', 'ferramentas', 'chaves', 'chave-fenda']],
-    ['fenda', ['chave', 'ferramenta', 'ferramentas', 'parafuso', 'chave-fenda']],
-    ['chave-fenda', ['chave', 'fenda', 'ferramenta', 'ferramentas']],
-    ['tecnico', ['técnico', 'manutencao', 'manutenção', 'conserto', 'consertar']],
-    ['consertar', ['conserto', 'manutencao', 'manutenção', 'tecnico', 'técnico']],
-
-    // Transporte
-    ['gasolina', ['combustivel', 'posto', 'abastecimento', 'gas', 'alcool']],
-    [
-      'combustivel',
-      ['combustível', 'gasolina', 'posto', 'abastecimento', 'gas', 'alcool', 'diesel'],
-    ],
-    ['posto', ['combustivel', 'gasolina', 'abastecimento']],
-    ['abasteci', ['combustivel', 'gasolina', 'posto', 'abastecimento', 'abastecer']],
-    ['abastecer', ['combustivel', 'gasolina', 'posto', 'abastecimento', 'abasteci']],
-    ['uber', ['taxi', 'transporte', '99', 'corrida', 'app', 'mobilidade']],
-    ['taxi', ['táxi', 'uber', '99', 'transporte', 'corrida']],
-    ['corrida', ['uber', 'taxi', '99', 'transporte']],
-    ['onibus', ['ônibus', 'transporte', 'passagem', 'coletivo']],
-    ['pedagio', ['pedágio', 'estrada', 'rodovia']],
-    ['estacionamento', ['parking', 'vaga', 'zona azul']],
-    ['lavagem', ['lava-jato', 'lavar', 'lavou', 'carro', 'lavacao']],
-    ['lava', ['lava-jato', 'lavagem', 'lavou', 'carro']],
-    ['lavou', ['lava-jato', 'lavagem', 'lavar', 'carro']],
-    ['lavei', ['lava', 'lavagem', 'lavar', 'lava-jato', 'carro']],
-    ['jato', ['lava-jato', 'lavagem', 'lavar', 'carro']],
-    ['oficina', ['manutencao', 'manutenção', 'carro', 'mecanico', 'mecânico', 'conserto', 'levei']],
-    ['mecanico', ['mecânico', 'oficina', 'carro', 'manutencao', 'conserto']],
-    ['mecânico', ['mecanico', 'oficina', 'carro', 'manutencao']],
-    ['levei', ['oficina', 'manutencao', 'manutenção', 'carro', 'conserto', 'mecanico']],
-    ['carro', ['veiculo', 'veículo', 'automovel', 'automóvel']],
-    ['multa', ['multas', 'infração', 'transito', 'trânsito']],
-
-    // Educação
-    ['escolar', ['escola', 'educacao', 'educação', 'taxa', 'material', 'taxas']],
-    ['escola', ['escolar', 'educacao', 'educação', 'ensino', 'particular', 'taxa']],
-    ['taxa', ['taxas', 'escolar', 'escola', 'cobranca', 'cobrança', 'educacao', 'educação']],
-    ['taxas', ['taxa', 'escolar', 'escola', 'cobranca', 'educacao']],
-    ['livro', ['livros', 'leitura', 'literatura', 'educacao']],
-    ['caderno', ['cadernos', 'material', 'escolar', 'escola']],
-
-    // Eletrônicos
-    ['eletronico', ['eletrônico', 'eletronicos', 'eletrônicos', 'item', 'aparelho']],
-    ['cabo', ['cabos', 'fio', 'carregador', 'acessorio', 'acessório', 'capinha']],
-    ['capinha', ['capa', 'case', 'protecao', 'proteção', 'acessorio', 'acessório', 'cabo']],
-    ['acessorio', ['acessório', 'cabo', 'capinha', 'fone', 'carregador']],
-    ['acessório', ['acessorio', 'cabo', 'capinha', 'fone', 'carregador']],
-    ['cafeteira', ['cafe', 'café', 'eletrodomestico', 'eletrodoméstico']],
-    ['pilha', ['pilhas', 'bateria', 'baterias', 'suprimento', 'suprimentos']],
-    ['pilhas', ['pilha', 'bateria', 'baterias', 'suprimento', 'suprimentos']],
-    ['bateria', ['baterias', 'pilha', 'pilhas', 'suprimento']],
-    ['baterias', ['bateria', 'pilha', 'pilhas', 'suprimento']],
-    ['suprimento', ['suprimentos', 'pilha', 'pilhas', 'bateria']],
-    ['suprimentos', ['suprimento', 'pilha', 'pilhas', 'bateria']],
-
-    // Investimentos
-    ['consorcio', ['consórcio', 'cota', 'lance', 'parcela', 'contemplacao']],
-    ['aplicacao', ['aplicação', 'aplicar', 'investir', 'investimento', 'render']],
-    ['transferi', ['transferir', 'transferencia', 'transferência', 'reserva', 'investimento']],
-
-    // Pessoal
-    ['crianca', ['criança', 'crianças', 'criancas', 'filho', 'filhos', 'infantil']],
-    ['filho', ['filhos', 'crianca', 'criança', 'infantil']],
-    ['brinquedo', ['brinquedos', 'crianca', 'criança', 'infantil', 'criancas']],
-    ['brinquedos', ['brinquedo', 'crianca', 'criança', 'infantil']],
-    ['unha', ['unhas', 'manicure', 'esmalte', 'pedicure', 'fiz']],
-    ['unhas', ['unha', 'manicure', 'esmalte', 'pedicure', 'fiz']],
-    ['manicure', ['unha', 'unhas', 'esmalte', 'pedicure', 'fiz']],
-    ['fiz', ['unhas', 'manicure', 'unha', 'esmalte', 'fiz-as']],
-    ['cinto', ['cintos', 'acessorio', 'acessório', 'roupa', 'vestuario', 'vestuário']],
-    ['cintos', ['cinto', 'acessorio', 'roupa', 'vestuario']],
-    ['tenis', ['tênis', 'sapato', 'calcado', 'calçado', 'roupa', 'vestuario', 'calçados']],
-    ['tênis', ['tenis', 'sapato', 'calcado', 'calçado', 'roupa', 'vestuario', 'calçados']],
-    ['sapato', ['sapatos', 'calcado', 'calçado', 'tenis', 'tênis', 'calçados']],
-    ['calcado', ['calçado', 'sapato', 'tenis', 'tênis', 'sapatos', 'calçados']],
-    ['calçado', ['calcado', 'sapato', 'tenis', 'tênis', 'calçados']],
-    ['calçados', ['calçado', 'calcado', 'sapato', 'tenis', 'tênis', 'vestuario']],
-
-    // Recreação
-    ['cinema', ['filme', 'filmes', 'ingresso', 'sessao', 'sessão']],
-    ['filme', ['cinema', 'filmes', 'ingresso', 'sessao']],
-    ['ingresso', ['ingressos', 'entrada', 'ticket', 'cinema', 'show', 'evento']],
-    ['ingressos', ['ingresso', 'entrada', 'ticket', 'cinema', 'show']],
-    ['parque', ['parques', 'entrada', 'lazer', 'diversao', 'diversão']],
-    ['lazer', ['diversao', 'diversão', 'entretenimento', 'passeio', 'recreacao']],
-    ['diversao', ['diversão', 'lazer', 'entretenimento', 'passeio']],
-    ['festa', ['festas', 'comemoração', 'comemoracao', 'evento', 'aniversario']],
-    ['jogo', ['jogos', 'game', 'games', 'video-game', 'videogame']],
-    ['passeio', ['passeios', 'lazer', 'diversao', 'diversão', 'saida', 'sai', 'saiu', 'recreacao']],
-    ['sai', ['saiu', 'saida', 'passeio', 'saindo', 'sair']],
-    ['saiu', ['sai', 'saida', 'passeio', 'saindo']],
-    ['saida', ['sai', 'saiu', 'passeio', 'recreacao']],
-
-    // Saúde
-    ['farmacia', ['remedio', 'medicamento', 'drogaria', 'saude', 'medicação', 'farmácia']],
-    ['farmácia', ['farmacia', 'remedio', 'medicamento', 'drogaria']],
-    ['remedio', ['remédio', 'medicamento', 'farmacia', 'drogaria', 'saude', 'viagem']],
-    ['remédio', ['remedio', 'medicamento', 'farmacia', 'viagem']],
-    ['medicamento', ['remedio', 'remédio', 'farmacia', 'drogaria', 'saude']],
-    ['medico', ['médico', 'consulta', 'doutor', 'saude']],
-    ['consulta', ['consultas', 'medico', 'médico', 'doutor', 'clinica', 'saude']],
-    ['consultas', ['consulta', 'medico', 'médico', 'doutor', 'clinica', 'saude']],
-    ['medica', ['médica', 'medico', 'médico', 'consulta']],
-    ['dentista', ['odontologia', 'dente', 'clinica', 'odonto']],
-    ['exame', ['exames', 'laboratorio', 'laboratório', 'clinica', 'saude', 'analise']],
-    ['exames', ['exame', 'laboratorio', 'laboratório', 'clinica', 'saude', 'analise']],
-    ['fisioterapia', ['fisio', 'fisioterapeuta', 'reabilitacao']],
-    ['plano', ['saude', 'saúde', 'plano-saude', 'convenio', 'funerario', 'funerário']],
-    ['saude', ['saúde', 'plano', 'convenio', 'medico']],
-    ['funerario', ['funerário', 'plano', 'funeral', 'cemiterio']],
-    ['funerário', ['funerario', 'plano', 'funeral', 'cemiterio']],
-    ['seguro', ['vida', 'seguro-vida', 'proteção', 'carro', 'automovel']],
-    ['whey', ['suplemento', 'suplementos', 'suplementacao', 'suplementação', 'proteina']],
-    ['vitamina', ['vitaminas', 'suplemento', 'suplementacao', 'suplementação']],
-    ['suplementacao', ['suplementação', 'suplemento', 'suplementos', 'whey', 'vitamina']],
-    ['terapia', ['terapeuta', 'psicologo', 'psicólogo', 'psicologia']],
-    ['oculos', ['óculos', 'otica', 'ótica', 'lente', 'lentes', 'armacao', 'armação', 'grau']],
-    ['óculos', ['oculos', 'otica', 'ótica', 'lente', 'lentes', 'armacao', 'grau']],
-    ['otica', ['ótica', 'oculos', 'óculos', 'lente', 'lentes', 'grau']],
-    ['ótica', ['otica', 'oculos', 'óculos', 'lente', 'lentes']],
-    ['lente', ['lentes', 'oculos', 'óculos', 'otica', 'grau']],
-    ['lentes', ['lente', 'oculos', 'óculos', 'otica', 'contato']],
-    ['suplementacao', ['suplementação', 'suplemento', 'suplementos', 'whey', 'vitamina']],
-    ['terapia', ['terapeuta', 'psicologo', 'psicólogo', 'psicologia']],
-    ['oculos', ['óculos', 'otica', 'ótica', 'lente', 'armacao']],
-    ['óculos', ['oculos', 'otica', 'ótica', 'lente', 'armacao']],
-    ['otica', ['ótica', 'oculos', 'óculos', 'lente']],
-
-    // Casa
-    ['aluguel', ['moradia', 'casa', 'apartamento', 'imovel', 'locacao']],
-    ['agua', ['água', 'conta', 'saneamento', 'abastecimento', 'copasa', 'sabesp']],
-    ['luz', ['energia', 'eletricidade', 'conta', 'cemig']],
-    ['gas', ['gás', 'botijao', 'botijão', 'cozinha']],
-    ['internet', ['wifi', 'banda larga', 'provedor', 'net', 'vivo']],
-    ['condominio', ['condomínio', 'taxa', 'sindico']],
-    ['mobilia', ['móveis', 'movel', 'estante', 'sofa']],
-    ['moveis', ['móveis', 'mobilia', 'cadeira', 'mesa', 'estante', 'sofa']],
-    ['móveis', ['moveis', 'mobilia', 'cadeira', 'mesa', 'estante', 'sofa']],
-    ['cadeira', ['moveis', 'móveis', 'mobilia', 'cadeiras']],
-    ['cadeiras', ['cadeira', 'moveis', 'móveis', 'mobilia']],
-    ['eletrodomestico', ['eletrodomésticos', 'geladeira', 'fogao', 'microondas']],
-    ['toalha', ['toalhas', 'cama', 'banho', 'roupa-cama', 'lencol', 'lençol']],
-    ['toalhas', ['toalha', 'cama', 'banho', 'roupa-cama', 'lencol', 'lençol', 'lençois']],
-    ['lencol', ['lençol', 'lencois', 'lençois', 'cama', 'toalhas', 'banho']],
-    ['lençol', ['lencol', 'lencois', 'lençois', 'cama', 'toalhas', 'banho']],
-    ['lençois', ['lençóis', 'lencol', 'lençol', 'cama', 'toalhas']],
-    ['lençóis', ['lençois', 'lencol', 'lençol', 'cama', 'toalhas']],
-    ['chave', ['ferramenta', 'ferramentas', 'chave-fenda', 'parafuso']],
-    ['fenda', ['chave-fenda', 'ferramenta', 'ferramentas']],
-    ['tecnico', ['técnico', 'manutencao', 'manutenção', 'conserto', 'reparo']],
-    ['consertar', ['conserto', 'manutencao', 'manutenção', 'reparo', 'arrumar']],
-    ['reforma', ['reformas', 'obra', 'construcao', 'construção', 'pedreiro', 'material']],
-    ['material', ['reforma', 'obra', 'construcao', 'pedreiro', 'caderno', 'escolar']],
-    ['utensilios', ['utensílios', 'cozinha', 'panela', 'prato', 'talher', 'cozinhar']],
-    ['utensílios', ['utensilios', 'cozinha', 'panela', 'prato', 'talher', 'cozinhar']],
-    ['cozinha', ['utensilios', 'utensílios', 'panela', 'cozinhar']],
-
-    // Eletrônicos
-    ['cabo', ['acessorio', 'acessórios', 'carregador', 'usb']],
-    ['capinha', ['case', 'capa', 'acessorio', 'acessórios', 'celular']],
-    ['cafeteira', ['eletrodomestico', 'eletrodomésticos', 'cafe']],
-    ['pilha', ['pilhas', 'bateria', 'baterias', 'suprimento', 'suprimentos']],
-    ['pilhas', ['pilha', 'bateria', 'baterias', 'suprimento', 'suprimentos']],
-    ['eletronico', ['eletrônico', 'eletronicos', 'eletrônicos', 'aparelho']],
-
-    // Serviços
-    ['netflix', ['streaming', 'assinatura', 'filme', 'serie', 'prime']],
-    ['spotify', ['musica', 'streaming', 'assinatura']],
-    ['academia', ['gym', 'ginastica', 'treino', 'musculacao', 'fitness']],
-    ['celular', ['telefone', 'recarga', 'conta', 'tim', 'claro', 'vivo']],
-    ['lavanderia', ['lavar', 'roupa', 'lavagem', 'lavanderia']],
-    ['ar-condicionado', ['refrigeracao', 'refrigeração', 'ar', 'clima']],
-    ['assistencia', ['assistência', 'tecnico', 'técnico', 'tecnica', 'técnica', 'suporte']],
-    [
-      'arrumar',
-      ['arrumo', 'conserto', 'consertar', 'reparo', 'reparar', 'manutencao', 'manutenção'],
-    ],
-
-    // Educação
-    ['escola', ['educacao', 'educação', 'ensino', 'colegio', 'aula', 'particular']],
-    ['escolar', ['escola', 'educacao', 'educação', 'material', 'taxa']],
-    ['curso', ['cursos', 'educacao', 'aula', 'treinamento', 'online']],
-    ['livro', ['livros', 'leitura', 'literatura', 'apostila']],
-    ['caderno', ['cadernos', 'material', 'escolar', 'escola']],
-    ['material', ['material escolar', 'escolar', 'caderno', 'caneta', 'lapis']],
-
-    // Lazer e Recreação
-    ['cinema', ['filme', 'sessao', 'ingresso', 'entertainment']],
-    ['filme', ['cinema', 'sessao', 'netflix']],
-    ['brinquedo', ['brinquedos', 'toy', 'crianca', 'criancas']],
-    ['brinquedos', ['brinquedo', 'toy', 'crianca', 'criancas']],
-    ['ingresso', ['ingressos', 'entrada', 'ticket', 'bilhete']],
-    ['escolinha', ['esporte', 'atividade', 'aula', 'treino']],
-    ['esportiva', ['esporte', 'atividade', 'escolinha']],
-    ['passeio', ['lazer', 'passear', 'sair']],
-    ['parque', ['diversao', 'diversão', 'passeio', 'lazer', 'entrada']],
-    ['ontem', ['dia', 'anterior', 'passado']],
-    ['anteontem', ['dia', 'anterior', 'passado', 'ontem']],
-    ['semana', ['passada', 'anterior', 'ultima']],
-    ['jogo', ['jogos', 'game', 'videogame', 'playstation', 'xbox']],
-    ['festa', ['festas', 'comemoracao', 'comemoração', 'evento', 'aniversario', 'aniversário']],
-
-    ['unha', ['unhas', 'manicure', 'esmalte', 'pedicure', 'fiz']],
-    ['unhas', ['unha', 'manicure', 'esmalte', 'pedicure', 'fiz']],
-    ['manicure', ['unha', 'unhas', 'esmalte', 'pedicure', 'fiz']],
-    ['fiz', ['unhas', 'manicure', 'unha', 'esmalte']],
-    ['cinto', ['cintos', 'acessorio', 'acessório', 'roupa', 'vestuario', 'vestuário']],
-    ['cintos', ['cinto', 'acessorio', 'roupa', 'vestuario']],
-    ['tenis', ['tênis', 'sapato', 'calcado', 'calçado', 'roupa', 'vestuario', 'calçados']],
-    ['tênis', ['tenis', 'sapato', 'calcado', 'calçado', 'roupa', 'vestuario', 'calçados']],
-    ['sapato', ['sapatos', 'calcado', 'calçado', 'tenis', 'tênis', 'calçados']],
-    ['calcado', ['calçado', 'sapato', 'tenis', 'tênis', 'sapatos', 'calçados']],
-    ['calçado', ['calcado', 'sapato', 'tenis', 'tênis', 'calçados']],
-    ['calçados', ['calçado', 'calcado', 'sapato', 'tenis', 'tênis']],
-
-    // Receitas/Income
-    ['salario', ['salário', 'vencimento', 'pagamento', 'recebi', 'recebimento']],
-    ['salário', ['salario', 'vencimento', 'pagamento', 'recebi']],
-    ['recebimentos', ['recebi', 'recebimento', 'entrada', 'receita', 'income']],
-    ['recebi', ['recebimento', 'recebimentos', 'entrada', 'salario', 'salário']],
-    ['recebimento', ['recebi', 'recebimentos', 'entrada', 'receita']],
-    ['aluguel', ['aluguel recebido', 'locacao', 'locação', 'renda']],
-    ['reembolso', ['devolucao', 'devolução', 'estorno', 'reembolso recebido']],
-    ['freelance', ['freela', 'extra', 'bico', 'trabalho extra', 'servico']],
-    ['brinquedo', ['brinquedos', 'crianca', 'criancas', 'toy']],
-    ['parque', ['diversao', 'passeio', 'lazer']],
-    ['festa', ['festas', 'aniversario', 'comemoracao', 'celebracao']],
-
-    // Vestuário
-    ['roupa', ['roupas', 'vestuario', 'vestuário', 'blusa', 'calca']],
-    ['roupas', ['roupa', 'vestuario', 'vestuário', 'blusa', 'calca']],
-    ['cinto', ['acessorio', 'acessórios', 'vestuario']],
-    ['tenis', ['tênis', 'calcado', 'calçado', 'calcados', 'sapato']],
-    ['calcado', ['calçado', 'calcados', 'sapato', 'tenis', 'sandalia']],
-    ['calçado', ['calcado', 'calcados', 'sapato', 'tenis', 'sandalia']],
-    ['calcados', ['calçados', 'calcado', 'sapato', 'tenis', 'sandalia', 'sapatos']],
-    ['calçados', ['calcados', 'calcado', 'sapato', 'tenis', 'sandalia', 'sapatos']],
-    ['sapato', ['calcado', 'calcados', 'tenis', 'sandalia']],
-
-    // Viagem
-    ['viagem', ['viajem', 'viagens', 'trip', 'turismo', 'passeio', 'durante']],
-    ['durante', ['viagem', 'na', 'no']],
-    ['hotel', ['hospedagem', 'pousada', 'hostel', 'estadia']],
-    ['passagem', ['passagens', 'bilhete', 'ticket', 'aviao', 'onibus']],
-    ['estrada', ['viagem', 'combustivel', 'pedagio', 'pedágio', 'abasteci']],
-    ['sapatos', ['calcado', 'calcados', 'tenis', 'sandalia', 'sapato']],
-    ['tenis', ['tênis', 'calcado', 'sapato', 'nike', 'adidas']],
-
-    // Pessoal
-    ['cabelo', ['cabeleireiro', 'salao', 'salão', 'corte', 'barbeiro', 'barba']],
-    ['corte', ['cortei', 'cabelo', 'cortar', 'barbeiro']],
-    ['cortei', ['corte', 'cabelo', 'cortar', 'barbeiro', 'cabeleireiro']],
-    ['unha', ['unhas', 'manicure', 'pedicure', 'esmalte']],
-    ['unhas', ['unha', 'manicure', 'pedicure', 'esmalte']],
-    ['manicure', ['unha', 'unhas', 'pedicure', 'esmalte']],
-    ['crianca', ['criança', 'criancas', 'crianças', 'filho', 'filha']],
-    ['criancas', ['crianças', 'crianca', 'criança', 'filho', 'filha']],
-    ['crianças', ['criancas', 'crianca', 'filho', 'filha']],
-    ['presente', ['presentes', 'gift', 'mimo', 'lembranca', 'ganhei', 'ganho']],
-    ['presentes', ['presente', 'gift', 'mimo', 'lembranca', 'ganhei', 'ganho']],
-    ['ganhei', ['presente', 'presentes', 'recebi', 'gift', 'pai', 'mae', 'amigo']],
-    ['ganho', ['presente', 'presentes', 'recebi', 'gift', 'ganhei']],
-    ['pai', ['presente', 'ganhei', 'recebi', 'familia', 'parente']],
-    ['mae', ['mãe', 'presente', 'ganhei', 'recebi', 'familia', 'parente']],
-
-    // Delivery e Apps
-    ['ifood', ['delivery', 'entrega', 'comida', 'pedido', 'rappi']],
-    ['rappi', ['delivery', 'entrega', 'comida', 'pedido', 'ifood']],
-    ['delivery', ['entrega', 'ifood', 'rappi', 'pedido']],
-
-    // INCOMES
-    ['salario', ['salário', 'remuneração', 'pagamento', 'provento']],
-    ['receber', ['entrada', 'deposito', 'recebimento', 'credito', 'caiu']],
-    ['freela', ['freelance', 'servico', 'bico', 'trabalho extra', 'extra']],
-    ['freelance', ['freela', 'servico', 'bico', 'trabalho extra', 'extra']],
-    ['vale', ['beneficio', 'vr', 'vt', 'vale-alimentacao', 'vale-refeicao', 'benefícios']],
-    ['alimentacao', ['vale-alimentacao', 'vale-refeicao', 'vr']], // Quando tem "alimentacao", buscar vale
-    ['vale-alimentacao', ['vale', 'alimentacao', 'vr', 'beneficio', 'benefícios']],
-    ['vale-refeicao', ['vale', 'refeicao', 'vr', 'beneficio', 'benefícios']],
-    ['beneficio', ['vale', 'vr', 'vt', 'benefícios', 'beneficios']],
-    ['benefícios', ['vale', 'vr', 'vt', 'beneficio', 'beneficios']],
-    ['beneficios', ['vale', 'vr', 'vt', 'beneficio', 'benefícios']],
-    ['receita', ['entrada', 'deposito', 'recebimento', 'credito']],
-    ['recebimento', ['entrada', 'deposito', 'receita', 'credito']],
-    ['devolvido', ['reembolso', 'estornado', 'retorno']],
-    ['reembolso', ['devolvido', 'estornado', 'retorno']],
-    ['servico', ['freelance', 'bico', 'trabalho avulso']],
-  ]);
+  // Dados importados de ../data/synonym-entries.ts
+  // Usa buildMergedSynonymMap() para mesclar entradas duplicadas automaticamente
+  private readonly synonyms = buildMergedSynonymMap(SYNONYM_ENTRIES);
 
   private readonly defaultConfig: RAGConfig = {
     minScore: 0.25, // Reduzido de 0.6 para permitir matches parciais válidos (ex: "restaurante" em frases longas)
@@ -540,6 +184,12 @@ export class RAGService {
 
     this.logger.debug(`🔍 Buscando por: "${text}" → tokens: [${queryTokens.join(', ')}]`);
 
+    // 🆕 Pré-computar frequência de documentos para IDF real (com cache por userId)
+    const { totalDocs, docFreqMap, avgDocLength } = this.precomputeDocFrequencies(
+      categories,
+      `df:${userId}:${finalConfig.transactionType || 'all'}`,
+    );
+
     // Calcular score para cada categoria
     const matches: CategoryMatch[] = [];
 
@@ -562,8 +212,14 @@ export class RAGService {
         ? this.tokenize(this.normalize(category.subCategory.name))
         : [];
 
-      // Calcular similaridade BM25
-      let score = this.calculateBM25Score(queryTokens, categoryTokens);
+      // Calcular similaridade BM25 (com IDF real e avgDocLength dinâmico)
+      let score = this.calculateBM25Score(
+        queryTokens,
+        categoryTokens,
+        totalDocs,
+        docFreqMap,
+        avgDocLength,
+      );
 
       // 🔥 BOOST MÁXIMO: Se a subcategoria normalizada aparece EXATAMENTE na query
       if (category.subCategory?.name) {
@@ -714,16 +370,24 @@ export class RAGService {
     const results = matches.slice(0, finalConfig.maxResults);
     const responseTime = Date.now() - startTime;
 
-    // 🔧 Normalizar scores para máximo de 1.0 (100%)
-    // Se passou de 1.0 devido a boosts, limitar a 1.0
-    results.forEach((match) => {
-      if (match.score > 1.0) {
+    // 🔧 Normalizar scores para faixa 0-1 com quality gate
+    // Divide pelo max (mantém ranking) MAS escala por um fator de qualidade
+    // baseado no score bruto máximo. Se o melhor raw score é baixo, TODOS os
+    // scores normalizados ficam baixos — evitando que buscas ruins tenham best=1.0
+    if (results.length > 0 && results[0].score > 0) {
+      const maxRawScore = results[0].score;
+      // Score bruto mínimo para considerar "match de boa qualidade"
+      const MIN_RAW_QUALITY = 1.0;
+      const qualityFactor = Math.min(1.0, maxRawScore / MIN_RAW_QUALITY);
+
+      results.forEach((match) => {
+        const rawScore = match.score;
+        match.score = (rawScore / maxRawScore) * qualityFactor;
         this.logger.debug(
-          `🔧 Score normalizado: ${match.categoryName} ${(match.score * 100).toFixed(1)}% → 100.0%`,
+          `🔧 Score normalizado: ${match.categoryName} raw=${rawScore.toFixed(2)} quality=${qualityFactor.toFixed(2)} → ${(match.score * 100).toFixed(1)}%`,
         );
-        match.score = 1.0;
-      }
-    });
+      });
+    }
 
     this.logger.log(
       `✅ Encontradas ${results.length} categorias similares:` +
@@ -739,7 +403,7 @@ export class RAGService {
         results,
         success,
         finalConfig.minScore,
-        'BM25', // Por enquanto sempre BM25, depois terá AI
+        'BM25',
         responseTime,
       );
     }
@@ -1089,39 +753,155 @@ export class RAGService {
 
   /**
    * Tokeniza texto em palavras
+   * Normaliza plurais para singular com lista expandida de exceções
    */
   private tokenize(text: string): string[] {
     const tokens = text.split(/\s+/).filter((token) => token.length > 2); // Ignora tokens muito curtos
 
+    // Palavras que terminam em 's' mas NÃO devem perder o 's'
+    const keepAsIs = new Set([
+      'gas',
+      'mas',
+      'tras',
+      'pais',
+      'deus',
+      'meus',
+      'seus',
+      'teus',
+      'nos',
+      'vos',
+      'tres',
+      'mes',
+      'reis',
+      'leis',
+      'vez',
+      'bus',
+      'jus',
+      'pus',
+      'plus',
+      'bonus',
+      'virus',
+      'atlas',
+      'onibus',
+      'cris',
+      'paris',
+      'ais',
+      'eis',
+      'ois',
+      'uis',
+      'juros',
+      'alias',
+      'campus',
+      'corpus',
+      'status',
+      'pires',
+      'lapis',
+      'gratis',
+      'oasis',
+      'chassis',
+      'herpes',
+      'caries',
+    ]);
+
     // Normalizar plurais simples para melhorar matching
     return tokens.map((token) => {
+      // Não remover 's' de palavras na lista de exceções
+      if (keepAsIs.has(token)) {
+        return token;
+      }
+
+      // Plurais em 'ões' → 'ao' (ex: transações → transacao)
+      if (token.endsWith('oes') && token.length > 5) {
+        return token.slice(0, -3) + 'ao';
+      }
+
+      // Plurais em 'ais' → 'al' (ex: materiais → material)
+      if (token.endsWith('ais') && token.length > 5) {
+        return token.slice(0, -3) + 'al';
+      }
+
+      // Plurais em 'eis' → 'el' (ex: moveis → movel)
+      if (token.endsWith('eis') && token.length > 5) {
+        return token.slice(0, -3) + 'el';
+      }
+
       // Remove plural simples: "financiamentos" → "financiamento"
       if (token.endsWith('s') && token.length > 4) {
-        const singular = token.slice(0, -1);
-        // Evitar remover 's' de palavras como "mas", "tras", "pais"
-        if (!['ma', 'tra', 'pai', 'de', 've', 'me'].includes(singular)) {
-          return singular;
-        }
+        return token.slice(0, -1);
       }
+
       return token;
     });
   }
 
   /**
-   * Calcula score BM25 simplificado
+   * Pré-computa a frequência de documentos (DF) para cada token.
+   * Resultado é cacheado por userId para evitar recalcular a cada busca.
+   */
+  private docFreqCache = new Map<
+    string,
+    { totalDocs: number; docFreqMap: Map<string, number>; avgDocLength: number; timestamp: number }
+  >();
+  private readonly DOC_FREQ_CACHE_TTL = 5 * 60_000; // 5 min
+
+  private precomputeDocFrequencies(
+    categories: UserCategory[],
+    cacheKey?: string,
+  ): { totalDocs: number; docFreqMap: Map<string, number>; avgDocLength: number } {
+    // Verificar cache
+    if (cacheKey) {
+      const cached = this.docFreqCache.get(cacheKey);
+      if (
+        cached &&
+        Date.now() - cached.timestamp < this.DOC_FREQ_CACHE_TTL &&
+        cached.totalDocs === categories.length
+      ) {
+        return cached;
+      }
+    }
+
+    const docFreqMap = new Map<string, number>();
+    const totalDocs = categories.length;
+    let totalTokenCount = 0;
+
+    for (const cat of categories) {
+      const catText = `${cat.name} ${cat.subCategory?.name || ''}`;
+      const tokens = this.tokenize(this.normalize(catText));
+      totalTokenCount += tokens.length;
+      const uniqueTokens = new Set(tokens);
+      for (const token of uniqueTokens) {
+        docFreqMap.set(token, (docFreqMap.get(token) || 0) + 1);
+      }
+    }
+
+    const avgDocLength = totalDocs > 0 ? totalTokenCount / totalDocs : 3;
+
+    const result = { totalDocs, docFreqMap, avgDocLength, timestamp: Date.now() };
+    if (cacheKey) {
+      this.docFreqCache.set(cacheKey, result);
+    }
+    return result;
+  }
+
+  /**
+   * Calcula score BM25 com IDF real e avgDocLength dinâmico
    *
-   * BM25 = Σ(IDF * TF * boost)
-   * - TF (Term Frequency): quantas vezes o termo aparece
-   * - IDF (Inverse Document Frequency): raridade do termo
-   * - boost: relevância baseada em posição/contexto
+   * BM25 = Σ(IDF * TF_saturated)
+   * - TF (Term Frequency): quantas vezes o termo aparece no documento
+   * - IDF (Inverse Document Frequency): log((N - df + 0.5) / (df + 0.5) + 1)
+   *   Termos raros (ex: "combustivel") ganham peso maior que termos comuns (ex: "pagamento")
    *
    * MODIFICAÇÃO: Não divide por queryTokens.length para não penalizar frases longas
-   * Score final varia de 0 a número de matches
    */
-  private calculateBM25Score(queryTokens: string[], docTokens: string[]): number {
+  private calculateBM25Score(
+    queryTokens: string[],
+    docTokens: string[],
+    totalDocs?: number,
+    docFreqMap?: Map<string, number>,
+    avgDocLength: number = 3,
+  ): number {
     let score = 0;
     const docLength = docTokens.length;
-    const avgDocLength = 3; // Média de tokens em categorias (estimativa)
     const k1 = 1.2; // Parâmetro BM25
     const b = 0.75; // Parâmetro BM25
 
@@ -1130,10 +910,17 @@ export class RAGService {
       const tf = docTokens.filter((t) => t === queryToken).length;
 
       if (tf > 0) {
-        // IDF simplificado (assumindo corpus pequeno)
-        const idf = 1.0;
+        // IDF real: termos raros ganham peso maior
+        let idf = 1.0;
+        if (totalDocs && docFreqMap) {
+          const df = docFreqMap.get(queryToken) || 0;
+          // Fórmula BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
+          idf = Math.log((totalDocs - df + 0.5) / (df + 0.5) + 1);
+          // Garantir IDF mínimo de 0.1 para não zerar termos muito comuns
+          idf = Math.max(idf, 0.1);
+        }
 
-        // BM25 formula
+        // BM25 TF saturation formula
         const numerator = tf * (k1 + 1);
         const denominator = tf + k1 * (1 - b + b * (docLength / avgDocLength));
 
@@ -1141,7 +928,6 @@ export class RAGService {
       }
     }
 
-    // NÃO dividir por queryTokens.length - permite frases longas terem score decente
     return score;
   }
 
@@ -1222,27 +1008,23 @@ export class RAGService {
       // Tokenizar query para buscar matches parciais
       const queryTokens = this.tokenize(normalizedQuery);
 
-      // Buscar sinônimos do usuário E globais
+      // Buscar sinônimos do usuário E globais (match exato por token)
       const synonyms = await this.prisma.userSynonym.findMany({
         where: {
           OR: [
             {
-              // Sinônimos do usuário
+              // Sinônimos do usuário (match exato)
               userId,
-              OR: queryTokens.map((token) => ({
-                keyword: {
-                  contains: token,
-                },
-              })),
+              keyword: {
+                in: queryTokens,
+              },
             },
             {
-              // Sinônimos globais (aplicados a todos)
+              // Sinônimos globais (match exato)
               userId: null,
-              OR: queryTokens.map((token) => ({
-                keyword: {
-                  contains: token,
-                },
-              })),
+              keyword: {
+                in: queryTokens,
+              },
             },
           ],
         },
@@ -1609,6 +1391,17 @@ export class RAGService {
       this.logger.error('Erro ao detectar termo desconhecido:', error);
       return null;
     }
+  }
+
+  /**
+   * Extrai o termo principal de um texto bruto (API pública).
+   * Usado pelo RAGLearningService para manter lógica unificada.
+   */
+  extractMainTermFromText(text: string): string | null {
+    const normalized = this.normalize(text);
+    const tokens = this.tokenize(normalized);
+    // Sem categorias disponíveis, usa apenas heurística de stopwords/genéricos
+    return this.extractMainTerm(tokens, []);
   }
 
   /**

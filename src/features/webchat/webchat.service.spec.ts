@@ -5,6 +5,7 @@ import { UserCacheService } from '@features/users/user-cache.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { RedisService } from '@common/services/redis.service';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 
 describe('WebChatService - Profile Validation', () => {
   let service: WebChatService;
@@ -69,6 +70,12 @@ describe('WebChatService - Profile Validation', () => {
               setex: jest.fn(),
               del: jest.fn(),
             }),
+          },
+        },
+        {
+          provide: UserRateLimiterService,
+          useValue: {
+            checkUserRateLimit: jest.fn().mockResolvedValue({ allowed: true }),
           },
         },
       ],

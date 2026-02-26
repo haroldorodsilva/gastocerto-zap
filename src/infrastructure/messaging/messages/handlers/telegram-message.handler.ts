@@ -11,6 +11,7 @@ import { MultiPlatformSessionService } from '@infrastructure/messaging/core/serv
 import { MessageContextService } from '../message-context.service';
 import { IFilteredMessage } from '@infrastructure/messaging/message.interface';
 import { UserCacheService } from '@features/users/user-cache.service';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { UserCache } from '@prisma/client';
 import {
   MessageValidationService,
@@ -34,6 +35,7 @@ export class TelegramMessageHandler {
     private readonly contextService: MessageContextService,
     private readonly eventEmitter: EventEmitter2,
     private readonly userCacheService: UserCacheService,
+    private readonly userRateLimiter: UserRateLimiterService,
     private readonly messageValidation: MessageValidationService,
   ) {}
 
@@ -58,15 +60,36 @@ export class TelegramMessageHandler {
       // Usar chatId como identificador do usuário (equivalente ao phoneNumber no WhatsApp)
       const userId = message.chatId;
 
+      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
+      const rateLimitCheck = await this.userRateLimiter.checkLimit(userId);
+
+      if (!rateLimitCheck.allowed) {
+        this.logger.warn(
+          `🚫 [Telegram] Rate limit exceeded for ${userId}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
+        );
+        const limitMessage = this.userRateLimiter.getRateLimitMessage(
+          rateLimitCheck.reason!,
+          rateLimitCheck.retryAfter!,
+        );
+        this.eventEmitter.emit('telegram.reply', {
+          platformId: userId,
+          message: limitMessage,
+          context: 'ERROR',
+          platform: MessagingPlatform.TELEGRAM,
+        });
+        return; // ❌ Bloqueia processamento
+      }
+
+      // ✅ Registrar uso da mensagem
+      await this.userRateLimiter.recordUsage(userId);
+
       // Buscar usuário cadastrado para obter gastoCertoId e phoneNumber
       let gastoCertoId: string | undefined;
       let phoneNumber: string | undefined;
 
       try {
-        // Buscar usuário pelo telegramId no banco
-        const userCache = await this.userCacheService['prisma'].userCache.findFirst({
-          where: { telegramId: userId },
-        });
+        // Buscar usuário pelo telegramId via método público do UserCacheService
+        const userCache = await this.userCacheService.getUserByTelegram(userId);
 
         if (userCache) {
           gastoCertoId = userCache.gastoCertoId;
@@ -94,6 +117,26 @@ export class TelegramMessageHandler {
 
       // ✨ NOVO: Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(userId, 'telegram');
+
+      // 🔄 SINCRONIZAÇÃO: Verificar se precisa sincronizar status (1h) — mesmo padrão do WhatsApp
+      if (validation.user && this.userCacheService.needsSync(validation.user)) {
+        this.logger.log(`⏰ [Telegram] Syncing subscription status for ${userId}`);
+        await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
+
+        // Revalidar usuário com dados atualizados
+        const updatedValidation = await this.messageValidation.validateUser(userId, 'telegram');
+
+        if (updatedValidation.action === ValidationAction.NO_SUBSCRIPTION) {
+          this.logger.warn(`[Telegram] 💳 User ${userId} subscription expired after sync`);
+          this.eventEmitter.emit('telegram.reply', {
+            platformId: userId,
+            message: updatedValidation.message!,
+            context: 'ERROR',
+            platform: MessagingPlatform.TELEGRAM,
+          });
+          return;
+        }
+      }
 
       // Tratar ações conforme resultado da validação
       switch (validation.action) {

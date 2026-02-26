@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   IAIProvider,
@@ -31,9 +31,21 @@ import { AIOperationType, AIInputType } from '@prisma/client';
  * - Categoria: Groq Llama 3 (muito mais barato)
  */
 @Injectable()
-export class AIProviderFactory {
+export class AIProviderFactory implements OnModuleInit {
   private readonly logger = new Logger(AIProviderFactory.name);
   private readonly providers: Map<AIProviderType, IAIProvider> = new Map();
+
+  /**
+   * Circuit Breaker — rastreia falhas consecutivas por provider.
+   * Quando um provider falha N vezes seguidas, é marcado como "aberto" (indisponível)
+   * por um período de cooldown antes de tentar novamente (half-open).
+   */
+  private readonly circuitState = new Map<
+    AIProviderType,
+    { failures: number; lastFailure: number; state: 'closed' | 'open' | 'half-open' }
+  >();
+  private readonly CIRCUIT_FAILURE_THRESHOLD = 3;
+  private readonly CIRCUIT_COOLDOWN_MS = 60_000; // 1 min
 
   constructor(
     private readonly configService: ConfigService,
@@ -53,8 +65,64 @@ export class AIProviderFactory {
     this.providers.set(AIProviderType.GROQ, this.groqProvider);
     this.providers.set(AIProviderType.DEEPSEEK, this.deepseekProvider);
 
+    // Inicializar circuit state
+    for (const type of this.providers.keys()) {
+      this.circuitState.set(type, { failures: 0, lastFailure: 0, state: 'closed' });
+    }
+
     this.logger.log('✅ AIProviderFactory inicializado');
-    this.logCurrentConfiguration();
+  }
+
+  async onModuleInit(): Promise<void> {
+    await this.logCurrentConfiguration();
+  }
+
+  /**
+   * Verifica se o circuit breaker está aberto para um provider
+   */
+  isCircuitOpen(providerType: AIProviderType): boolean {
+    const state = this.circuitState.get(providerType);
+    if (!state || state.state === 'closed') return false;
+
+    if (state.state === 'open') {
+      const elapsed = Date.now() - state.lastFailure;
+      if (elapsed > this.CIRCUIT_COOLDOWN_MS) {
+        // Transição para half-open — permite 1 tentativa
+        state.state = 'half-open';
+        this.logger.log(`🔄 Circuit breaker HALF-OPEN para ${providerType}`);
+        return false;
+      }
+      return true; // Ainda em cooldown
+    }
+    return false; // half-open — deixar tentar
+  }
+
+  /**
+   * Registra sucesso — fecha o circuit
+   */
+  recordSuccess(providerType: AIProviderType): void {
+    const state = this.circuitState.get(providerType);
+    if (state && state.state !== 'closed') {
+      this.logger.log(`✅ Circuit breaker CLOSED para ${providerType}`);
+    }
+    this.circuitState.set(providerType, { failures: 0, lastFailure: 0, state: 'closed' });
+  }
+
+  /**
+   * Registra falha — pode abrir o circuit
+   */
+  recordFailure(providerType: AIProviderType): void {
+    const state = this.circuitState.get(providerType) || { failures: 0, lastFailure: 0, state: 'closed' as const };
+    state.failures++;
+    state.lastFailure = Date.now();
+
+    if (state.failures >= this.CIRCUIT_FAILURE_THRESHOLD) {
+      state.state = 'open';
+      this.logger.warn(
+        `🔴 Circuit breaker OPEN para ${providerType} após ${state.failures} falhas consecutivas`,
+      );
+    }
+    this.circuitState.set(providerType, state);
   }
 
   /**
@@ -92,7 +160,17 @@ export class AIProviderFactory {
       return cached as TransactionData;
     }
 
-    // 2. Verificar rate limit
+    // 2. Verificar circuit breaker
+    if (this.isCircuitOpen(providerType)) {
+      this.logger.warn(`🔴 Circuit OPEN para ${providerType}, indo para fallback`);
+      const settings = await this.aiConfigService.getSettings();
+      if (settings.fallbackEnabled) {
+        return await this.extractTransactionWithFallback(text, userContext, providerType);
+      }
+      throw new Error(`Provider ${providerType} indisponível (circuit open). Habilite fallback.`);
+    }
+
+    // 3. Verificar rate limit
     const canProceed = await this.rateLimiter.checkLimit(providerType, 500);
     if (!canProceed) {
       this.logger.warn(`⚠️  Rate limit atingido para ${providerType}`);
@@ -107,7 +185,7 @@ export class AIProviderFactory {
       );
     }
 
-    // 3. Processar com provider
+    // 4. Processar com provider
     const provider = this.getProvider(providerType);
     try {
       const rawResult = await provider.extractTransaction(text, userContext);
@@ -115,13 +193,15 @@ export class AIProviderFactory {
       // Normalizar dados brutos retornados pelo provider
       const result = this.normalizationService.normalizeTransactionData(rawResult, providerType);
 
-      // 4. Registrar uso e cachear
+      // 5. Registrar uso, cachear e fechar circuit
       await this.rateLimiter.recordUsage(providerType, 500);
       await this.aiCache.cacheText(text, providerType, result, 'extract');
+      this.recordSuccess(providerType);
 
       return result;
     } catch (error) {
       this.logger.error(`Erro no provider ${providerType}: ${error.message}`);
+      this.recordFailure(providerType);
 
       const settings = await this.aiConfigService.getSettings();
       if (settings.fallbackEnabled) {

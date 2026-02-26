@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { TransactionsService } from '@features/transactions/transactions.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { RedisService } from '@common/services/redis.service';
+import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { WebChatResponse } from './webchat.controller';
 import { UploadResponse } from './dto/upload.dto';
 import type { Multer } from 'multer';
@@ -40,6 +42,7 @@ export class WebChatService {
     private readonly messageLearningService: MessageLearningService,
     private readonly gastoCertoApi: GastoCertoApiService,
     private readonly redisService: RedisService,
+    private readonly userRateLimiter: UserRateLimiterService,
   ) {}
 
   /**
@@ -86,14 +89,32 @@ export class WebChatService {
       return {
         success: false,
         messageType: 'error',
+        message: this.removeEmojis('⚠️ Por favor, selecione um perfil antes de enviar mensagens.'),
+        formatting: {
+          color: 'warning',
+        },
+      };
+    }
+
+    // 🆕 Rate limiting (proteção contra spam/abuso)
+    const phoneForRateLimit = `webchat-${userId}`;
+    const rateLimitCheck = await this.userRateLimiter.checkLimit(phoneForRateLimit);
+
+    if (!rateLimitCheck.allowed) {
+      this.logger.warn(`🚫 [WebChat] Rate limit exceeded for ${userId}: ${rateLimitCheck.reason}`);
+      return {
+        success: false,
+        messageType: 'error',
         message: this.removeEmojis(
-          '⚠️ Por favor, selecione um perfil antes de enviar mensagens.',
+          `⏳ Você está enviando mensagens rápido demais. Aguarde ${rateLimitCheck.retryAfter || 60} segundos.`,
         ),
         formatting: {
           color: 'warning',
         },
       };
     }
+
+    await this.userRateLimiter.recordUsage(phoneForRateLimit);
 
     try {
       // 1. Buscar usuário pelo gastoCertoId
@@ -165,6 +186,51 @@ export class WebChatService {
         `✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber}) | AccountId do header: ${accountId || 'default'}`,
       );
 
+      // 🆕 Validação de bloqueio e assinatura (equivalent ao MessageValidationService)
+      if (user.isBlocked) {
+        this.logger.warn(`❌ [WebChat] Usuário ${userId} está BLOQUEADO`);
+        return {
+          success: false,
+          messageType: 'error',
+          message: this.removeEmojis(
+            '❌ Sua conta está bloqueada. Entre em contato com o suporte.',
+          ),
+          formatting: { color: 'error' },
+        };
+      }
+
+      if (!user.hasActiveSubscription || !user.canUseGastoZap) {
+        this.logger.warn(`💳 [WebChat] Usuário ${userId} sem assinatura ativa ou sem permissão`);
+
+        // Sincronizar status antes de negar acesso (pode estar desatualizado)
+        if (this.userCacheService.needsSync(user)) {
+          this.logger.log(`⏰ [WebChat] Syncing subscription status for ${userId}`);
+          await this.userCacheService.syncSubscriptionStatus(user.gastoCertoId);
+          const updatedUser = await this.userCacheService.getUser(phoneNumber);
+          if (updatedUser && updatedUser.hasActiveSubscription && updatedUser.canUseGastoZap) {
+            user = updatedUser;
+          } else {
+            return {
+              success: false,
+              messageType: 'error',
+              message: this.removeEmojis(
+                '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
+              ),
+              formatting: { color: 'warning' },
+            };
+          }
+        } else {
+          return {
+            success: false,
+            messageType: 'error',
+            message: this.removeEmojis(
+              '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
+            ),
+            formatting: { color: 'warning' },
+          };
+        }
+      }
+
       // accountId é passado diretamente para as transações sem alterar o banco
 
       // 2. Comandos de perfil
@@ -223,7 +289,7 @@ export class WebChatService {
             const transactionResult = await this.messageLearningService.processOriginalTransaction(
               phoneNumber,
               learningResult.originalText,
-              `webchat-${Date.now()}`,
+              `webchat-${randomUUID()}`,
               user,
               'webchat', // WebChat é uma plataforma própria
             );
@@ -242,7 +308,7 @@ export class WebChatService {
       const result = await this.transactionsService.processTextMessage(
         user, // Passa objeto user completo ao invés de phoneNumber
         messageText,
-        `webchat-${Date.now()}`,
+        `webchat-${randomUUID()}`,
         'webchat', // WebChat é uma plataforma própria
         undefined, // platformId
         accountId, // accountId contextual do header
@@ -432,7 +498,7 @@ export class WebChatService {
       // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
       const imageBuffer = file.buffer;
       const mimeType = file.mimetype;
-      const messageId = `webchat-${Date.now()}`;
+      const messageId = `webchat-${randomUUID()}`;
 
       // Log detalhado para debug
       this.logger.log(
@@ -528,7 +594,7 @@ export class WebChatService {
       // 2. DELEGAR para TransactionsService (mesmo fluxo WhatsApp/Telegram)
       const audioBuffer = file.buffer;
       const mimeType = file.mimetype;
-      const messageId = `webchat-${Date.now()}`;
+      const messageId = `webchat-${randomUUID()}`;
 
       const result = await this.transactionsService.processAudioMessage(
         user, // Passar objeto user completo
