@@ -1,5 +1,4 @@
 # GastoCerto-ZAP 🚀
-
 > Bot de gerenciamento financeiro via WhatsApp/Telegram com IA
 
 ## 📋 Visão Geral
