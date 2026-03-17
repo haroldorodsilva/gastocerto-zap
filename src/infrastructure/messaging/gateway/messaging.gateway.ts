@@ -12,6 +12,7 @@ import { Logger, UnauthorizedException } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { OnEvent } from '@nestjs/event-emitter';
 import { JwtValidationService } from '@common/services/jwt-validation.service';
+import { SESSION_EVENTS, CHAT_EVENTS } from '../messaging-events.constants';
 
 interface ClientData {
   sessionIds: Set<string>;
@@ -195,7 +196,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * Event listeners for session events
    */
 
-  @OnEvent('session.qr')
+  @OnEvent(SESSION_EVENTS.QR)
   handleQRCode(payload: { sessionId: string; qr: string }) {
     this.logger.log(`📱 QR code generated for session ${payload.sessionId}`);
     
@@ -228,7 +229,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.qr.expired')
+  @OnEvent(SESSION_EVENTS.QR_EXPIRED)
   handleQRExpired(payload: { sessionId: string }) {
     this.logger.log(`⏰ QR code expired for session ${payload.sessionId}`);
 
@@ -238,7 +239,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.qr.scanned')
+  @OnEvent(SESSION_EVENTS.QR_SCANNED)
   handleQRScanned(payload: { sessionId: string; success: boolean }) {
     this.logger.log(`✅ QR code scanned for session ${payload.sessionId}`);
 
@@ -257,7 +258,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.connected')
+  @OnEvent(SESSION_EVENTS.CONNECTED)
   handleSessionConnected(payload: { sessionId: string }) {
     this.logger.log(`✅ Session ${payload.sessionId} connected`);
 
@@ -267,7 +268,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.disconnected')
+  @OnEvent(SESSION_EVENTS.DISCONNECTED)
   handleSessionDisconnected(payload: { sessionId: string; reason?: string }) {
     this.logger.log(`📴 Session ${payload.sessionId} disconnected: ${payload.reason}`);
 
@@ -278,7 +279,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.message.sent')
+  @OnEvent(SESSION_EVENTS.MESSAGE_SENT)
   handleMessageSent(payload: {
     sessionId: string;
     to: string;
@@ -307,7 +308,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.message.received')
+  @OnEvent(SESSION_EVENTS.MESSAGE_RECEIVED)
   handleMessageReceived(payload: {
     sessionId: string;
     from: string;
@@ -339,7 +340,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.started')
+  @OnEvent(SESSION_EVENTS.STARTED)
   handleSessionStarted(payload: { sessionId: string }) {
     this.logger.log(`🚀 Session ${payload.sessionId} started`);
 
@@ -349,7 +350,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.stopped')
+  @OnEvent(SESSION_EVENTS.STOPPED)
   handleSessionStopped(payload: { sessionId: string }) {
     this.logger.log(`🔴 Session ${payload.sessionId} stopped`);
 
@@ -359,7 +360,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.update')
+  @OnEvent(SESSION_EVENTS.UPDATE)
   handleSessionUpdate(payload: { sessionId: string; update: any }) {
     this.server.to(`session:${payload.sessionId}`).emit('session:update', {
       sessionId: payload.sessionId,
@@ -368,7 +369,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.message')
+  @OnEvent(SESSION_EVENTS.MESSAGE)
   handleSessionMessage(payload: { sessionId: string; message: any }) {
     this.server.to(`session:${payload.sessionId}`).emit('session:message', {
       sessionId: payload.sessionId,
@@ -377,7 +378,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.error')
+  @OnEvent(SESSION_EVENTS.ERROR)
   handleSessionError(payload: { sessionId: string; error: Error }) {
     this.logger.error(`❌ Session ${payload.sessionId} error: ${payload.error.message}`);
 
@@ -391,7 +392,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.auth.corrupted')
+  @OnEvent(SESSION_EVENTS.AUTH_CORRUPTED)
   handleAuthCorrupted(payload: { sessionId: string; message: string }) {
     this.logger.error(`🔐 Corrupted auth for ${payload.sessionId}`);
 
@@ -402,7 +403,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('session.error.515')
+  @OnEvent(SESSION_EVENTS.ERROR_515)
   handleError515(payload: { sessionId: string; message: string }) {
     this.logger.warn(`⚠️  Error 515 for ${payload.sessionId}`);
 
@@ -413,7 +414,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('message.status.update')
+  @OnEvent(CHAT_EVENTS.MESSAGE_STATUS_UPDATE)
   handleMessageStatusUpdate(payload: {
     sessionId: string;
     messageId: string;
@@ -431,7 +432,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('chat.update')
+  @OnEvent(CHAT_EVENTS.CHAT_UPDATE)
   handleChatUpdate(payload: { sessionId: string; chatId: string; unreadCount?: number }) {
     this.logger.debug(`💬 Chat updated: ${payload.chatId}`);
 
@@ -443,7 +444,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('contact.update')
+  @OnEvent(CHAT_EVENTS.CONTACT_UPDATE)
   handleContactUpdate(payload: {
     sessionId: string;
     contactId: string;
@@ -461,7 +462,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('typing.start')
+  @OnEvent(CHAT_EVENTS.TYPING_START)
   handleTypingStart(payload: { sessionId: string; chatId: string; participantId: string }) {
     this.logger.debug(`✍️  Typing started in ${payload.chatId}`);
 
@@ -473,7 +474,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
   }
 
-  @OnEvent('typing.stop')
+  @OnEvent(CHAT_EVENTS.TYPING_STOP)
   handleTypingStop(payload: { sessionId: string; chatId: string; participantId: string }) {
     this.logger.debug(`✋ Typing stopped in ${payload.chatId}`);
 

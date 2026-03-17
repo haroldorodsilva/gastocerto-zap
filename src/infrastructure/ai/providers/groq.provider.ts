@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 // @ts-ignore - groq-sdk não instalado ainda
 import Groq from 'groq-sdk';
 import { CryptoService } from '../../../common/services/crypto.service';
+import { PrismaService } from '../../../core/database/prisma.service';
 import {
   IAIProvider,
   TransactionData,
@@ -41,6 +42,7 @@ export class GroqProvider implements IAIProvider {
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
+    private prismaService: PrismaService,
   ) {
     // Inicialização assíncrona será feita no primeiro uso
   }
@@ -52,11 +54,8 @@ export class GroqProvider implements IAIProvider {
     if (this.initialized) return;
 
     try {
-      // Tentar buscar do banco primeiro
-      const { PrismaService } = await import('../../../core/database/prisma.service');
-      const prisma = new PrismaService();
-
-      const providerConfig = await prisma.aIProviderConfig.findUnique({
+      // Buscar configuração do banco via PrismaService injetado
+      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'groq' },
       });
 

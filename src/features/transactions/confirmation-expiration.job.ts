@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
+import { PlatformReplyService } from '@infrastructure/messaging/messages/platform-reply.service';
 import { ConfirmationStatus } from '@prisma/client';
 
 /**
@@ -19,7 +18,7 @@ export class ConfirmationExpirationJob {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly platformReply: PlatformReplyService,
   ) {}
 
   /**
@@ -33,21 +32,14 @@ export class ConfirmationExpirationJob {
     metadata?: any,
   ): Promise<void> {
     try {
-      // Usar plataforma salva na confirmação ou WhatsApp como padrão
-      const platform = (confirmation.platform || 'whatsapp') as MessagingPlatform;
-      const eventName =
-        platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
+      const platform = confirmation.platform || 'whatsapp';
 
-      this.logger.debug(
-        `📤 Emitindo evento ${eventName} para ${confirmation.phoneNumber} (platform: ${platform})`,
-      );
-
-      this.eventEmitter.emit(eventName, {
+      await this.platformReply.sendReply({
         platformId: confirmation.phoneNumber,
         message,
         context,
-        metadata,
         platform,
+        metadata,
       });
     } catch (error) {
       this.logger.error(`❌ Erro ao emitir reply para ${confirmation.phoneNumber}:`, error);
@@ -69,6 +61,7 @@ export class ConfirmationExpirationJob {
       const expiringSoon = await this.prisma.transactionConfirmation.findMany({
         where: {
           status: ConfirmationStatus.PENDING,
+          deletedAt: null,
           expiresAt: {
             lte: warningTime,
             gt: now,
@@ -91,6 +84,7 @@ export class ConfirmationExpirationJob {
       const expired = await this.prisma.transactionConfirmation.findMany({
         where: {
           status: ConfirmationStatus.PENDING,
+          deletedAt: null,
           expiresAt: {
             lte: now,
           },
@@ -143,7 +137,7 @@ export class ConfirmationExpirationJob {
 
       // Marcar como notificado
       await this.prisma.transactionConfirmation.update({
-        where: { id: confirmation.id },
+        where: { id: confirmation.id, deletedAt: null },
         data: { notifiedExpiring: true },
       });
 
@@ -162,7 +156,7 @@ export class ConfirmationExpirationJob {
     try {
       // Atualizar status para REJECTED
       await this.prisma.transactionConfirmation.update({
-        where: { id: confirmation.id },
+        where: { id: confirmation.id, deletedAt: null },
         data: {
           status: ConfirmationStatus.REJECTED,
         },
@@ -205,12 +199,16 @@ export class ConfirmationExpirationJob {
     try {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-      const result = await this.prisma.transactionConfirmation.deleteMany({
+      const result = await this.prisma.transactionConfirmation.updateMany({
         where: {
           apiSent: true, // Apenas registros já enviados com sucesso
+          deletedAt: null,
           expiresAt: {
             lt: oneHourAgo,
           },
+        },
+        data: {
+          deletedAt: new Date(), // Soft delete
         },
       });
 

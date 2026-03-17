@@ -1,5 +1,4 @@
 import { Injectable, Logger, Optional, forwardRef, Inject, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@core/database/prisma.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
 import { AIConfigService } from '@infrastructure/ai/ai-config.service';
@@ -13,7 +12,6 @@ import { TransactionData, TransactionType } from '@infrastructure/ai/ai.interfac
 import { UserCache } from '@prisma/client';
 import {
   CreateTransactionConfirmationDto,
-  CreateGastoCertoTransactionDto,
 } from '../../dto/transaction.dto';
 import { DateUtil } from '../../../../utils/date.util';
 import { TemporalParserService } from '@features/transactions/services/parsers/temporal-parser.service';
@@ -33,8 +31,9 @@ import { FixedTransactionParserService } from '@features/transactions/services/p
 import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
 import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from '../../services/payment-status-resolver.service';
-import { CreditCardService } from '@features/credit-cards/credit-card.service';
-import { RecurringTransactionService } from '../../services/recurring-transaction.service';
+import { CategoryResolverService } from '../../services/category-resolver.service';
+import { TransactionApiSenderService } from './transaction-api-sender.service';
+import { TransactionMessageFormatterService } from './transaction-message-formatter.service';
 
 /**
  * TransactionRegistrationService
@@ -61,7 +60,6 @@ export class TransactionRegistrationService implements OnModuleInit {
     private readonly gastoCertoApi: GastoCertoApiService,
     private readonly userCache: UserCacheService,
     private readonly accountManagement: AccountManagementService,
-    private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly temporalParser: TemporalParserService,
     private readonly installmentParser: InstallmentParserService,
@@ -69,8 +67,9 @@ export class TransactionRegistrationService implements OnModuleInit {
     private readonly creditCardParser: CreditCardParserService,
     private readonly invoiceCalculator: CreditCardInvoiceCalculatorService,
     private readonly paymentStatusResolver: PaymentStatusResolverService,
-    private readonly creditCardService: CreditCardService,
-    private readonly recurringService: RecurringTransactionService,
+    private readonly categoryResolver: CategoryResolverService,
+    private readonly apiSender: TransactionApiSenderService,
+    private readonly messageFormatter: TransactionMessageFormatterService,
     @Optional()
     @Inject(forwardRef(() => MessageLearningService))
     private readonly messageLearningService?: MessageLearningService,
@@ -241,206 +240,33 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       // Indexar categorias no RAG
       if (ragEnabled && categoriesData.categories.length > 0) {
-        try {
-          // Expandir cada categoria com suas subcategorias (criar entrada para cada uma)
-          const { expandCategoriesForRAG } = await import('../../../users/user-cache.service');
-          const userCategories = expandCategoriesForRAG(categoriesData.categories);
-
-          // DEBUG: Contar categorias com subcategorias
-          const withSubs = userCategories.filter((c) => c.subCategory);
-          const withoutSubs = userCategories.filter((c) => !c.subCategory);
-
-          this.logger.debug(
-            `📊 Categorias expandidas para RAG: ${userCategories.length} entradas | ` +
-              `${withSubs.length} COM subcategorias | ` +
-              `${withoutSubs.length} SEM subcategorias`,
-          );
-
-          // DEBUG: Log exemplos
-          const incomeExample = userCategories.find((c) => c.type === 'INCOME' && c.subCategory);
-          const expenseExample = userCategories.find((c) => c.type === 'EXPENSES' && c.subCategory);
-
-          if (incomeExample) {
-            this.logger.debug(
-              `💰 Exemplo INCOME: "${incomeExample.name}" > "${incomeExample.subCategory.name}"`,
-            );
-          }
-          if (expenseExample) {
-            this.logger.debug(
-              `💸 Exemplo EXPENSES: "${expenseExample.name}" > "${expenseExample.subCategory.name}"`,
-            );
-          }
-
-          if (withSubs.length === 0) {
-            this.logger.warn(
-              `⚠️  NENHUMA categoria tem subcategoria! Todas as ${userCategories.length} categorias estão sem subcategorias.`,
-            );
-          }
-
-          await this.ragService.indexUserCategories(user.gastoCertoId, userCategories);
-          this.logger.log(
-            `🧠 RAG indexado: ${userCategories.length} categorias | ` +
-              `UserId: ${user.gastoCertoId}`,
-          );
-        } catch (ragError) {
-          this.logger.warn(`⚠️ Erro ao indexar RAG (não bloqueante):`, ragError);
-        }
+        await this.indexCategoriesInRAG(user.gastoCertoId, categoriesData.categories);
       }
 
-      // 2. FASE 1: Tentar RAG primeiro (rápido, sem custo)
+      // 2. FASE 1: Tentar RAG match direto (rápido, sem custo)
       let extractedData: any = null;
       let responseTime = 0;
-      const usedAI = false;
+      let usedAI = false;
 
       this.logger.log(
         `🚀 INICIANDO PROCESSAMENTO | Platform: ${platform} | Phone: ${phoneNumber} | Message: "${text.substring(0, 50)}..."`,
       );
-      this.logger.log(
-        `⚙️  Configuração RAG: ragEnabled=${ragEnabled}, ragAiEnabled=${aiSettings.ragAiEnabled}, threshold=${aiSettings.ragThreshold}`,
-      );
-      this.logger.log(
-        `🔍 [DEBUG] aiSettings.ragEnabled=${aiSettings.ragEnabled}, this.ragService=${!!this.ragService}, gastoCertoId=${user.gastoCertoId}`,
-      );
 
-      // 🆕 Detectar tipo de transação UMA VEZ e reutilizar em todas as fases RAG
+      // Detectar tipo de transação UMA VEZ e reutilizar em todas as fases RAG
       const detectedType = ragEnabled ? await this.detectTransactionType(text) : null;
 
       if (ragEnabled) {
-        try {
-          const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido de 0.65 para 0.60
-          this.logger.log(`🔍 FASE 1: Tentando RAG primeiro...`);
-
-          let ragMatches: any[] = [];
-
-          // Decidir: BM25 ou Embeddings de IA
-          if (aiSettings.ragAiEnabled) {
-            // NOVO: Busca vetorial com embeddings de IA
-            this.logger.log(`🤖 Usando busca vetorial com IA (${aiSettings.ragAiProvider})...`);
-
-            // Obter AI provider configurado para RAG
-            const ragProvider = await this.aiFactory.getProvider(
-              aiSettings.ragAiProvider || 'openai',
-            );
-
-            ragMatches = await this.ragService.findSimilarCategoriesWithEmbeddings(
-              text,
-              user.gastoCertoId,
-              ragProvider,
-              { minScore: 0.4, maxResults: 3, transactionType: detectedType },
-            );
-          } else {
-            // Original: Busca BM25 (sem IA)
-            this.logger.log(`📊 Usando busca BM25 (sem IA)...`);
-
-            this.logger.log(
-              `📊 [DEBUG] Chamando ragService.findSimilarCategories com userId=${user.gastoCertoId}, text="${text}", type=${detectedType}`,
-            );
-
-            ragMatches = await this.ragService.findSimilarCategories(text, user.gastoCertoId, {
-              minScore: 0.4,
-              maxResults: 3,
-              transactionType: detectedType, // 🔥 Filtrar por tipo!
-            });
-
-            this.logger.log(
-              `📊 [DEBUG] ragService.findSimilarCategories retornou ${ragMatches.length} matches`,
-            );
-          }
-
-          if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
-            const bestMatch = ragMatches[0];
-            this.logger.log(
-              `✅ RAG encontrou match direto: "${bestMatch.categoryName}" ` +
-                `${bestMatch.subCategoryName ? `> ${bestMatch.subCategoryName}` : ''} ` +
-                `(score: ${(bestMatch.score * 100).toFixed(1)}%)`,
-            );
-
-            // Usar extractBasicData + TemporalParser (sem chamar IA)
-            extractedData = this.extractBasicData(text);
-            extractedData.category = bestMatch.categoryName;
-            extractedData.subCategory = bestMatch.subCategoryName || null;
-            extractedData.confidence = bestMatch.score;
-            extractedData.source = aiSettings.ragAiEnabled ? 'RAG_AI_DIRECT' : 'RAG_DIRECT';
-          } else {
-            this.logger.log(
-              `⚠️ RAG score baixo (${ragMatches[0]?.score ? (ragMatches[0].score * 100).toFixed(1) : 0}% < ${ragThreshold * 100}%) - Usando IA...`,
-            );
-          }
-        } catch (ragError) {
-          this.logger.warn(`⚠️ Erro no RAG fase 1 (não bloqueante):`, ragError);
-        }
+        extractedData = await this.matchWithRAG(text, user.gastoCertoId, aiSettings, detectedType);
       }
 
-      // 3. FASE 2: Se RAG não funcionou, usar IA
+      // 3. FASE 2+3: Se RAG não funcionou, usar IA + revalidação
       if (!extractedData) {
-        this.logger.log(`🤖 FASE 2: Chamando IA para extrair transação...`);
-        this.logger.debug(
-          `📝 UserContext enviado para IA: ` +
-            `name=${userContext.name}, ` +
-            `categories=${userContext.categories.length}`,
+        const aiResult = await this.extractWithAIAndRevalidate(
+          text, userContext, user.gastoCertoId, aiSettings, ragEnabled, detectedType,
         );
-        const startTime = Date.now();
-        extractedData = await this.aiFactory.extractTransaction(text, userContext);
-        responseTime = Date.now() - startTime;
-        this.logger.log(
-          `✅ IA retornou: ${extractedData.type} | ${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ''} | Confidence: ${(extractedData.confidence * 100).toFixed(1)}%`,
-        );
-
-        // 3.5. FASE 3: Revalidar categoria da IA com RAG
-        if (ragEnabled && extractedData.category) {
-          try {
-            const ragThreshold = aiSettings.ragThreshold || 0.6; // Reduzido para 0.60
-            this.logger.log(`🔍 FASE 3: Revalidando categoria da IA com RAG...`);
-
-            const ragMatches = await this.ragService.findSimilarCategories(
-              text,
-              user.gastoCertoId,
-              {
-                minScore: 0.5,
-                maxResults: 1,
-                transactionType: detectedType, // 🔥 Filtrar por tipo!
-              },
-            );
-
-            if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
-              const bestMatch = ragMatches[0];
-
-              // RAG sempre substitui categoria E subcategoria quando score >= threshold
-              const changedCategory = extractedData.category !== bestMatch.categoryName;
-              const changedSubCategory = extractedData.subCategory !== bestMatch.subCategoryName;
-
-              if (changedCategory || changedSubCategory) {
-                this.logger.log(
-                  `🧠 RAG melhorou extração da IA: ` +
-                    `"${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ''}" → ` +
-                    `"${bestMatch.categoryName}${bestMatch.subCategoryName ? ` > ${bestMatch.subCategoryName}` : ''}" ` +
-                    `(score: ${(bestMatch.score * 100).toFixed(1)}%)`,
-                );
-              }
-
-              extractedData.category = bestMatch.categoryName;
-              extractedData.subCategory = bestMatch.subCategoryName; // SEMPRE substitui
-              extractedData.confidence = Math.min(
-                extractedData.confidence + bestMatch.score * 0.1,
-                1.0,
-              );
-              extractedData.source = 'AI_RAG_VALIDATED';
-            } else {
-              extractedData.source = 'AI_ONLY';
-            }
-          } catch (ragError) {
-            this.logger.warn(`⚠️ Erro no RAG fase 3 (não bloqueante):`, ragError);
-            extractedData.source = 'AI_ONLY';
-          }
-        } else {
-          extractedData.source = 'AI_ONLY';
-        }
-      } else {
-        // 🚨 RAG está desabilitado - avisar
-        this.logger.warn(
-          `⚠️ RAG DESABILITADO - Tabela rag_search_logs não será preenchida | ` +
-            `Para habilitar: UPDATE "AISettings" SET "ragEnabled" = true;`,
-        );
+        extractedData = aiResult.extractedData;
+        responseTime = aiResult.responseTime;
+        usedAI = true;
       }
 
       // Log de extração
@@ -452,121 +278,16 @@ export class TransactionRegistrationService implements OnModuleInit {
           `Confiança: ${(extractedData.confidence * 100).toFixed(1)}%`,
       );
 
-      // ✨ NOVO: Detectar parcelamento, transação fixa e cartão de crédito
-      this.logger.log(`🔍 Iniciando detecções avançadas...`);
-
-      // 1. Detectar parcelamento
-      const installmentDetection = this.installmentParser.detectInstallments(text);
-      this.logger.debug(`🔍 Detecção de parcelamento: ${JSON.stringify(installmentDetection)}`);
-
-      // 2. Detectar transação fixa
-      const fixedDetection = this.fixedParser.detectFixed(text);
-      this.logger.debug(`🔍 Detecção de fixa: ${JSON.stringify(fixedDetection)}`);
-
-      // 3. Detectar cartão de crédito
-      const creditCardDetection = this.creditCardParser.detectCreditCard(text);
-      this.logger.debug(`🔍 Detecção de cartão: ${JSON.stringify(creditCardDetection)}`);
-
-      // 4. Enriquecer dados extraídos com detecções
-      if (installmentDetection.isInstallment) {
-        extractedData.installments = installmentDetection.installments;
-        extractedData.installmentNumber = 1;
-        extractedData.installmentValueType = installmentDetection.installmentValueType;
-        this.logger.log(
-          `💳 Parcelamento detectado: ${installmentDetection.installments}x` +
-            ` | tipo: ${installmentDetection.installmentValueType}` +
-            ` (padrão: "${installmentDetection.matchedPattern}")`,
-        );
-      }
-
-      if (fixedDetection.isFixed) {
-        extractedData.isFixed = true;
-        extractedData.fixedFrequency = fixedDetection.frequency;
-        this.logger.log(
-          `🔁 Transação fixa detectada: ${fixedDetection.frequency}` +
-            ` (keywords: ${fixedDetection.matchedKeywords?.join(', ')})`,
-        );
-      }
-
-      if (creditCardDetection.usesCreditCard) {
-        // 💳 VALIDAÇÃO DE CARTÃO: Verificar cartões disponíveis e aplicar regras
-        const cardValidation = await this.validateCreditCardUsage(user, activeAccountId);
-
-        if (!cardValidation.success) {
-          // Retornar erro se não passou na validação
-          return {
-            success: false,
-            message: cardValidation.message,
-            requiresConfirmation: false,
-          };
-        }
-
-        extractedData.creditCardId = cardValidation.creditCardId;
-        this.logger.log(
-          `💳 Cartão de crédito validado` +
-            ` (keywords: ${creditCardDetection.matchedKeywords?.join(', ')})` +
-            ` | creditCardId: ${cardValidation.creditCardId}` +
-            ` | ${cardValidation.wasAutoSet ? 'AUTO-SET' : 'DEFAULT'}`,
-        );
-      }
-
-      // 5. Calcular mês da fatura (se for cartão de crédito)
-      let invoiceMonth: string | undefined;
-      let invoiceMonthFormatted: string | undefined;
-
-      if (extractedData.creditCardId) {
-        try {
-          const closingDay = await this.invoiceCalculator.getCardClosingDay(
-            user.id,
-            extractedData.creditCardId,
-          );
-
-          const invoiceCalc = this.invoiceCalculator.calculateInvoiceMonth(
-            extractedData.date || new Date().toISOString(),
-            closingDay,
-          );
-
-          invoiceMonth = invoiceCalc.invoiceMonth;
-          invoiceMonthFormatted = invoiceCalc.invoiceMonthFormatted;
-          extractedData.invoiceMonth = invoiceMonth;
-
-          this.logger.log(
-            `📅 Fatura calculada: ${invoiceMonthFormatted}` +
-              ` (Fechamento dia ${closingDay}, transação: ${invoiceCalc.isAfterClosing ? 'APÓS' : 'ANTES'} do fechamento)`,
-          );
-        } catch (error) {
-          this.logger.error(`❌ Erro ao calcular mês da fatura:`, error);
-        }
-      }
-
-      // 6. Determinar status de pagamento
-      const statusDecision = this.paymentStatusResolver.resolvePaymentStatus(
-        extractedData,
-        invoiceMonth,
-        invoiceMonthFormatted,
-      );
-      extractedData.paymentStatus = statusDecision.status;
-
-      this.logger.log(
-        `✅ Status determinado: ${statusDecision.status}` +
-          ` (${statusDecision.reason})` +
-          ` | Requer confirmação obrigatória: ${statusDecision.requiresConfirmation}`,
-      );
-
-      // 7. Forçar confidence baixa se requer confirmação obrigatória
-      if (statusDecision.requiresConfirmation) {
-        // Garantir que NÃO será auto-registrada
-        extractedData.confidence = Math.min(extractedData.confidence, 0.75);
-        this.logger.log(
-          `⚠️ Confirmação obrigatória: confidence ajustada de ${((extractedData.confidence || 0) * 100).toFixed(1)}% para máx 75%`,
-        );
-      }
+      // 4. Enriquecer com detecções avançadas (parcelamento, fixa, cartão, fatura, status)
+      const detectorEarlyExit = await this.enrichWithDetectors(text, extractedData, user, activeAccountId);
+      if (detectorEarlyExit) return detectorEarlyExit;
 
       // Registrar uso de IA apenas se foi usada
       if (usedAI) {
         await this.logAIUsage({
           phoneNumber,
-          userId: user.id,
+          gastoCertoId: user.gastoCertoId,
+          platform,
           operation: 'TRANSACTION_EXTRACTION',
           inputType: 'TEXT',
           inputText: text,
@@ -586,7 +307,7 @@ export class TransactionRegistrationService implements OnModuleInit {
       }
 
       // 3.5. Resolver categoria/subcategoria ANTES do aprendizado (para ter IDs corretos)
-      const resolved = await this.resolveCategoryAndSubcategory(
+      const resolved = await this.categoryResolver.resolve(
         user.gastoCertoId,
         activeAccountId,
         extractedData.category,
@@ -732,7 +453,8 @@ export class TransactionRegistrationService implements OnModuleInit {
       // Registrar uso de IA
       await this.logAIUsage({
         phoneNumber,
-        userId: user.id,
+        gastoCertoId: user.gastoCertoId,
+        platform,
         operation: 'IMAGE_ANALYSIS',
         inputType: 'IMAGE',
         inputText: `Image: ${mimeType}`,
@@ -835,13 +557,14 @@ export class TransactionRegistrationService implements OnModuleInit {
       // ✅ Registrar uso de IA para transcrição de áudio
       await this.logAIUsage({
         phoneNumber,
-        userId: user.id,
+        gastoCertoId: user.gastoCertoId,
+        platform,
         operation: 'AUDIO_TRANSCRIPTION',
         inputType: 'AUDIO',
         inputText: `Audio: ${mimeType} (${audioBuffer.length} bytes)`,
         responseTimeMs: responseTime,
         mimeType,
-        imageSize: audioBuffer.length, // Reutilizar campo para tamanho do áudio
+        imageSize: audioBuffer.length,
       });
 
       // 2. Processar como texto (que vai registrar outro uso de IA se necessário)
@@ -861,6 +584,7 @@ export class TransactionRegistrationService implements OnModuleInit {
 
   /**
    * Registra transação automaticamente (alta confiança)
+   * SEMPRE cria registro no banco (transactionConfirmations) para rastreabilidade
    */
   private async autoRegisterTransaction(
     phoneNumber: string,
@@ -878,25 +602,34 @@ export class TransactionRegistrationService implements OnModuleInit {
     try {
       this.logger.log(`⚡ Registro automático (confiança: ${(data.confidence * 100).toFixed(1)}%)`);
 
-      // Preparar objeto de confirmação temporário para usar método genérico
-      const tempConfirmation = {
+      // ✅ SEMPRE criar registro no banco primeiro
+      const confirmation = await this.createConfirmation(
         phoneNumber,
-        type: data.type,
-        amount: Math.round(data.amount * 100), // Converter para centavos
-        category: data.category,
-        description: data.description,
-        date: data.date ? DateUtil.normalizeDate(data.date) : DateUtil.today(),
-        extractedData: {
-          merchant: data.merchant,
-          confidence: data.confidence,
-          subcategory: data.subCategory,
-        },
-      };
+        data,
+        messageId,
+        user,
+        platform,
+        accountId,
+      );
 
-      // Usar método genérico para enviar
-      const result = await this.sendTransactionToApi(tempConfirmation, data);
+      if (!confirmation.confirmationId) {
+        throw new Error('Falha ao criar registro de confirmação');
+      }
+
+      // Auto-confirmar (PENDING → CONFIRMED)
+      const confirmed = await this.confirmationService.confirm(confirmation.confirmationId);
+      this.logger.log(`✅ Confirmação ${confirmed.id} auto-confirmada (autoRegisterTransaction)`);
+
+      // Enviar para API
+      const result = await this.apiSender.sendTransactionToApi(confirmed, data);
 
       if (result.success) {
+        // Marcar como enviado para API
+        await this.prisma.transactionConfirmation.update({
+          where: { id: confirmed.id },
+          data: { apiSent: true, apiSentAt: new Date() },
+        });
+
         const typeEmoji = data.type === 'EXPENSES' ? '💸' : '💰';
         const typeText = data.type === 'EXPENSES' ? 'Gasto' : 'Receita';
         const subcategoryText = data.subCategory ? ` > ${data.subCategory}` : '';
@@ -914,6 +647,11 @@ export class TransactionRegistrationService implements OnModuleInit {
           autoRegistered: true,
         };
       } else {
+        // Marcar erro no registro
+        await this.prisma.transactionConfirmation.update({
+          where: { id: confirmed.id },
+          data: { apiError: result.error || 'Erro ao enviar para API', apiRetryCount: { increment: 1 } },
+        });
         const errorMsg = result.error || 'Erro ao registrar na API';
         throw new Error(errorMsg);
       }
@@ -992,7 +730,7 @@ export class TransactionRegistrationService implements OnModuleInit {
             `📊 [DEBUG] Dados extraídos ANTES de resolver IDs: category="${data.category}", subCategory="${data.subCategory}"`,
           );
 
-          const resolved = await this.resolveCategoryAndSubcategory(
+          const resolved = await this.categoryResolver.resolve(
             user.gastoCertoId,
             finalAccountId,
             data.category,
@@ -1009,21 +747,26 @@ export class TransactionRegistrationService implements OnModuleInit {
           );
 
           // 🚀 AUTO-REGISTER: Se categoryId E subCategoryId estão resolvidos + confiança >= threshold
-          // Registrar automaticamente sem pedir confirmação
+          // Registrar automaticamente sem pedir confirmação, MAS sempre gravar no banco
           if (categoryId && subCategoryId && data.confidence >= this.autoRegisterThreshold) {
             this.logger.log(
               `⚡ AUTO-REGISTER ativado: categoryId + subCategoryId resolvidos + confiança ${(data.confidence * 100).toFixed(1)}% >= ${(this.autoRegisterThreshold * 100).toFixed(0)}%`,
             );
 
-            // Registrar imediatamente
-            const tempConfirmation = {
+            // ✅ SEMPRE criar registro no banco antes de enviar para API
+            const amountInCentsAuto = Math.round(data.amount * 100);
+            const autoDto: CreateTransactionConfirmationDto = {
               phoneNumber,
-              type: data.type,
-              amount: Math.round(data.amount * 100),
+              platform,
+              userId: user?.id,
+              accountId: finalAccountId,
+              messageId,
+              type: data.type as any,
+              amount: amountInCentsAuto,
               category: data.category,
               categoryId,
               subCategoryId,
-              accountId: finalAccountId,
+              subCategoryName: data.subCategory || null,
               description: data.description,
               date: validDate,
               extractedData: {
@@ -1031,57 +774,82 @@ export class TransactionRegistrationService implements OnModuleInit {
                 confidence: data.confidence,
                 subcategory: data.subCategory,
               },
+              isFixed: data.isFixed || undefined,
+              fixedFrequency: data.fixedFrequency || undefined,
+              installments: data.installments || undefined,
+              installmentNumber: data.installmentNumber || undefined,
+              creditCardId: data.creditCardId || undefined,
+              paymentStatus: data.paymentStatus || undefined,
+              invoiceMonth: data.invoiceMonth || undefined,
             };
 
-            const result = await this.sendTransactionToApi(tempConfirmation, data);
+            const autoConfirmation = await this.confirmationService.create(autoDto);
+            this.logger.log(`📋 Registro criado no banco: ${autoConfirmation.id} (auto-register)`);
+
+            // Auto-confirmar imediatamente (PENDING → CONFIRMED)
+            const confirmed = await this.confirmationService.confirm(autoConfirmation.id);
+            this.logger.log(`✅ Confirmação ${confirmed.id} auto-confirmada`);
+
+            // Enviar para API
+            const result = await this.apiSender.sendTransactionToApi(confirmed, data);
 
             if (result.success) {
-              const typeEmoji = data.type === 'EXPENSES' ? '💸' : '💰';
-
-              // 👤 Buscar nome da conta ativa
-              let accountName = 'Conta não identificada';
-              if (user.accounts && Array.isArray(user.accounts)) {
-                const accounts = user.accounts as Array<{
-                  id: string;
-                  name: string;
-                  type?: string;
-                  isPrimary?: boolean;
-                }>;
-                const activeAcc = accounts.find((acc) => acc.id === finalAccountId);
-                if (activeAcc) {
-                  accountName = activeAcc.name;
-                }
-              }
-
-              // Formatar data para exibição
-              const formattedDate = validDate.toLocaleDateString('pt-BR', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
+              // Marcar como enviado para API
+              await this.prisma.transactionConfirmation.update({
+                where: { id: confirmed.id },
+                data: { apiSent: true, apiSentAt: new Date() },
               });
 
-              // Formatar perfil temporal
-              const temporalProfile = data.temporalInfo?.profile || 'TODAY';
-              const temporalText = this.formatTemporalProfile(temporalProfile);
+              // 👤 Buscar nome da conta ativa
+              const accountName = this.messageFormatter.findAccountName(user.accounts, finalAccountId);
+
+              const successMessage = this.messageFormatter.formatSuccessMessage({
+                type: data.type,
+                amount: data.amount,
+                category: data.category,
+                subCategory: data.subCategory,
+                description: data.description,
+                date: validDate,
+                temporalProfile: data.temporalInfo?.profile || 'TODAY',
+                accountName,
+              });
 
               return {
                 success: true,
-                message:
-                  `${typeEmoji} *Transação registrada com sucesso!*\n\n` +
-                  `💵 *Valor:* R$ ${data.amount.toFixed(2)}\n` +
-                  `📂 *Categoria:* ${data.category}${data.subCategory ? ` > ${data.subCategory}` : ''}\n` +
-                  `${data.description ? `📝 ${data.description}\n` : ''}` +
-                  `📅 *Data:* ${formattedDate} (${temporalText})\n` +
-                  `👤 *Perfil:* ${accountName}\n`,
-                // `🤖 _Registrado com ${(data.confidence * 100).toFixed(1)}% de confiança_`,
+                message: successMessage,
                 requiresConfirmation: false,
-                confirmationId: '',
+                confirmationId: confirmed.id,
               };
             }
-            // Se falhar, continua para confirmação manual
+            // Se falhar na API, marcar erro mas manter registro
+            await this.prisma.transactionConfirmation.update({
+              where: { id: confirmed.id },
+              data: { apiError: result.error || 'Erro ao enviar para API', apiRetryCount: { increment: 1 } },
+            });
             this.logger.warn(
-              `⚠️ Auto-register falhou, continuando para confirmação manual: ${result.error}`,
+              `⚠️ Auto-register falhou na API, registro ${confirmed.id} mantido para retry: ${result.error}`,
             );
+
+            // 👤 Buscar nome da conta ativa
+            const accountNameRetry = this.messageFormatter.findAccountName(user.accounts, finalAccountId);
+
+            const retryMessage = this.messageFormatter.formatSuccessMessage({
+              type: data.type,
+              amount: data.amount,
+              category: data.category,
+              subCategory: data.subCategory,
+              description: data.description,
+              date: validDate,
+              temporalProfile: data.temporalInfo?.profile || 'TODAY',
+              accountName: accountNameRetry,
+            });
+
+            return {
+              success: true,
+              message: retryMessage + '\n\n⚠️ A transação foi registrada localmente e será sincronizada em breve.',
+              requiresConfirmation: false,
+              confirmationId: confirmed.id,
+            };
           }
         } catch (error) {
           this.logger.warn(`⚠️ Erro ao resolver categoria (continuando): ${error.message}`);
@@ -1106,6 +874,8 @@ export class TransactionRegistrationService implements OnModuleInit {
           merchant: data.merchant,
           confidence: data.confidence,
           subcategory: data.subCategory,
+          creditCardName: (data as any).creditCardName,
+          installmentValueType: data.installmentValueType,
         },
         // 📦 Novos campos para transações avançadas
         isFixed: data.isFixed || undefined,
@@ -1119,654 +889,399 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       const confirmation = await this.confirmationService.create(dto);
 
-      const typeEmoji = data.type === 'EXPENSES' ? '💸' : '💰';
-      const typeText = data.type === 'EXPENSES' ? 'Gasto' : 'Receita';
-
-      // Formatar categoria com subcategoria
-      const categoryText = data.subCategory
-        ? `${data.category} > ${data.subCategory}`
-        : `${data.category}\n📂 *Subcategoria:* Não encontrada`;
-
       // 👤 Buscar nome da conta ativa do usuário
-      let accountName = 'Conta não identificada';
-      if (user.accounts && Array.isArray(user.accounts) && accountId) {
-        const accounts = user.accounts as Array<{
-          id: string;
-          name: string;
-          type?: string;
-          isPrimary?: boolean;
-        }>;
-        const activeAccount = accounts.find((acc) => acc.id === accountId);
-        if (activeAccount) {
-          accountName = activeAccount.name;
-        }
-      }
+      const accountName = this.messageFormatter.findAccountName(user?.accounts, accountId);
 
-      // 📦 Informações adicionais para transações especiais
-      let additionalInfo = '';
-
-      // Transação parcelada
-      if (data.installments && data.installments > 1) {
-        const isInstallmentValue = data.installmentValueType === 'INSTALLMENT_VALUE';
-        const installmentValue = isInstallmentValue
-          ? data.amount
-          : data.amount / data.installments;
-        const totalValue = isInstallmentValue
-          ? data.amount * data.installments
-          : data.amount;
-        additionalInfo += `\n💳 *Parcelamento:* ${data.installments}x de R$ ${installmentValue.toFixed(2)}`;
-        additionalInfo += `\n💰 *Valor total:* R$ ${totalValue.toFixed(2)}`;
-        if (data.installmentNumber) {
-          additionalInfo += ` (parcela ${data.installmentNumber}/${data.installments})`;
-        }
-      }
-
-      // Transação fixa/recorrente
-      if (data.isFixed && data.fixedFrequency) {
-        const frequencyMap = {
-          MONTHLY: 'Mensal',
-          WEEKLY: 'Semanal',
-          ANNUAL: 'Anual',
-          BIENNIAL: 'Bienal',
-        };
-        additionalInfo += `\n🔄 *Recorrência:* ${frequencyMap[data.fixedFrequency] || data.fixedFrequency}`;
-      }
-
-      // Transação no cartão de crédito
-      if (data.creditCardId && data.invoiceMonth) {
-        additionalInfo += `\n💳 *Cartão de Crédito*`;
-        additionalInfo += `\n📅 *Fatura:* ${data.invoiceMonth}`;
-      }
-
-      // Status do pagamento
-      if (data.paymentStatus === 'PENDING') {
-        additionalInfo += `\n⏳ *Status:* Pendente`;
-      }
+      // Formatar mensagem de confirmação via formatter
+      const confirmationMessage = this.messageFormatter.formatConfirmationMessage({
+        data,
+        validDate,
+        accountName,
+      });
 
       return {
         success: true,
-        message:
-          `${typeEmoji} *Confirmar ${typeText}?*\n\n` +
-          `💵 *Valor:* R$ ${data.amount.toFixed(2)}\n` +
-          `📂 *Categoria:* ${categoryText}\n` +
-          `${data.description ? `📝 *Descrição:* ${data.description}\n` : ''}` +
-          `${data.date ? `📅 *Data:* ${DateUtil.formatBR(validDate)}\n` : ''}` +
-          `${data.merchant ? `🏪 *Local:* ${data.merchant}\n` : ''}` +
-          `👤 *Perfil:* ${accountName}` +
-          additionalInfo + // Adiciona informações de parcelas/fixa/cartão
-          `\n\n✅ Digite *"sim"* para confirmar\n` +
-          `❌ Digite *"não"* para cancelar`,
+        message: confirmationMessage,
         requiresConfirmation: true,
         confirmationId: confirmation.id,
       };
     } catch (error) {
       this.logger.error(`❌ Erro ao criar confirmação:`, error);
-      throw error;
+      // 🛡️ Nunca deixar o usuário sem resposta
+      return {
+        success: false,
+        message: 'Desculpe, ocorreu um erro ao processar sua transação. Tente novamente em instantes.',
+        requiresConfirmation: false,
+        confirmationId: '',
+      };
     }
-  }
-
-  /**
-   * Formata erros de validação de forma amigável
-   */
-  private formatValidationError(errors: string[]): string {
-    return (
-      '❌ *Dados inválidos*\n\n' +
-      errors.map((err) => `• ${err}`).join('\n') +
-      '\n\n_Por favor, corrija e tente novamente._'
-    );
   }
 
   // Recurring/installment logic delegated to RecurringTransactionService
 
   /**
-   * Registra transação confirmada pelo usuário na API GastoCerto
+   * Registra transação confirmada pelo usuário na API GastoCerto.
+   * Delegado ao TransactionApiSenderService.
    */
   async registerConfirmedTransaction(
     confirmation: any,
   ): Promise<{ success: boolean; message: string }> {
-    try {
-      this.logger.log(`💾 [Registration] Registrando transação confirmada ID: ${confirmation.id}`);
-
-      // Enviar para API usando método genérico
-      const result = await this.sendTransactionToApi(confirmation);
-
-      if (result.success) {
-        // Atualizar banco: marcar como enviado
-        await this.prisma.transactionConfirmation.update({
-          where: { id: confirmation.id },
-          data: {
-            apiSent: true,
-            apiSentAt: new Date(),
-            apiError: null,
-          },
-        });
-        this.logger.log(`✅ Confirmação ${confirmation.id} marcada como enviada`);
-
-        // 📦 FASE 7: Criar parcelas adicionais se transação for parcelada
-        if (confirmation.installments && confirmation.installments > 1) {
-          await this.recurringService.createAdditionalInstallments(confirmation);
-        }
-
-        // 🔄 FASE 8: Criar próximas ocorrências se transação for fixa/recorrente
-        if (confirmation.isFixed && confirmation.fixedFrequency) {
-          await this.recurringService.createRecurringOccurrences(confirmation);
-        }
-
-        const typeEmoji = confirmation.type === 'EXPENSES' ? '💸' : '💰';
-        const subCategoryText = confirmation.subCategoryName
-          ? ` > ${confirmation.subCategoryName}`
-          : '';
-
-        // 👤 Buscar nome da conta da confirmação
-        let accountName = 'Conta não identificada';
-        if (confirmation.accountId) {
-          const userCache = await this.userCache.getUser(confirmation.phoneNumber);
-          if (userCache?.accounts && Array.isArray(userCache.accounts)) {
-            const accounts = userCache.accounts as Array<{
-              id: string;
-              name: string;
-              type?: string;
-              isPrimary?: boolean;
-            }>;
-            const account = accounts.find((acc) => acc.id === confirmation.accountId);
-            if (account) {
-              accountName = account.name;
-            }
-          }
-        }
-
-        // Formatar data para exibição
-        const transactionDate = new Date(confirmation.date);
-        const formattedDate = transactionDate.toLocaleDateString('pt-BR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-        });
-
-        // Tentar extrair perfil temporal do extractedData
-        let temporalText = 'hoje';
-        try {
-          const extractedData =
-            typeof confirmation.extractedData === 'string'
-              ? JSON.parse(confirmation.extractedData)
-              : confirmation.extractedData;
-          const temporalProfile = extractedData?.temporalInfo?.profile || 'TODAY';
-          temporalText = this.formatTemporalProfile(temporalProfile);
-        } catch (error) {
-          // Ignorar erro de parsing
-        }
-
-        const successMessage =
-          `${typeEmoji} *Transação registrada com sucesso!*\n\n` +
-          `💵 *Valor:* R$ ${(Number(confirmation.amount) / 100).toFixed(2)}\n` +
-          `📂 *Categoria:* ${confirmation.category}${subCategoryText}\n` +
-          `${confirmation.description ? `📝 ${confirmation.description}\n` : ''}` +
-          `📅 *Data:* ${formattedDate} (${temporalText})\n` +
-          `👤 *Perfil:* ${accountName}`;
-
-        return {
-          success: true,
-          message: successMessage,
-        };
-      } else {
-        // Atualizar banco: marcar erro
-        await this.prisma.transactionConfirmation.update({
-          where: { id: confirmation.id },
-          data: {
-            apiRetryCount: { increment: 1 },
-            apiError: result.error || 'Erro desconhecido',
-          },
-        });
-        this.logger.error(`❌ Erro na API GastoCerto:`, result.error);
-
-        return {
-          success: false,
-          message:
-            '❌ *Erro ao registrar transação*\n\n' +
-            (result.error || 'Erro desconhecido') +
-            '\n\n_Por favor, tente novamente mais tarde._',
-        };
-      }
-    } catch (error: any) {
-      this.logger.error('❌ Erro ao registrar transação confirmada:', error);
-      return {
-        success: false,
-        message: '❌ Erro ao registrar transação. Tente novamente.',
-      };
-    }
+    return this.apiSender.registerConfirmedTransaction(confirmation);
   }
 
   /**
-   * Método específico para retry job - retorna transactionId
-   * Usado pelo ApiRetryJob para reenviar transações falhadas
+   * Método específico para retry job — delegado ao TransactionApiSenderService.
    */
   async sendConfirmedTransactionToApi(confirmation: any): Promise<{
     success: boolean;
     error?: string;
     transactionId?: string;
   }> {
-    // Usar método genérico
-    return await this.sendTransactionToApi(confirmation);
+    return this.apiSender.sendConfirmedTransactionToApi(confirmation);
   }
 
   /**
-   * Método genérico para enviar transação para API GastoCerto
-   * Consolida a lógica de envio usada em todos os fluxos
-   */
-  private async sendTransactionToApi(
-    confirmation: any,
-    data?: TransactionData,
-  ): Promise<{
-    success: boolean;
-    error?: string;
-    transactionId?: string;
-  }> {
-    try {
-      // 1. Buscar usuário
-      const user = await this.userCache.getUser(confirmation.phoneNumber);
-      if (!user) {
-        return {
-          success: false,
-          error: 'Usuário não encontrado',
-        };
-      }
-
-      // 2. Buscar conta da transação (usar a conta salva na confirmação ou a conta ativa atual)
-      let activeAccount;
-
-      if (confirmation.accountId) {
-        // Se a confirmação tem accountId salvo, buscar essa conta específica
-        this.logger.log(`📌 Usando conta salva na confirmação: ${confirmation.accountId}`);
-        const userCache = await this.userCache.getUser(confirmation.phoneNumber);
-        if (userCache?.accounts && Array.isArray(userCache.accounts)) {
-          activeAccount = (userCache.accounts as any[]).find(
-            (acc: any) => acc.id === confirmation.accountId,
-          );
-        }
-      } else {
-        // Fallback: buscar conta ativa atual (para confirmações antigas sem accountId)
-        this.logger.log(`⚠️ Confirmação sem accountId, buscando conta ativa atual`);
-        activeAccount = await this.userCache.getActiveAccount(confirmation.phoneNumber);
-      }
-
-      if (!activeAccount) {
-        this.logger.warn(`⚠️ Conta não encontrada para usuário ${user.gastoCertoId}`);
-        return {
-          success: false,
-          error: 'Conta não encontrada. Use "minhas contas" para configurar.',
-        };
-      }
-
-      const accountId = activeAccount.id;
-      this.logger.log(`✅ Usando conta: ${activeAccount.name} (${accountId})`);
-
-      // 3. Resolver IDs de categoria e subcategoria
-      let categoryId: string | null = null;
-      let subCategoryId: string | null = null;
-
-      // Verificar se já temos IDs salvos na confirmação (preferência)
-      if (confirmation.categoryId) {
-        categoryId = confirmation.categoryId;
-        subCategoryId = confirmation.subCategoryId || null;
-        this.logger.log(
-          `📂 Usando IDs salvos: categoryId=${categoryId}, subCategoryId=${subCategoryId || 'null'}`,
-        );
-      } else {
-        // Fallback: resolver categoria pelo nome (para confirmações antigas)
-        this.logger.log(
-          `🔍 Confirmação sem categoryId, resolvendo pelo nome (tipo: ${confirmation.type})...`,
-        );
-        const resolved = await this.resolveCategoryAndSubcategory(
-          user.gastoCertoId,
-          accountId,
-          confirmation.category,
-          confirmation.extractedData?.subcategory || data?.subCategory,
-          confirmation.type, // ⭐ Passar tipo da transação para filtrar categorias
-        );
-        categoryId = resolved.categoryId;
-        subCategoryId = resolved.subCategoryId;
-      }
-
-      if (!categoryId) {
-        return {
-          success: false,
-          error: 'Categoria não encontrada',
-        };
-      }
-
-      // 4. Preparar DTO para API
-      const description =
-        confirmation.description || data?.description || confirmation.extractedData?.description;
-
-      const merchant = confirmation.extractedData?.merchant || data?.merchant;
-
-      const dto: CreateGastoCertoTransactionDto = {
-        userId: user.gastoCertoId,
-        accountId, // Adicionar conta default
-        type: confirmation.type as TransactionType, // Manter maiúsculo (EXPENSES | INCOME)
-        amount: Number(confirmation.amount),
-        categoryId,
-        subCategoryId,
-        ...(description && description.trim() ? { description: description.trim() } : {}), // Só incluir se não estiver vazio
-        date: confirmation.date
-          ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
-          : DateUtil.formatToISO(DateUtil.today()),
-        ...(merchant && merchant.trim() ? { merchant: merchant.trim() } : {}), // Só incluir se não estiver vazio
-        source: confirmation.platform || 'telegram', // ✅ Sources: telegram | whatsapp | webchat
-      };
-
-      this.logger.log(`📤 Enviando para GastoCerto API:`, JSON.stringify(dto, null, 2));
-
-      // 5. Registrar na API
-      const response = await this.gastoCertoApi.createTransaction(dto);
-
-      if (response.success) {
-        // API retorna success: true quando registra com sucesso
-        return {
-          success: true,
-          transactionId: response.transaction?.id || 'unknown',
-        };
-      } else {
-        // Log detalhado do erro da API
-        this.logger.error(
-          `❌ [API ERROR] Erro ao enviar transação para GastoCerto API:`,
-          JSON.stringify(response, null, 2),
-        );
-
-        const errorMsg =
-          typeof response.error === 'string'
-            ? response.error
-            : response.error?.message || 'Erro desconhecido na API';
-
-        return {
-          success: false,
-          error: errorMsg,
-        };
-      }
-    } catch (error: any) {
-      this.logger.error(
-        `❌ [EXCEPTION] Exceção ao enviar transação:`,
-        JSON.stringify(
-          {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-            response: error.response?.data || error.response,
-          },
-          null,
-          2,
-        ),
-      );
-      return {
-        success: false,
-        error: error.message || 'Erro ao enviar transação',
-      };
-    }
-  }
-
-  /**
-   * Busca o ID da conta default do usuário
-   */
-  /**
-   * Helper para resolver categoria e subcategoria da conta
-   * Busca primeiro no cache local, depois na API se necessário
-   * Retorna IDs a partir de nomes ou IDs
-   * IMPORTANTE: Filtra categorias pelo tipo da transação (INCOME/EXPENSES)
-   */
-  private async resolveCategoryAndSubcategory(
-    userId: string,
-    accountId: string,
-    categoryNameOrId: string,
-    subcategoryNameOrId?: string,
-    transactionType?: 'INCOME' | 'EXPENSES',
-  ): Promise<{ categoryId: string | null; subCategoryId: string | null }> {
-    this.logger.debug(
-      `🔍 [DEBUG] resolveCategoryAndSubcategory chamado com: category="${categoryNameOrId}", subCategory="${subcategoryNameOrId}", type="${transactionType}"`,
-    );
-
-    try {
-      // Buscar usuário no cache pelo gastoCertoId (userId é o gastoCertoId)
-      const user = await this.userCache.getUserByGastoCertoId(userId);
-
-      let categoriesData: any[] = [];
-
-      // 1. PRIORIDADE: Tentar buscar do cache RAG (formato expandido com subcategorias)
-      if (this.ragService) {
-        try {
-          const ragCategories = await this.ragService.getCachedCategories(userId);
-          if (ragCategories && ragCategories.length > 0) {
-            // Filtrar por conta E tipo de transação
-            categoriesData = ragCategories.filter((cat: any) => {
-              const matchesAccount = cat.accountId === accountId;
-              const matchesType = !transactionType || cat.type === transactionType;
-              return matchesAccount && matchesType;
-            });
-
-            if (categoriesData.length > 0) {
-              this.logger.log(
-                `📦 Usando ${categoriesData.length} categoria(s) do cache RAG (formato expandido, tipo: ${transactionType || 'TODOS'})`,
-              );
-            }
-          }
-        } catch (error) {
-          this.logger.warn(`⚠️ Erro ao buscar do cache RAG: ${error.message}`);
-        }
-      }
-
-      // 2. Fallback: Buscar do cache do usuário (formato API não expandido)
-      if (
-        categoriesData.length === 0 &&
-        user &&
-        user.categories &&
-        Array.isArray(user.categories)
-      ) {
-        const cachedCategories = user.categories as any[];
-
-        // Filtrar categorias da conta específica E tipo de transação
-        categoriesData = cachedCategories.filter((cat: any) => {
-          const matchesAccount = cat.accountId === accountId;
-          const matchesType = !transactionType || cat.type === transactionType;
-          return matchesAccount && matchesType;
-        });
-
-        if (categoriesData.length > 0) {
-          this.logger.log(
-            `📦 Usando ${categoriesData.length} categoria(s) do cache local do usuário (tipo: ${transactionType || 'TODOS'})`,
-          );
-        } else {
-          this.logger.warn(
-            `⚠️ Cache tem categorias mas nenhuma da conta ${accountId} e tipo ${transactionType}. Total no cache: ${cachedCategories.length}`,
-          );
-        }
-      }
-
-      // 3. Último recurso: Buscar na API
-      if (categoriesData.length === 0) {
-        this.logger.log(`🔍 Buscando categorias na API (cache vazio)`);
-        categoriesData = await this.gastoCertoApi.getAccountCategories(userId, accountId);
-
-        if (!categoriesData || categoriesData.length === 0) {
-          this.logger.warn(`⚠️ Conta ${accountId} não possui categorias`);
-          return { categoryId: null, subCategoryId: null };
-        }
-      }
-
-      // 3. Procurar categoria (case-insensitive)
-      const matchingCategory = categoriesData.find(
-        (cat: any) =>
-          cat.name.toLowerCase() === categoryNameOrId.toLowerCase() || cat.id === categoryNameOrId,
-      );
-
-      if (!matchingCategory) {
-        this.logger.warn(`⚠️ Categoria não encontrada: ${categoryNameOrId}`);
-
-        // DEBUG: Listar categorias disponíveis
-        const available = categoriesData
-          .map((c: any) => `${c.name} (tipo: ${c.type || 'N/A'})`)
-          .join(', ');
-        this.logger.warn(`📋 Categorias disponíveis: ${available}`);
-
-        return { categoryId: null, subCategoryId: null };
-      }
-
-      const categoryId = matchingCategory.id;
-      this.logger.log(`📂 Categoria resolvida: ${categoryNameOrId} → ${categoryId}`);
-
-      // DEBUG: Log completo da estrutura da categoria encontrada
-      this.logger.debug(
-        `🔍 [DEBUG] Categoria encontrada - Estrutura completa: ${JSON.stringify(matchingCategory, null, 2).substring(0, 500)}`,
-      );
-
-      // 4. Se não há subcategoria informada, retornar apenas categoria
-      if (!subcategoryNameOrId) {
-        return { categoryId, subCategoryId: null };
-      }
-
-      // 5. Procurar subcategoria - suportar DOIS formatos:
-      //    a) subCategories: [] (formato da API)
-      //    b) subCategory: { id, name } (formato do cache expandido do RAG)
-      let subCategoryId: string | null = null;
-
-      // Formato do cache expandido (cada entrada tem UMA subcategoria)
-      if (matchingCategory.subCategory && typeof matchingCategory.subCategory === 'object') {
-        const subCat = matchingCategory.subCategory;
-        if (
-          subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
-          subCat.id === subcategoryNameOrId
-        ) {
-          subCategoryId = subCat.id;
-          this.logger.log(
-            `📂 Subcategoria resolvida (cache): ${subcategoryNameOrId} → ${subCategoryId}`,
-          );
-          return { categoryId, subCategoryId };
-        }
-      }
-
-      // Formato da API (categoria tem array de subcategorias)
-      if (matchingCategory.subCategories && Array.isArray(matchingCategory.subCategories)) {
-        this.logger.debug(
-          `📋 Procurando em ${matchingCategory.subCategories.length} subcategorias da API...`,
-        );
-
-        const matchingSubCategory = matchingCategory.subCategories.find(
-          (subCat: any) =>
-            subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
-            subCat.id === subcategoryNameOrId,
-        );
-
-        if (matchingSubCategory) {
-          subCategoryId = matchingSubCategory.id;
-          this.logger.log(
-            `📂 Subcategoria resolvida (API): ${subcategoryNameOrId} → ${subCategoryId}`,
-          );
-          return { categoryId, subCategoryId };
-        }
-      }
-
-      // Se não encontrou, buscar em TODAS as categorias expandidas do cache
-      // (pode haver múltiplas entradas da mesma categoria, cada uma com uma subcategoria diferente)
-      const allMatchingCategories = categoriesData.filter(
-        (cat: any) =>
-          (cat.name.toLowerCase() === categoryNameOrId.toLowerCase() ||
-            cat.id === categoryNameOrId) &&
-          cat.subCategory &&
-          (cat.subCategory.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
-            cat.subCategory.id === subcategoryNameOrId),
-      );
-
-      if (allMatchingCategories.length > 0) {
-        subCategoryId = allMatchingCategories[0].subCategory.id;
-        this.logger.log(
-          `📂 Subcategoria resolvida (busca expandida): ${subcategoryNameOrId} → ${subCategoryId}`,
-        );
-        return { categoryId, subCategoryId };
-      }
-
-      // Não encontrou a subcategoria
-      this.logger.warn(
-        `⚠️ Subcategoria "${subcategoryNameOrId}" não encontrada na categoria "${matchingCategory.name}"`,
-      );
-
-      // DEBUG: Listar subcategorias disponíveis
-      if (matchingCategory.subCategories && Array.isArray(matchingCategory.subCategories)) {
-        const subCatNames = matchingCategory.subCategories.map((sc: any) => sc.name).join(', ');
-        this.logger.warn(`📋 Subcategorias disponíveis (API): ${subCatNames}`);
-      }
-
-      // DEBUG: Verificar todas as entradas da categoria no cache
-      const allCategoryEntries = categoriesData.filter(
-        (cat: any) =>
-          cat.name.toLowerCase() === categoryNameOrId.toLowerCase() || cat.id === categoryNameOrId,
-      );
-      if (allCategoryEntries.length > 1) {
-        const subCatNames = allCategoryEntries
-          .filter((e: any) => e.subCategory)
-          .map((e: any) => e.subCategory.name)
-          .join(', ');
-        this.logger.warn(`📋 Subcategorias disponíveis (cache): ${subCatNames}`);
-      }
-
-      return { categoryId, subCategoryId: null };
-    } catch (error: any) {
-      this.logger.error(`❌ Erro ao resolver categoria/subcategoria:`, error);
-      return { categoryId: null, subCategoryId: null };
-    }
-  }
-
-  /**
-   * Reenvia uma transação pendente usando dados salvos
-   * Usado pelo endpoint de reenvio manual
+   * Reenvia uma transação pendente — delegado ao TransactionApiSenderService.
    */
   async resendTransaction(
     confirmationId: string,
   ): Promise<{ success: boolean; error?: string; transactionId?: string }> {
-    try {
-      this.logger.log(`🔄 Reenviando transação: ${confirmationId}`);
+    return this.apiSender.resendTransaction(confirmationId);
+  }
 
-      // 1. Buscar confirmação
-      const confirmation = await this.confirmationService.getById(confirmationId);
-      if (!confirmation) {
-        return { success: false, error: 'Confirmação não encontrada' };
+  // ═══════════════════════════════════════════════════════════════
+  // Private sub-methods extracted from processTextTransaction
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Indexa categorias do usuário no RAG para matching semântico.
+   * Expande categorias com subcategorias em entradas individuais.
+   */
+  private async indexCategoriesInRAG(userId: string, categories: any[]): Promise<void> {
+    try {
+      // Expandir cada categoria com suas subcategorias (criar entrada para cada uma)
+      const { expandCategoriesForRAG } = await import('../../../users/user-cache.service');
+      const userCategories = expandCategoriesForRAG(categories);
+
+      // DEBUG: Contar categorias com subcategorias
+      const withSubs = userCategories.filter((c) => c.subCategory);
+      const withoutSubs = userCategories.filter((c) => !c.subCategory);
+
+      this.logger.debug(
+        `📊 Categorias expandidas para RAG: ${userCategories.length} entradas | ` +
+          `${withSubs.length} COM subcategorias | ` +
+          `${withoutSubs.length} SEM subcategorias`,
+      );
+
+      // DEBUG: Log exemplos
+      const incomeExample = userCategories.find((c) => c.type === 'INCOME' && c.subCategory);
+      const expenseExample = userCategories.find((c) => c.type === 'EXPENSES' && c.subCategory);
+
+      if (incomeExample) {
+        this.logger.debug(
+          `💰 Exemplo INCOME: "${incomeExample.name}" > "${incomeExample.subCategory.name}"`,
+        );
+      }
+      if (expenseExample) {
+        this.logger.debug(
+          `💸 Exemplo EXPENSES: "${expenseExample.name}" > "${expenseExample.subCategory.name}"`,
+        );
       }
 
-      // 2. Verificar se já foi enviada
-      if (confirmation.apiSent) {
-        this.logger.warn(`⚠️ Transação ${confirmationId} já foi enviada`);
+      if (withSubs.length === 0) {
+        this.logger.warn(
+          `⚠️  NENHUMA categoria tem subcategoria! Todas as ${userCategories.length} categorias estão sem subcategorias.`,
+        );
+      }
+
+      await this.ragService.indexUserCategories(userId, userCategories);
+      this.logger.log(
+        `🧠 RAG indexado: ${userCategories.length} categorias | ` +
+          `UserId: ${userId}`,
+      );
+    } catch (ragError) {
+      this.logger.warn(`⚠️ Erro ao indexar RAG (não bloqueante):`, ragError);
+    }
+  }
+
+  /**
+   * FASE 1: Tentativa de match direto via RAG (BM25 ou embeddings).
+   * Retorna dados da transação se encontrou match com score >= threshold, null caso contrário.
+   */
+  private async matchWithRAG(
+    text: string,
+    userId: string,
+    aiSettings: any,
+    detectedType: 'INCOME' | 'EXPENSES' | undefined | null,
+  ): Promise<any | null> {
+    try {
+      const ragThreshold = aiSettings.ragThreshold || 0.6;
+      this.logger.log(`🔍 FASE 1: Tentando RAG primeiro...`);
+
+      let ragMatches: any[] = [];
+
+      // Decidir: BM25 ou Embeddings de IA
+      if (aiSettings.ragAiEnabled) {
+        // NOVO: Busca vetorial com embeddings de IA
+        this.logger.log(`🤖 Usando busca vetorial com IA (${aiSettings.ragAiProvider})...`);
+
+        // Obter AI provider configurado para RAG
+        const ragProvider = await this.aiFactory.getProvider(
+          aiSettings.ragAiProvider || 'openai',
+        );
+
+        ragMatches = await this.ragService.findSimilarCategoriesWithEmbeddings(
+          text,
+          userId,
+          ragProvider,
+          { minScore: 0.4, maxResults: 3, transactionType: detectedType },
+        );
+      } else {
+        // Original: Busca BM25 (sem IA)
+        this.logger.log(`📊 Usando busca BM25 (sem IA)...`);
+
+        this.logger.log(
+          `📊 [DEBUG] Chamando ragService.findSimilarCategories com userId=${userId}, text="${text}", type=${detectedType}`,
+        );
+
+        ragMatches = await this.ragService.findSimilarCategories(text, userId, {
+          minScore: 0.4,
+          maxResults: 3,
+          transactionType: detectedType,
+        });
+
+        this.logger.log(
+          `📊 [DEBUG] ragService.findSimilarCategories retornou ${ragMatches.length} matches`,
+        );
+      }
+
+      if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
+        const bestMatch = ragMatches[0];
+        this.logger.log(
+          `✅ RAG encontrou match direto: "${bestMatch.categoryName}" ` +
+            `${bestMatch.subCategoryName ? `> ${bestMatch.subCategoryName}` : ''} ` +
+            `(score: ${(bestMatch.score * 100).toFixed(1)}%)`,
+        );
+
+        // Usar extractBasicData + TemporalParser (sem chamar IA)
+        const extractedData: any = this.extractBasicData(text);
+        extractedData.category = bestMatch.categoryName;
+        extractedData.subCategory = bestMatch.subCategoryName || null;
+        extractedData.confidence = bestMatch.score;
+        extractedData.source = aiSettings.ragAiEnabled ? 'RAG_AI_DIRECT' : 'RAG_DIRECT';
+        return extractedData;
+      }
+
+      this.logger.log(
+        `⚠️ RAG score baixo (${ragMatches[0]?.score ? (ragMatches[0].score * 100).toFixed(1) : 0}% < ${ragThreshold * 100}%) - Usando IA...`,
+      );
+      return null;
+    } catch (ragError) {
+      this.logger.warn(`⚠️ Erro no RAG fase 1 (não bloqueante):`, ragError);
+      return null;
+    }
+  }
+
+  /**
+   * FASE 2+3: Extrai dados da transação via IA e revalida com RAG.
+   * Chamado quando RAG Phase 1 não encontrou match direto.
+   */
+  private async extractWithAIAndRevalidate(
+    text: string,
+    userContext: any,
+    userId: string,
+    aiSettings: any,
+    ragEnabled: any,
+    detectedType: 'INCOME' | 'EXPENSES' | undefined | null,
+  ): Promise<{ extractedData: any; responseTime: number }> {
+    this.logger.log(`🤖 FASE 2: Chamando IA para extrair transação...`);
+    this.logger.debug(
+      `📝 UserContext enviado para IA: ` +
+        `name=${userContext.name}, ` +
+        `categories=${userContext.categories.length}`,
+    );
+    const startTime = Date.now();
+    const extractedData: any = await this.aiFactory.extractTransaction(text, userContext);
+    const responseTime = Date.now() - startTime;
+    this.logger.log(
+      `✅ IA retornou: ${extractedData.type} | ${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ''} | Confidence: ${(extractedData.confidence * 100).toFixed(1)}%`,
+    );
+
+    // FASE 3: Revalidar categoria da IA com RAG
+    if (ragEnabled && extractedData.category) {
+      try {
+        const ragThreshold = aiSettings.ragThreshold || 0.6;
+        this.logger.log(`🔍 FASE 3: Revalidando categoria da IA com RAG...`);
+
+        const ragMatches = await this.ragService.findSimilarCategories(
+          text,
+          userId,
+          {
+            minScore: 0.5,
+            maxResults: 1,
+            transactionType: detectedType,
+          },
+        );
+
+        if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
+          const bestMatch = ragMatches[0];
+
+          // RAG sempre substitui categoria E subcategoria quando score >= threshold
+          const changedCategory = extractedData.category !== bestMatch.categoryName;
+          const changedSubCategory = extractedData.subCategory !== bestMatch.subCategoryName;
+
+          if (changedCategory || changedSubCategory) {
+            this.logger.log(
+              `🧠 RAG melhorou extração da IA: ` +
+                `"${extractedData.category}${extractedData.subCategory ? ` > ${extractedData.subCategory}` : ''}" → ` +
+                `"${bestMatch.categoryName}${bestMatch.subCategoryName ? ` > ${bestMatch.subCategoryName}` : ''}" ` +
+                `(score: ${(bestMatch.score * 100).toFixed(1)}%)`,
+            );
+          }
+
+          extractedData.category = bestMatch.categoryName;
+          extractedData.subCategory = bestMatch.subCategoryName;
+          extractedData.confidence = Math.min(
+            extractedData.confidence + bestMatch.score * 0.1,
+            1.0,
+          );
+          extractedData.source = 'AI_RAG_VALIDATED';
+        } else {
+          extractedData.source = 'AI_ONLY';
+        }
+      } catch (ragError) {
+        this.logger.warn(`⚠️ Erro no RAG fase 3 (não bloqueante):`, ragError);
+        extractedData.source = 'AI_ONLY';
+      }
+    } else {
+      extractedData.source = 'AI_ONLY';
+    }
+
+    return { extractedData, responseTime };
+  }
+
+  /**
+   * Enriquece dados extraídos com detecções avançadas:
+   * parcelamento, transação fixa, cartão de crédito, fatura e status de pagamento.
+   * Retorna early-exit response se validação de cartão falhar, null caso contrário.
+   */
+  private async enrichWithDetectors(
+    text: string,
+    extractedData: any,
+    user: UserCache,
+    activeAccountId: string,
+  ): Promise<{ success: false; message: string; requiresConfirmation: false } | null> {
+    this.logger.log(`🔍 Iniciando detecções avançadas...`);
+
+    // 1. Detectar parcelamento
+    const installmentDetection = this.installmentParser.detectInstallments(text);
+    this.logger.debug(`🔍 Detecção de parcelamento: ${JSON.stringify(installmentDetection)}`);
+
+    // 2. Detectar transação fixa
+    const fixedDetection = this.fixedParser.detectFixed(text);
+    this.logger.debug(`🔍 Detecção de fixa: ${JSON.stringify(fixedDetection)}`);
+
+    // 3. Detectar cartão de crédito
+    const creditCardDetection = this.creditCardParser.detectCreditCard(text);
+    this.logger.debug(`🔍 Detecção de cartão: ${JSON.stringify(creditCardDetection)}`);
+
+    // 4. Enriquecer dados extraídos com detecções
+    if (installmentDetection.isInstallment) {
+      extractedData.installments = installmentDetection.installments;
+      extractedData.installmentNumber = 1;
+      extractedData.installmentValueType = installmentDetection.installmentValueType;
+      this.logger.log(
+        `💳 Parcelamento detectado: ${installmentDetection.installments}x` +
+          ` | tipo: ${installmentDetection.installmentValueType}` +
+          ` (padrão: "${installmentDetection.matchedPattern}")`,
+      );
+    }
+
+    if (fixedDetection.isFixed) {
+      extractedData.isFixed = true;
+      extractedData.fixedFrequency = fixedDetection.frequency;
+      this.logger.log(
+        `🔁 Transação fixa detectada: ${fixedDetection.frequency}` +
+          ` (keywords: ${fixedDetection.matchedKeywords?.join(', ')})`,
+      );
+    }
+
+    if (creditCardDetection.usesCreditCard) {
+      // 💳 VALIDAÇÃO DE CARTÃO: Verificar cartões disponíveis e aplicar regras
+      const cardValidation = await this.validateCreditCardUsage(user, activeAccountId);
+
+      if (!cardValidation.success) {
+        // Retornar erro se não passou na validação
         return {
-          success: true,
+          success: false,
+          message: cardValidation.message,
+          requiresConfirmation: false,
         };
       }
 
-      // 3. Reenviar usando dados salvos (accountId, categoryId, subCategoryId)
-      const result = await this.sendTransactionToApi(confirmation);
-
-      // 4. Atualizar status
-      if (result.success) {
-        await this.prisma.transactionConfirmation.update({
-          where: { id: confirmationId },
-          data: {
-            apiSent: true,
-            apiSentAt: new Date(),
-            apiError: null,
-          },
-        });
-        this.logger.log(`✅ Transação ${confirmationId} reenviada com sucesso`);
-      } else {
-        await this.prisma.transactionConfirmation.update({
-          where: { id: confirmationId },
-          data: {
-            apiRetryCount: { increment: 1 },
-            apiError: result.error,
-          },
-        });
-        this.logger.error(`❌ Erro ao reenviar ${confirmationId}: ${result.error}`);
-      }
-
-      return result;
-    } catch (error: any) {
-      this.logger.error(`❌ Erro no reenvio da transação ${confirmationId}:`, error);
-      return { success: false, error: error.message };
+      extractedData.creditCardId = cardValidation.creditCardId;
+      if (cardValidation.cardName) extractedData.creditCardName = cardValidation.cardName;
+      this.logger.log(
+        `💳 Cartão de crédito validado` +
+          ` (keywords: ${creditCardDetection.matchedKeywords?.join(', ')})` +
+          ` | creditCardId: ${cardValidation.creditCardId}` +
+          ` | cardName: ${cardValidation.cardName || 'desconhecido'}` +
+          ` | ${cardValidation.wasAutoSet ? 'AUTO-SET' : 'DEFAULT'}`,
+      );
     }
+
+    // 5. Calcular mês da fatura (se for cartão de crédito)
+    let invoiceMonth: string | undefined;
+    let invoiceMonthFormatted: string | undefined;
+
+    if (extractedData.creditCardId) {
+      try {
+        const closingDay = await this.invoiceCalculator.getCardClosingDay(
+          user.id,
+          extractedData.creditCardId,
+        );
+
+        const invoiceCalc = this.invoiceCalculator.calculateInvoiceMonth(
+          extractedData.date || new Date().toISOString(),
+          closingDay,
+        );
+
+        invoiceMonth = invoiceCalc.invoiceMonth;
+        invoiceMonthFormatted = invoiceCalc.invoiceMonthFormatted;
+        extractedData.invoiceMonth = invoiceMonth;
+
+        this.logger.log(
+          `📅 Fatura calculada: ${invoiceMonthFormatted}` +
+            ` (Fechamento dia ${closingDay}, transação: ${invoiceCalc.isAfterClosing ? 'APÓS' : 'ANTES'} do fechamento)`,
+        );
+      } catch (error) {
+        this.logger.error(`❌ Erro ao calcular mês da fatura:`, error);
+      }
+    }
+
+    // 6. Determinar status de pagamento
+    const statusDecision = this.paymentStatusResolver.resolvePaymentStatus(
+      extractedData,
+      invoiceMonth,
+      invoiceMonthFormatted,
+    );
+    extractedData.paymentStatus = statusDecision.status;
+
+    this.logger.log(
+      `✅ Status determinado: ${statusDecision.status}` +
+        ` (${statusDecision.reason})` +
+        ` | Requer confirmação obrigatória: ${statusDecision.requiresConfirmation}`,
+    );
+
+    // 7. Forçar confidence baixa se requer confirmação obrigatória
+    if (statusDecision.requiresConfirmation) {
+      extractedData.confidence = Math.min(extractedData.confidence, 0.75);
+      this.logger.log(
+        `⚠️ Confirmação obrigatória: confidence ajustada de ${((extractedData.confidence || 0) * 100).toFixed(1)}% para máx 75%`,
+      );
+    }
+
+    return null; // Sem early-exit — continuar processamento normal
   }
 
   /**
@@ -1774,7 +1289,8 @@ export class TransactionRegistrationService implements OnModuleInit {
    */
   private async logAIUsage(params: {
     phoneNumber: string;
-    userId: string;
+    gastoCertoId: string;
+    platform: string;
     operation: 'TRANSACTION_EXTRACTION' | 'IMAGE_ANALYSIS' | 'AUDIO_TRANSCRIPTION';
     inputType: 'TEXT' | 'IMAGE' | 'AUDIO';
     inputText: string;
@@ -1786,7 +1302,8 @@ export class TransactionRegistrationService implements OnModuleInit {
     try {
       await this.aiFactory.logAIUsage({
         phoneNumber: params.phoneNumber,
-        userCacheId: params.userId,
+        gastoCertoId: params.gastoCertoId,
+        platform: params.platform,
         operation: params.operation as any,
         inputType: params.inputType as any,
         inputText: params.inputText,
@@ -1825,7 +1342,7 @@ export class TransactionRegistrationService implements OnModuleInit {
       this.logger.warn(`❌ Validação falhou: ${validation.errors.join(', ')}`);
       return {
         isValid: false,
-        message: this.formatValidationError(validation.errors),
+        message: this.messageFormatter.formatValidationError(validation.errors),
       };
     }
 
@@ -1926,8 +1443,11 @@ export class TransactionRegistrationService implements OnModuleInit {
     const establishmentsRegex = new RegExp(`\\b(${[...COMMON_ESTABLISHMENTS].join('|')})\\b`, 'gi');
 
     let description = text
-      .replace(/r\$\s*\d+[,.]?\d*/gi, '') // Remove valor
+      .replace(/r\$\s*\d+[,.]?\d*/gi, '') // Remove valor com R$
+      .replace(/\b\d+[,.]\d{1,2}\b/g, '') // Remove valores decimais sem R$ (ex: "5,30", "123,45")
+      .replace(/\b\d+\b/g, '') // Remove números inteiros soltos
       .replace(/\bpor\s+\d+/gi, '') // Remove "por 1500"
+      .replace(/\b(reais|real|centavos?|brl)\b/gi, '') // Remove unidades monetárias
       .replace(verbsRegex, '') // Remove verbos de transação
       .replace(temporalRegex, '') // Remove palavras temporais
       .replace(prepositionsRegex, '') // Remove preposições
@@ -1998,6 +1518,7 @@ export class TransactionRegistrationService implements OnModuleInit {
     success: boolean;
     message: string;
     creditCardId?: string;
+    cardName?: string;
     wasAutoSet?: boolean;
   }> {
     try {
@@ -2010,10 +1531,18 @@ export class TransactionRegistrationService implements OnModuleInit {
         this.logger.log(
           `💳 [VALIDATE CARD] Cartão default encontrado: ${user.defaultCreditCardId}`,
         );
+        // Buscar nome do cartão para exibição (não bloqueia em caso de falha)
+        let cardName: string | undefined;
+        try {
+          const nameResult = await this.gastoCertoApi.listCreditCards(accountId);
+          const found = nameResult.data?.find((c: any) => c.id === user.defaultCreditCardId);
+          cardName = found?.name;
+        } catch { /* nome é opcional */ }
         return {
           success: true,
           message: '',
           creditCardId: user.defaultCreditCardId,
+          cardName,
           wasAutoSet: false,
         };
       }
@@ -2083,25 +1612,5 @@ export class TransactionRegistrationService implements OnModuleInit {
         message: '❌ Erro ao validar cartão de crédito. Tente novamente.',
       };
     }
-  }
-
-  /**
-   * Formata o perfil temporal para exibição amigável
-   */
-  private formatTemporalProfile(profile: string): string {
-    const profiles: Record<string, string> = {
-      TODAY: 'hoje',
-      YESTERDAY: 'ontem',
-      TOMORROW: 'amanhã',
-      DAY_BEFORE_YESTERDAY: 'anteontem',
-      LAST_WEEK: 'semana passada',
-      THIS_WEEK: 'esta semana',
-      NEXT_WEEK: 'próxima semana',
-      LAST_MONTH: 'mês passado',
-      THIS_MONTH: 'este mês',
-      NEXT_MONTH: 'próximo mês',
-    };
-
-    return profiles[profile] || 'hoje';
   }
 }

@@ -141,25 +141,6 @@ export class AIConfigService {
   }
 
   /**
-   * Verifica se provider está dentro dos limites de rate limit
-   */
-  async checkRateLimit(provider: string): Promise<{ allowed: boolean; message?: string }> {
-    const config = await this.getProviderConfig(provider);
-
-    if (!config) {
-      return { allowed: false, message: 'Provider não encontrado' };
-    }
-
-    if (!config.enabled) {
-      return { allowed: false, message: 'Provider desabilitado' };
-    }
-
-    // TODO: Implementar lógica real de rate limiting com Redis
-    // Por enquanto, apenas verifica se está habilitado
-    return { allowed: true };
-  }
-
-  /**
    * Garante que o cache está válido
    */
   private async ensureCacheValid(): Promise<void> {
@@ -368,15 +349,6 @@ export class AIConfigService {
 
     this.logger.log('✅ Configurações de IA atualizadas');
     return settings;
-  }
-
-  /**
-   * Busca o provider primário configurado
-   * @deprecated Use getProviderForOperation() instead
-   */
-  async getPrimaryProvider(): Promise<string> {
-    const settings = await this.getSettings();
-    return settings.primaryProvider;
   }
 
   /**

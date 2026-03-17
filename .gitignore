@@ -50,3 +50,6 @@ prisma/dev.db-journal
 # Baileys auth data
 baileys_auth_info/
 auth_info/
+
+# NLP pre-trained model (generated at runtime)
+model.nlp

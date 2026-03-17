@@ -10,6 +10,7 @@ import {
   sendWhatsAppMessage,
   stopWhatsAppConnection,
 } from './simple-whatsapp-init';
+import { MESSAGE_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * Serviço de integração do WhatsApp simples com o sistema existente
@@ -31,7 +32,7 @@ export class WhatsAppIntegrationService implements OnModuleInit {
     const messageHandler = {
       handleIncomingMessage: async (payload: { sessionId: string; message: any }) => {
         // Emitir evento para o sistema existente processar
-        this.eventEmitter.emit('whatsapp.message', payload);
+        this.eventEmitter.emit(MESSAGE_EVENTS.WHATSAPP, payload);
         this.logger.debug(
           `📤 Evento 'whatsapp.message' emitido para ${payload.message.key.remoteJid}`,
         );

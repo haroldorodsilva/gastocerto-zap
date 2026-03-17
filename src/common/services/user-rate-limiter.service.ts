@@ -6,10 +6,10 @@ import { RedisService } from './redis.service';
  *
  * Protege o sistema contra spam e abuso de usuários.
  *
- * LIMITES:
- * - 10 mensagens por minuto por usuário
- * - 100 mensagens por hora por usuário
- * - 500 mensagens por dia por usuário
+ * LIMITES (configuráveis via env):
+ * - USER_RATE_LIMIT_PER_MINUTE (default: 10) mensagens por minuto por usuário
+ * - USER_RATE_LIMIT_PER_HOUR (default: 100) mensagens por hora por usuário
+ * - USER_RATE_LIMIT_PER_DAY (default: 500) mensagens por dia por usuário
  *
  * IMPORTANTE:
  * - Usa Redis para contadores distribuídos
@@ -20,11 +20,11 @@ import { RedisService } from './redis.service';
 export class UserRateLimiterService {
   private readonly logger = new Logger(UserRateLimiterService.name);
 
-  // Limites configuráveis
+  // Limites configuráveis via variáveis de ambiente
   private readonly limits = {
-    perMinute: 10, // Máximo 10 mensagens/minuto
-    perHour: 100, // Máximo 100 mensagens/hora
-    perDay: 500, // Máximo 500 mensagens/dia
+    perMinute: parseInt(process.env.USER_RATE_LIMIT_PER_MINUTE || '10', 10),
+    perHour: parseInt(process.env.USER_RATE_LIMIT_PER_HOUR || '100', 10),
+    perDay: parseInt(process.env.USER_RATE_LIMIT_PER_DAY || '500', 10),
   };
 
   // Duração dos bloqueios (em segundos)
@@ -240,15 +240,24 @@ export class UserRateLimiterService {
 
   /**
    * Reseta limites de um usuário (admin)
+   * Usa SCAN em vez de KEYS para não bloquear o Redis em produção
    */
   async resetUserLimits(phoneNumber: string): Promise<void> {
     try {
       const redis = this.redisService.getClient();
-      const keys = await redis.keys(`ratelimit:user:*:${phoneNumber}*`);
+      const pattern = `ratelimit:user:*:${phoneNumber}*`;
+      const keysToDelete: string[] = [];
 
-      if (keys.length > 0) {
-        await redis.del(...keys);
-        this.logger.log(`🔄 Rate limits resetados para usuário ${phoneNumber}`);
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        keysToDelete.push(...keys);
+      } while (cursor !== '0');
+
+      if (keysToDelete.length > 0) {
+        await redis.del(...keysToDelete);
+        this.logger.log(`🔄 Rate limits resetados para usuário ${phoneNumber} (${keysToDelete.length} keys)`);
       }
     } catch (error) {
       this.logger.error(`Erro ao resetar limites para ${phoneNumber}:`, error);

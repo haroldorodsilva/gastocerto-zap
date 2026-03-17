@@ -5,6 +5,9 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-yet';
 import { GastoCertoApiService } from './gasto-certo-api.service';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
+import { UserAccountApiClient } from './api/user-account-api.client';
+import { TransactionApiClient } from './api/transaction-api.client';
+import { CreditCardApiClient } from './api/credit-card-api.client';
 
 /**
  * SharedModule
@@ -55,7 +58,13 @@ import { DiscordNotificationService } from '@common/services/discord-notificatio
       },
     }),
   ],
-  providers: [GastoCertoApiService, DiscordNotificationService],
+  providers: [
+    UserAccountApiClient,
+    TransactionApiClient,
+    CreditCardApiClient,
+    GastoCertoApiService,
+    DiscordNotificationService,
+  ],
   exports: [GastoCertoApiService, DiscordNotificationService, CacheModule],
 })
 export class SharedModule {}

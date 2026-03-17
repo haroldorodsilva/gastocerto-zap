@@ -6,6 +6,8 @@ import { PrismaService } from '@core/database/prisma.service';
 import { CategoryMatch, RAGConfig, UserCategory } from './rag.interface';
 import { FILTER_WORDS_FOR_TERM_DETECTION } from '@common/constants/nlp-keywords.constants';
 import { SYNONYM_ENTRIES } from '../data/synonym-entries';
+import { TextProcessingService } from './text-processing.service';
+import { UserSynonymService } from './user-synonym.service';
 
 /**
  * Helper: Constrói Map de sinônimos mesclando entradas duplicadas.
@@ -58,6 +60,8 @@ export class RAGService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly textProcessing: TextProcessingService,
+    private readonly userSynonymService: UserSynonymService,
   ) {
     this.useRedisCache = this.configService.get<boolean>('RAG_CACHE_REDIS', true);
     this.logger.log(
@@ -170,11 +174,11 @@ export class RAGService {
     }
 
     // Normalizar texto de busca
-    const normalizedQuery = this.normalize(text);
-    const queryTokens = this.tokenize(normalizedQuery);
+    const normalizedQuery = this.textProcessing.normalize(text);
+    const queryTokens = this.textProcessing.tokenize(normalizedQuery);
 
     // 🆕 BUSCAR SINÔNIMOS PERSONALIZADOS DO USUÁRIO
-    const userSynonyms = await this.getUserSynonyms(userId, normalizedQuery);
+    const userSynonyms = await this.userSynonymService.getUserSynonyms(userId, normalizedQuery);
 
     if (userSynonyms.length > 0) {
       this.logger.log(
@@ -196,8 +200,8 @@ export class RAGService {
     for (const category of categories) {
       // Incluir nome da categoria e subcategoria no texto de busca
       const categoryText = `${category.name} ${category.subCategory?.name || ''}`;
-      const normalizedCategory = this.normalize(categoryText);
-      const categoryTokens = this.tokenize(normalizedCategory);
+      const normalizedCategory = this.textProcessing.normalize(categoryText);
+      const categoryTokens = this.textProcessing.tokenize(normalizedCategory);
 
       // DEBUG: Log tokenização
       if (category.subCategory?.name) {
@@ -209,7 +213,7 @@ export class RAGService {
 
       // Também tokenizar subcategoria separadamente para melhor matching
       const subCategoryTokens = category.subCategory?.name
-        ? this.tokenize(this.normalize(category.subCategory.name))
+        ? this.textProcessing.tokenize(this.textProcessing.normalize(category.subCategory.name))
         : [];
 
       // Calcular similaridade BM25 (com IDF real e avgDocLength dinâmico)
@@ -223,8 +227,8 @@ export class RAGService {
 
       // 🔥 BOOST MÁXIMO: Se a subcategoria normalizada aparece EXATAMENTE na query
       if (category.subCategory?.name) {
-        const normalizedSubCat = this.normalize(category.subCategory.name);
-        const subCatOnlyTokens = this.tokenize(normalizedSubCat);
+        const normalizedSubCat = this.textProcessing.normalize(category.subCategory.name);
+        const subCatOnlyTokens = this.textProcessing.tokenize(normalizedSubCat);
 
         // 🚨 CORREÇÃO: Verificar se tokens têm tamanho mínimo (>= 3 chars) para evitar matches espúrios
         // Exemplo: "Gás" normaliza para "gas" (3 chars OK), mas "cartão" contém "a" que não é suficiente
@@ -259,14 +263,14 @@ export class RAGService {
       const userSynonymMatch = userSynonyms.find((syn) => {
         if (syn.isGlobal) {
           // Sinônimo GLOBAL (userId null): match por NOME (normalizado)
-          const synCatNorm = this.normalize(syn.categoryName);
-          const catNorm = this.normalize(category.name);
+          const synCatNorm = this.textProcessing.normalize(syn.categoryName);
+          const catNorm = this.textProcessing.normalize(category.name);
 
           const categoryMatches = synCatNorm === catNorm;
 
           if (syn.subCategoryName && category.subCategory?.name) {
-            const synSubCatNorm = this.normalize(syn.subCategoryName);
-            const subCatNorm = this.normalize(category.subCategory.name);
+            const synSubCatNorm = this.textProcessing.normalize(syn.subCategoryName);
+            const subCatNorm = this.textProcessing.normalize(category.subCategory.name);
             return categoryMatches && synSubCatNorm === subCatNorm;
           }
 
@@ -607,7 +611,7 @@ export class RAGService {
         data: {
           userId,
           query,
-          queryNormalized: this.normalize(query),
+          queryNormalized: this.textProcessing.normalize(query),
           matches: matches as any,
           bestMatch: bestMatch?.categoryName || null,
           bestScore: bestMatch?.score || null,
@@ -739,100 +743,7 @@ export class RAGService {
     return { deletedCount: result.count };
   }
 
-  /**
-   * Normaliza texto: lowercase, remove acentos, trim
-   */
-  private normalize(text: string): string {
-    return text
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Remove acentos
-      .replace(/[^\w\s]/g, ' ') // Remove pontuação
-      .trim();
-  }
-
-  /**
-   * Tokeniza texto em palavras
-   * Normaliza plurais para singular com lista expandida de exceções
-   */
-  private tokenize(text: string): string[] {
-    const tokens = text.split(/\s+/).filter((token) => token.length > 2); // Ignora tokens muito curtos
-
-    // Palavras que terminam em 's' mas NÃO devem perder o 's'
-    const keepAsIs = new Set([
-      'gas',
-      'mas',
-      'tras',
-      'pais',
-      'deus',
-      'meus',
-      'seus',
-      'teus',
-      'nos',
-      'vos',
-      'tres',
-      'mes',
-      'reis',
-      'leis',
-      'vez',
-      'bus',
-      'jus',
-      'pus',
-      'plus',
-      'bonus',
-      'virus',
-      'atlas',
-      'onibus',
-      'cris',
-      'paris',
-      'ais',
-      'eis',
-      'ois',
-      'uis',
-      'juros',
-      'alias',
-      'campus',
-      'corpus',
-      'status',
-      'pires',
-      'lapis',
-      'gratis',
-      'oasis',
-      'chassis',
-      'herpes',
-      'caries',
-    ]);
-
-    // Normalizar plurais simples para melhorar matching
-    return tokens.map((token) => {
-      // Não remover 's' de palavras na lista de exceções
-      if (keepAsIs.has(token)) {
-        return token;
-      }
-
-      // Plurais em 'ões' → 'ao' (ex: transações → transacao)
-      if (token.endsWith('oes') && token.length > 5) {
-        return token.slice(0, -3) + 'ao';
-      }
-
-      // Plurais em 'ais' → 'al' (ex: materiais → material)
-      if (token.endsWith('ais') && token.length > 5) {
-        return token.slice(0, -3) + 'al';
-      }
-
-      // Plurais em 'eis' → 'el' (ex: moveis → movel)
-      if (token.endsWith('eis') && token.length > 5) {
-        return token.slice(0, -3) + 'el';
-      }
-
-      // Remove plural simples: "financiamentos" → "financiamento"
-      if (token.endsWith('s') && token.length > 4) {
-        return token.slice(0, -1);
-      }
-
-      return token;
-    });
-  }
+  // normalize() e tokenize() movidos para TextProcessingService
 
   /**
    * Pré-computa a frequência de documentos (DF) para cada token.
@@ -866,7 +777,7 @@ export class RAGService {
 
     for (const cat of categories) {
       const catText = `${cat.name} ${cat.subCategory?.name || ''}`;
-      const tokens = this.tokenize(this.normalize(catText));
+      const tokens = this.textProcessing.tokenize(this.textProcessing.normalize(catText));
       totalTokenCount += tokens.length;
       const uniqueTokens = new Set(tokens);
       for (const token of uniqueTokens) {
@@ -981,157 +892,7 @@ export class RAGService {
     return matched;
   }
 
-  /**
-   * 🆕 Busca sinônimos personalizados do usuário
-   * Retorna lista de keywords que batem com a query normalizada
-   */
-  private async getUserSynonyms(
-    userId: string,
-    normalizedQuery: string,
-  ): Promise<
-    Array<{
-      keyword: string;
-      categoryId: string;
-      categoryName: string;
-      subCategoryId?: string;
-      subCategoryName?: string;
-      confidence: number;
-      isGlobal?: boolean;
-    }>
-  > {
-    try {
-      // Se prisma não estiver disponível (ex: testes), retornar array vazio
-      if (!this.prisma) {
-        return [];
-      }
-
-      // Tokenizar query para buscar matches parciais
-      const queryTokens = this.tokenize(normalizedQuery);
-
-      // Buscar sinônimos do usuário E globais (match exato por token)
-      const synonyms = await this.prisma.userSynonym.findMany({
-        where: {
-          OR: [
-            {
-              // Sinônimos do usuário (match exato)
-              userId,
-              keyword: {
-                in: queryTokens,
-              },
-            },
-            {
-              // Sinônimos globais (match exato)
-              userId: null,
-              keyword: {
-                in: queryTokens,
-              },
-            },
-          ],
-        },
-        orderBy: [
-          { userId: 'asc' }, // Prioriza usuário sobre GLOBAL
-          { confidence: 'desc' }, // Depois por confiança
-        ],
-      });
-
-      // Atualizar usageCount e lastUsedAt para os sinônimos encontrados
-      if (synonyms.length > 0) {
-        await this.prisma.userSynonym.updateMany({
-          where: {
-            id: {
-              in: synonyms.map((s) => s.id),
-            },
-          },
-          data: {
-            usageCount: {
-              increment: 1,
-            },
-            lastUsedAt: new Date(),
-          },
-        });
-
-        this.logger.log(
-          `📚 Encontrados ${synonyms.length} sinônimos (${synonyms.filter((s) => s.userId === userId).length} do usuário, ${synonyms.filter((s) => s.userId === null).length} globais)`,
-        );
-      }
-
-      return synonyms.map((s) => ({
-        keyword: s.keyword,
-        categoryId: s.categoryId,
-        categoryName: s.categoryName,
-        subCategoryId: s.subCategoryId || undefined,
-        subCategoryName: s.subCategoryName || undefined,
-        confidence: s.confidence,
-        isGlobal: s.userId === null,
-      }));
-    } catch (error) {
-      this.logger.error('Erro ao buscar sinônimos personalizados:', error);
-      return [];
-    }
-  }
-
-  /**
-   * 🆕 Adiciona novo sinônimo personalizado para o usuário
-   */
-  async addUserSynonym(params: {
-    userId: string;
-    keyword: string;
-    categoryId: string;
-    categoryName: string;
-    subCategoryId?: string;
-    subCategoryName?: string;
-    confidence?: number;
-    source?: 'USER_CONFIRMED' | 'AI_SUGGESTED' | 'AUTO_LEARNED' | 'IMPORTED' | 'ADMIN_APPROVED';
-  }): Promise<void> {
-    try {
-      const normalizedKeyword = this.normalize(params.keyword);
-
-      // Verificar se já existe
-      const existing = await this.prisma.userSynonym.findFirst({
-        where: {
-          userId: params.userId,
-          keyword: normalizedKeyword,
-        },
-      });
-
-      if (existing) {
-        // Atualizar existente
-        await this.prisma.userSynonym.update({
-          where: { id: existing.id },
-          data: {
-            categoryId: params.categoryId,
-            categoryName: params.categoryName,
-            subCategoryId: params.subCategoryId,
-            subCategoryName: params.subCategoryName,
-            confidence: params.confidence ?? 1.0,
-            source: params.source ?? 'USER_CONFIRMED',
-            updatedAt: new Date(),
-          },
-        });
-      } else {
-        // Criar novo
-        await this.prisma.userSynonym.create({
-          data: {
-            userId: params.userId,
-            keyword: normalizedKeyword,
-            categoryId: params.categoryId,
-            categoryName: params.categoryName,
-            subCategoryId: params.subCategoryId,
-            subCategoryName: params.subCategoryName,
-            confidence: params.confidence ?? 1.0,
-            source: params.source ?? 'USER_CONFIRMED',
-          },
-        });
-      }
-
-      this.logger.log(
-        `✅ Sinônimo adicionado: "${params.keyword}" → ${params.categoryName}${params.subCategoryName ? ' → ' + params.subCategoryName : ''}`,
-      );
-    } catch (error) {
-      this.logger.error('Erro ao adicionar sinônimo personalizado:', error);
-      throw error;
-    }
-  }
+  // getUserSynonyms() movido para UserSynonymService
 
   /**
    * 🆕 Método público para registrar busca RAG com contexto completo
@@ -1180,54 +941,6 @@ export class RAGService {
   }
 
   /**
-   * 🆕 Lista todos sinônimos de um usuário
-   */
-  async listUserSynonyms(userId: string): Promise<
-    Array<{
-      id: string;
-      keyword: string;
-      categoryName: string;
-      subCategoryName?: string;
-      confidence: number;
-      usageCount: number;
-      source: string;
-    }>
-  > {
-    const synonyms = await this.prisma.userSynonym.findMany({
-      where: { userId },
-      orderBy: [{ usageCount: 'desc' }, { confidence: 'desc' }],
-    });
-
-    return synonyms.map((s) => ({
-      id: s.id,
-      keyword: s.keyword,
-      categoryName: s.categoryName,
-      subCategoryName: s.subCategoryName || undefined,
-      confidence: s.confidence,
-      usageCount: s.usageCount,
-      source: s.source,
-    }));
-  }
-
-  /**
-   * 🆕 Remove sinônimo personalizado
-   */
-  async removeUserSynonym(userId: string, keyword: string): Promise<void> {
-    const normalizedKeyword = this.normalize(keyword);
-
-    await this.prisma.userSynonym.delete({
-      where: {
-        userId_keyword: {
-          userId,
-          keyword: normalizedKeyword,
-        },
-      },
-    });
-
-    this.logger.log(`🗑️ Sinônimo removido: "${keyword}" para usuário ${userId}`);
-  }
-
-  /**
    * 🆕 Detecta termos desconhecidos e sugere melhor alternativa
    *
    * Quando usuário menciona termo que não tem subcategoria exata:
@@ -1270,8 +983,8 @@ export class RAGService {
       );
 
       // Normalizar e tokenizar
-      const normalized = this.normalize(text);
-      const tokens = this.tokenize(normalized);
+      const normalized = this.textProcessing.normalize(text);
+      const tokens = this.textProcessing.tokenize(normalized);
 
       this.logger.debug(`🔤 [detectUnknownTerm] Tokens extraídos: [${tokens.join(', ')}]`);
 
@@ -1304,7 +1017,7 @@ export class RAGService {
       // Verificar se o match é exato na subcategoria
       const hasExactSubcategoryMatch = tokens.some((token) => {
         if (!bestMatch.subCategoryName) return false;
-        const normalizedSub = this.normalize(bestMatch.subCategoryName);
+        const normalizedSub = this.textProcessing.normalize(bestMatch.subCategoryName);
         return normalizedSub.includes(token) || token.includes(normalizedSub);
       });
 
@@ -1322,7 +1035,7 @@ export class RAGService {
       );
 
       // Identificar termo principal da query (palavra mais relevante)
-      const detectedTerm = this.extractMainTerm(filteredTokens, categories);
+      const detectedTerm = this.textProcessing.extractMainTerm(filteredTokens, categories);
 
       this.logger.debug(
         `🔍 [detectUnknownTerm] detectedTerm="${detectedTerm}" (from filteredTokens: ${filteredTokens.join(', ')})`,
@@ -1391,228 +1104,5 @@ export class RAGService {
       this.logger.error('Erro ao detectar termo desconhecido:', error);
       return null;
     }
-  }
-
-  /**
-   * Extrai o termo principal de um texto bruto (API pública).
-   * Usado pelo RAGLearningService para manter lógica unificada.
-   */
-  extractMainTermFromText(text: string): string | null {
-    const normalized = this.normalize(text);
-    const tokens = this.tokenize(normalized);
-    // Sem categorias disponíveis, usa apenas heurística de stopwords/genéricos
-    return this.extractMainTerm(tokens, []);
-  }
-
-  /**
-   * Extrai o termo principal da query (palavra mais significativa)
-   * Ignora stopwords e tokens muito genéricos
-   */
-  private extractMainTerm(tokens: string[], categories: UserCategory[]): string | null {
-    // Stopwords comuns em português (expandir conforme necessário)
-    const stopwords = new Set([
-      'com',
-      'para',
-      'gastei',
-      'paguei',
-      'comprei',
-      'fui',
-      'uma',
-      'uns',
-      'umas',
-      'na',
-      'no',
-      'da',
-      'do',
-      'em',
-      'ao',
-      'pelo',
-      'pela',
-      'reais',
-      'real',
-    ]);
-
-    // 🔥 Palavras muito genéricas que devem ser ignoradas
-    const genericWords = new Set([
-      'outro',
-      'outra',
-      'outros',
-      'outras',
-      'coisa',
-      'coisas',
-      'negocio',
-      'negócio',
-      'item',
-      'produto',
-    ]);
-
-    // Buscar tokens que não são stopwords nem genéricos
-    const significantTokens = tokens.filter(
-      (token) => !stopwords.has(token) && !genericWords.has(token),
-    );
-
-    if (significantTokens.length === 0) {
-      return null;
-    }
-
-    // 🎯 NOVA LÓGICA: Dar prioridade a termos mais específicos
-    // 1. Ordenar por tamanho (termos mais longos tendem a ser mais específicos)
-    // 2. Filtrar termos que NÃO são subcategorias conhecidas
-    const tokensWithScore = significantTokens.map((token) => {
-      const isKnownSubcategory = categories.some((cat) => {
-        if (!cat.subCategory?.name) return false;
-        const normalizedSub = this.normalize(cat.subCategory.name);
-        return normalizedSub.includes(token) || token.includes(normalizedSub);
-      });
-
-      return {
-        token,
-        length: token.length,
-        isKnownSubcategory,
-      };
-    });
-
-    // Priorizar termos DESCONHECIDOS e mais longos
-    const unknownTokens = tokensWithScore.filter((t) => !t.isKnownSubcategory);
-
-    if (unknownTokens.length > 0) {
-      // Ordenar por tamanho (maior primeiro)
-      unknownTokens.sort((a, b) => b.length - a.length);
-      return unknownTokens[0].token;
-    }
-
-    // Se todos são conhecidos, retornar o mais longo
-    tokensWithScore.sort((a, b) => b.length - a.length);
-    return tokensWithScore[0].token;
-  }
-
-  /**
-   * 🆕 Confirma sugestão e aprende para o futuro
-   *
-   * Quando usuário confirma que "marmita" → "Restaurante" está correto:
-   * 1. Salva em UserSynonym com alta confiança
-   * 2. Próximas vezes, "marmita" já vai direto para "Restaurante"
-   *
-   * @param userId ID do usuário
-   * @param originalTerm Termo original mencionado ("marmita")
-   * @param confirmedCategoryId ID da categoria confirmada
-   * @param confirmedCategoryName Nome da categoria confirmada
-   * @param confirmedSubcategoryId ID da subcategoria confirmada
-   * @param confirmedSubcategoryName Nome da subcategoria confirmada
-   * @param confidence Nível de confiança (0-1), default 0.9 para confirmações do usuário
-   */
-  async confirmAndLearn(params: {
-    userId: string;
-    originalTerm: string;
-    confirmedCategoryId: string;
-    confirmedCategoryName: string;
-    confirmedSubcategoryId?: string;
-    confirmedSubcategoryName?: string;
-    confidence?: number;
-  }): Promise<void> {
-    await this.addUserSynonym({
-      userId: params.userId,
-      keyword: params.originalTerm,
-      categoryId: params.confirmedCategoryId,
-      categoryName: params.confirmedCategoryName,
-      subCategoryId: params.confirmedSubcategoryId,
-      subCategoryName: params.confirmedSubcategoryName,
-      confidence: params.confidence ?? 0.9, // Alta confiança para confirmação manual
-      source: 'USER_CONFIRMED',
-    });
-
-    this.logger.log(
-      `✅ Aprendizado confirmado: "${params.originalTerm}" → ${params.confirmedCategoryName}${params.confirmedSubcategoryName ? ' → ' + params.confirmedSubcategoryName : ''} (confiança: ${params.confidence ?? 0.9})`,
-    );
-  }
-
-  /**
-   * 🆕 Rejeita sugestão e permite correção
-   *
-   * Quando usuário rejeita sugestão, pode fornecer a categoria/subcategoria correta
-   * Sistema aprende com a correção
-   */
-  async rejectAndCorrect(params: {
-    userId: string;
-    originalTerm: string;
-    rejectedCategoryId?: string;
-    rejectedCategoryName?: string;
-    correctCategoryId: string;
-    correctCategoryName: string;
-    correctSubcategoryId?: string;
-    correctSubcategoryName?: string;
-  }): Promise<void> {
-    // ⚠️ NÃO salvar sinônimo se a categoria corrigida for genérica
-    const isGenericCategory =
-      params.correctCategoryName === 'Outros' || params.correctCategoryName === 'Geral';
-    const isGenericSubcategory =
-      !params.correctSubcategoryName ||
-      params.correctSubcategoryName === 'Outros' ||
-      params.correctSubcategoryName === 'Geral';
-
-    if (isGenericCategory || isGenericSubcategory) {
-      this.logger.log(
-        `⚠️ Correção para categoria genérica - NÃO salvando sinônimo: "${params.originalTerm}" → ${params.correctCategoryName}`,
-      );
-      return;
-    }
-
-    // Salvar correção como sinônimo com alta confiança
-    await this.addUserSynonym({
-      userId: params.userId,
-      keyword: params.originalTerm,
-      categoryId: params.correctCategoryId,
-      categoryName: params.correctCategoryName,
-      subCategoryId: params.correctSubcategoryId,
-      subCategoryName: params.correctSubcategoryName,
-      confidence: 0.95, // Confiança muito alta para correção manual
-      source: 'USER_CONFIRMED',
-    });
-
-    this.logger.log(
-      `✅ Correção aprendida: "${params.originalTerm}" → ${params.correctCategoryName}${params.correctSubcategoryName ? ' → ' + params.correctSubcategoryName : ''} (rejeitou: ${params.rejectedCategoryName || 'N/A'})`,
-    );
-  }
-
-  /**
-   * 🆕 Busca sinônimos personalizados para sugestões inteligentes
-   *
-   * Verifica se usuário já tem sinônimo cadastrado para o termo
-   * Útil para evitar perguntar novamente algo que usuário já confirmou
-   */
-  async hasUserSynonym(
-    userId: string,
-    term: string,
-  ): Promise<{
-    hasSynonym: boolean;
-    categoryId?: string;
-    categoryName?: string;
-    subCategoryId?: string;
-    subCategoryName?: string;
-    confidence?: number;
-  }> {
-    const normalized = this.normalize(term);
-
-    const synonym = await this.prisma.userSynonym.findUnique({
-      where: {
-        userId_keyword: {
-          userId,
-          keyword: normalized,
-        },
-      },
-    });
-
-    if (!synonym) {
-      return { hasSynonym: false };
-    }
-
-    return {
-      hasSynonym: true,
-      categoryId: synonym.categoryId,
-      categoryName: synonym.categoryName,
-      subCategoryId: synonym.subCategoryId || undefined,
-      subCategoryName: synonym.subCategoryName || undefined,
-      confidence: synonym.confidence,
-    };
   }
 }

@@ -2,19 +2,24 @@ import {
   Controller,
   Get,
   Post,
+  Param,
   Query,
   Body,
   HttpCode,
   HttpStatus,
   Logger,
   BadRequestException,
+  NotFoundException,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { PrismaService } from '@core/database/prisma.service';
 import { TransactionConfirmationService } from './transaction-confirmation.service';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { ConfirmationStatus } from '@prisma/client';
 
 @Controller('admin/transactions')
+@UseGuards(JwtAuthGuard)
 export class TransactionsController {
   private readonly logger = new Logger(TransactionsController.name);
 
@@ -94,11 +99,44 @@ export class TransactionsController {
         }
       }
 
-      // Buscar transações
+      // Buscar transações com TODOS os campos de auditoria
       const [transactions, total] = await Promise.all([
         this.prisma.transactionConfirmation.findMany({
           where,
-          include: {
+          select: {
+            id: true,
+            phoneNumber: true,
+            platform: true,
+            userId: true,
+            accountId: true,
+            messageId: true,
+            type: true,
+            amount: true,
+            category: true,
+            categoryId: true,
+            subCategoryId: true,
+            subCategoryName: true,
+            description: true,
+            date: true,
+            extractedData: true,
+            status: true,
+            confirmedAt: true,
+            apiSent: true,
+            apiSentAt: true,
+            apiError: true,
+            apiRetryCount: true,
+            creditCardId: true,
+            installments: true,
+            installmentNumber: true,
+            invoiceMonth: true,
+            isFixed: true,
+            fixedFrequency: true,
+            paymentStatus: true,
+            aiUsageLogId: true,
+            ragSearchLogId: true,
+            createdAt: true,
+            expiresAt: true,
+            deletedAt: true,
             user: {
               select: {
                 id: true,
@@ -120,7 +158,11 @@ export class TransactionsController {
 
       return {
         success: true,
-        data: transactions,
+        data: transactions.map((t) => ({
+          ...t,
+          amountFormatted: `R$ ${(Number(t.amount) / 100).toFixed(2)}`,
+          isDeleted: !!t.deletedAt,
+        })),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -381,5 +423,64 @@ export class TransactionsController {
         error: error.message,
       });
     }
+  }
+
+  /**
+   * Detalhe completo de uma transação individual para auditoria
+   * GET /admin/transactions/:id
+   * IMPORTANTE: deve ficar APÓS todas as rotas estáticas (pending, stats)
+   */
+  @Get(':id')
+  async getTransactionDetail(@Param('id') id: string) {
+    this.logger.log(`🔍 Buscando detalhe da transação: ${id}`);
+
+    const transaction = await this.prisma.transactionConfirmation.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            gastoCertoId: true,
+            phoneNumber: true,
+            email: true,
+            activeAccountId: true,
+          },
+        },
+      },
+    });
+
+    if (!transaction) {
+      throw new NotFoundException(`Transação ${id} não encontrada`);
+    }
+
+    // Buscar AI usage log relacionado (se existir)
+    let aiUsageLog = null;
+    if (transaction.aiUsageLogId) {
+      aiUsageLog = await this.prisma.aIUsageLog.findUnique({
+        where: { id: transaction.aiUsageLogId },
+      });
+    }
+
+    // Buscar RAG search log relacionado (se existir)
+    let ragSearchLog = null;
+    if (transaction.ragSearchLogId) {
+      ragSearchLog = await this.prisma.rAGSearchLog.findUnique({
+        where: { id: transaction.ragSearchLogId },
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        ...transaction,
+        amountFormatted: `R$ ${(Number(transaction.amount) / 100).toFixed(2)}`,
+        isDeleted: !!transaction.deletedAt,
+        relatedLogs: {
+          aiUsageLog,
+          ragSearchLog,
+        },
+      },
+    };
   }
 }

@@ -1,4 +1,7 @@
 import { proto } from '@whiskeysockets/baileys';
+import { MessageType } from './messaging-provider.interface';
+
+export { MessageType };
 
 export interface IMessage {
   key: proto.IMessageKey;
@@ -10,7 +13,9 @@ export interface IMessage {
 }
 
 export interface IFilteredMessage {
-  phoneNumber: string; // Na verdade é o platformId (whatsappId ou telegramId)
+  platformId: string; // ID do usuário na plataforma (whatsappId, telegramChatId, webchat-{userId})
+  phoneNumber: string; // Alias para platformId — mantido para compatibilidade
+  userId?: string; // ID interno do usuário (gastoCertoId) — preenchido após lookup
   messageId: string;
   text?: string;
   imageBuffer?: Buffer;
@@ -20,20 +25,10 @@ export interface IFilteredMessage {
   timestamp: number;
   pushName?: string;
   type: MessageType;
-  platform: 'whatsapp' | 'telegram'; // Plataforma de origem da mensagem
+  platform: 'whatsapp' | 'telegram' | 'webchat'; // Plataforma de origem da mensagem
 }
 
-export enum MessageType {
-  TEXT = 'text',
-  IMAGE = 'image',
-  AUDIO = 'audio',
-  VIDEO = 'video',
-  DOCUMENT = 'document',
-  STICKER = 'sticker',
-  LOCATION = 'location',
-  CONTACT = 'contact',
-  UNKNOWN = 'unknown',
-}
+// MessageType is now imported from messaging-provider.interface.ts and re-exported above
 
 export interface IMessageFilter {
   isValidMessage(message: IMessage): boolean;

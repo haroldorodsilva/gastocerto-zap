@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import TelegramBot from 'node-telegram-bot-api';
+import { escapeMarkdownV2 } from '../utils/telegram-markdown.util';
 import {
   IMessagingProvider,
   MessagingPlatform,
@@ -12,7 +13,6 @@ import {
   MessageResult,
   UserInfo,
 } from '@infrastructure/messaging/messaging-provider.interface';
-import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 
 @Injectable()
 export class TelegramProvider implements IMessagingProvider {
@@ -33,8 +33,9 @@ export class TelegramProvider implements IMessagingProvider {
   private sessionId?: string;
   private sessionName?: string;
   private lastConfig?: MessagingConnectionConfig;
+  private webhookMode = false;
 
-  constructor(private readonly userRateLimiter: UserRateLimiterService) {}
+  constructor() {}
 
   async initialize(
     config: MessagingConnectionConfig,
@@ -55,16 +56,36 @@ export class TelegramProvider implements IMessagingProvider {
         `🚀 Initializing Telegram bot for session "${this.sessionName}" (${this.sessionId})...`,
       );
 
-      // Criar bot com configurações de rede otimizadas
-      this.bot = new TelegramBot(token, {
-        polling: {
-          interval: 300,
-          autoStart: true,
-        },
-      });
+      // Determinar modo: webhook (prod) ou polling (dev/default)
+      this.webhookMode = config.mode === 'webhook';
 
-      // Setup event handlers
-      this.setupEventHandlers();
+      if (this.webhookMode) {
+        // Webhook mode: não inicia polling, Telegram envia updates via HTTP POST
+        this.bot = new TelegramBot(token, { polling: false });
+
+        // Setup event handlers (mesmos para ambos os modos)
+        this.setupEventHandlers();
+
+        // Configurar webhook no Telegram
+        const webhookUrl = `${config.webhookBaseUrl}/webhook/telegram/${config.sessionId}`;
+        const webhookOptions: any = {};
+        if (config.webhookSecret) {
+          webhookOptions.secret_token = config.webhookSecret;
+        }
+        await this.bot.setWebHook(webhookUrl, webhookOptions);
+        this.logger.log(`🔗 Webhook configured: ${webhookUrl}`);
+      } else {
+        // Polling mode (default): busca updates automaticamente
+        this.bot = new TelegramBot(token, {
+          polling: {
+            interval: 300,
+            autoStart: true,
+          },
+        });
+
+        // Setup event handlers
+        this.setupEventHandlers();
+      }
 
       // Verificar bot info
       const me = await this.bot.getMe();
@@ -91,8 +112,14 @@ export class TelegramProvider implements IMessagingProvider {
       this.logger.log(`🔌 Disconnecting Telegram bot ${sessionInfo}...`);
 
       try {
-        // Parar polling (isso para de buscar novas mensagens)
-        await this.bot.stopPolling();
+        if (this.webhookMode) {
+          // Webhook mode: remover webhook no Telegram
+          await this.bot.deleteWebHook();
+          this.logger.log(`🔗 Webhook removed for ${sessionInfo}`);
+        } else {
+          // Polling mode: parar polling
+          await this.bot.stopPolling();
+        }
 
         // Remover todos os listeners para evitar memory leaks
         this.bot.removeAllListeners();
@@ -106,6 +133,19 @@ export class TelegramProvider implements IMessagingProvider {
       this.connected = false;
       this.callbacks.onDisconnected?.();
     }
+  }
+
+  /**
+   * Processa update recebido via webhook (chamado pelo TelegramWebhookController).
+   * O bot internamente dispara os mesmos eventos (text, photo, voice, etc.)
+   * que seriam disparados via polling.
+   */
+  processUpdate(update: TelegramBot.Update): void {
+    if (!this.bot) {
+      this.logger.warn('⚠️  Cannot process update: bot not initialized');
+      return;
+    }
+    this.bot.processUpdate(update);
   }
 
   async sendTextMessage(
@@ -126,8 +166,8 @@ export class TelegramProvider implements IMessagingProvider {
           `📤 Tentativa ${attempt}/${maxRetries} - Enviando mensagem para ${chatId}`,
         );
 
-        const result = await this.bot.sendMessage(chatId, text, {
-          parse_mode: 'Markdown',
+        const result = await this.bot.sendMessage(chatId, escapeMarkdownV2(text), {
+          parse_mode: 'MarkdownV2',
           disable_web_page_preview: !options?.linkPreview,
           reply_to_message_id: options?.quotedMessageId
             ? parseInt(options.quotedMessageId)
@@ -142,15 +182,26 @@ export class TelegramProvider implements IMessagingProvider {
         };
       } catch (error: any) {
         const isLastAttempt = attempt === maxRetries;
-        const isTimeoutError = error.code === 'ETIMEDOUT' || error.code === 'EFATAL';
+        const errorCode = error.code || '';
+        const statusCode = error.response?.statusCode || error.statusCode || 0;
+
+        // Erros retentáveis: timeout, rede, rate-limit (429), server errors (5xx)
+        const isRetryable =
+          errorCode === 'ETIMEDOUT' ||
+          errorCode === 'EFATAL' ||
+          errorCode === 'ECONNRESET' ||
+          errorCode === 'ECONNREFUSED' ||
+          errorCode === 'ENOTFOUND' ||
+          statusCode === 429 ||
+          (statusCode >= 500 && statusCode < 600);
 
         this.logger.warn(
-          `⚠️ Erro ao enviar mensagem (tentativa ${attempt}/${maxRetries}): ${error.message || error.code}`,
+          `⚠️ Erro ao enviar mensagem (tentativa ${attempt}/${maxRetries}): ${error.message || errorCode} [status: ${statusCode}]`,
         );
 
-        // Se não é timeout ou é última tentativa, falha imediatamente
-        if (!isTimeoutError || isLastAttempt) {
-          const errorMessage = error.message || error.code || 'Unknown error';
+        // Se não é retentável ou é última tentativa, falha imediatamente
+        if (!isRetryable || isLastAttempt) {
+          const errorMessage = error.message || errorCode || 'Unknown error';
           this.logger.error(`Error sending text message: ${errorMessage}`);
           return {
             success: false,
@@ -158,8 +209,13 @@ export class TelegramProvider implements IMessagingProvider {
           };
         }
 
-        // Aguardar antes de tentar novamente (exponential backoff)
-        const delay = baseDelay * Math.pow(2, attempt - 1);
+        // Rate-limit: usar Retry-After do Telegram se disponível
+        const retryAfterHeader = error.response?.headers?.['retry-after'];
+        const retryAfterMs = retryAfterHeader
+          ? parseInt(retryAfterHeader, 10) * 1000
+          : baseDelay * Math.pow(2, attempt - 1);
+
+        const delay = Math.min(retryAfterMs, 30000); // cap at 30s
         this.logger.log(`⏳ Aguardando ${delay}ms antes de tentar novamente...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
@@ -183,8 +239,8 @@ export class TelegramProvider implements IMessagingProvider {
       }
 
       const result = await this.bot.sendPhoto(chatId, image, {
-        caption: options?.caption,
-        parse_mode: 'Markdown',
+        caption: options?.caption ? escapeMarkdownV2(options.caption) : undefined,
+        parse_mode: 'MarkdownV2',
         reply_to_message_id: options?.quotedMessageId
           ? parseInt(options.quotedMessageId)
           : undefined,
@@ -505,27 +561,8 @@ export class TelegramProvider implements IMessagingProvider {
     try {
       const chatId = msg.chat.id.toString();
 
-      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
-      // Usar chatId como identificador para Telegram
-      const rateLimitCheck = await this.userRateLimiter.checkLimit(chatId);
-
-      if (!rateLimitCheck.allowed) {
-        this.logger.warn(
-          `🚫 [Telegram] Rate limit exceeded for chat ${chatId}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
-        );
-
-        // Enviar mensagem de rate limit ao usuário
-        const limitMessage = this.userRateLimiter.getRateLimitMessage(
-          rateLimitCheck.reason!,
-          rateLimitCheck.retryAfter!,
-        );
-
-        await this.sendTextMessage(chatId, limitMessage);
-        return; // ❌ Bloqueia processamento
-      }
-
-      // ✅ Registrar uso da mensagem
-      await this.userRateLimiter.recordUsage(chatId);
+      // Rate limiting é feito exclusivamente no telegram-message.handler.ts
+      // (padrão consistente com WhatsApp que faz no whatsapp-message.handler.ts)
 
       const incomingMessage: IncomingMessage = {
         id: msg.message_id.toString(),

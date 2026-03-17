@@ -1,5 +1,4 @@
 import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OnboardingStateService } from './onboarding-state.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { UserCacheService } from '@features/users/user-cache.service';
@@ -8,7 +7,7 @@ import { PrismaService } from '@core/database/prisma.service';
 import { OnboardingResponse } from './dto/onboarding.dto';
 import { CreateUserDto } from '../users/dto/user.dto';
 import { IFilteredMessage } from '@infrastructure/messaging/message.interface';
-import { MessageContextService } from '@infrastructure/messaging/messages/message-context.service';
+import { PlatformReplyService } from '@infrastructure/messaging/messages/platform-reply.service';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 
 @Injectable()
@@ -20,9 +19,8 @@ export class OnboardingService {
     private readonly gastoCertoApi: GastoCertoApiService,
     private readonly userCache: UserCacheService,
     private readonly prisma: PrismaService,
-    private readonly eventEmitter: EventEmitter2,
-    @Inject(forwardRef(() => MessageContextService))
-    private readonly contextService: MessageContextService,
+    @Inject(forwardRef(() => PlatformReplyService))
+    private readonly platformReply: PlatformReplyService,
     @Optional() private readonly ragService?: RAGService,
   ) {}
 
@@ -55,28 +53,18 @@ export class OnboardingService {
     );
 
     if (result.shouldSendMessage && result.response.message) {
-      // Detectar plataforma dinamicamente através do contexto
-      const messageContext = this.contextService.getContext(phoneNumber);
-      const platform = messageContext?.platform || MessagingPlatform.WHATSAPP;
-      const eventName =
-        platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
-
-      this.logger.debug(`📤 Detectada plataforma ${platform} para ${phoneNumber}`);
-
-      this.logger.log(`📤 [HANDLE MESSAGE] Emitting ${eventName} event...`);
-      // Enviar mensagem via MessageResponseService (genérico)
-      this.eventEmitter.emit(eventName, {
+      // Enviar mensagem via PlatformReplyService (resolução de plataforma centralizada)
+      await this.platformReply.sendReply({
         platformId: phoneNumber,
         message: result.response.message,
         context: 'INTENT_RESPONSE',
         metadata: {
           step: result.response.currentStep,
         },
-        platform,
       });
 
       this.logger.log(
-        `📤 Onboarding reply emitted [${platform}] for ${phoneNumber}: ${result.response.message.substring(0, 50)}...`,
+        `📤 Onboarding reply sent for ${phoneNumber}: ${result.response.message.substring(0, 50)}...`,
       );
     } else {
       this.logger.log(
@@ -630,9 +618,8 @@ export class OnboardingService {
   async reactivateUser(userId: string, platform?: 'telegram' | 'whatsapp'): Promise<void> {
     const response = await this.onboardingState.reactivateUser(userId, platform);
 
-    // Enviar mensagem inicial
-    const eventName = platform === 'telegram' ? 'telegram.reply' : 'session.reply';
-    this.eventEmitter.emit(eventName, {
+    // Enviar mensagem inicial via PlatformReplyService
+    await this.platformReply.sendReply({
       platformId: userId,
       message: response.message,
       context: 'ONBOARDING',

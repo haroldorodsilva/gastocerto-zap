@@ -5,7 +5,7 @@ import { Injectable, Logger } from '@nestjs/common';
  */
 export interface ListContextItem {
   id: string; // ID da transação/conta/cartão/fatura
-  type: 'transaction' | 'payment' | 'confirmation' | 'credit_card' | 'invoice';
+  type: 'transaction' | 'payment' | 'confirmation' | 'credit_card' | 'invoice' | 'category';
   description: string;
   amount?: number;
   category?: string;
@@ -17,7 +17,7 @@ export interface ListContextItem {
  */
 interface UserListContext {
   phoneNumber: string;
-  listType: 'pending_payments' | 'transactions' | 'confirmations' | 'credit_cards' | 'invoices';
+  listType: 'pending_payments' | 'transactions' | 'confirmations' | 'credit_cards' | 'invoices' | 'category_correction';
   items: ListContextItem[];
   createdAt: Date;
   expiresAt: Date;
@@ -44,7 +44,7 @@ export class ListContextService {
    */
   setListContext(
     phoneNumber: string,
-    listType: 'pending_payments' | 'transactions' | 'confirmations' | 'credit_cards' | 'invoices',
+    listType: 'pending_payments' | 'transactions' | 'confirmations' | 'credit_cards' | 'invoices' | 'category_correction',
     items: ListContextItem[],
   ): void {
     const now = new Date();

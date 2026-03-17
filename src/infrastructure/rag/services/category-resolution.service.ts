@@ -46,6 +46,7 @@ export interface ResolutionOptions {
   useAiFallback?: boolean;
   aiProvider?: any; // IAIProvider instance
   phoneNumber?: string;
+  platform?: string; // 'whatsapp' | 'telegram' | 'webchat'
 }
 
 export interface ResolutionResult {
@@ -206,8 +207,9 @@ export class CategoryResolutionService {
 
       // Log uso de IA com contexto RAG
       const aiUsageLogId = await this.aiUsageLogger.logUsage({
-        userCacheId: options.userId,
+        gastoCertoId: options.userId,
         phoneNumber: options.phoneNumber || 'unknown',
+        platform: options.platform,
         provider: aiResult.provider,
         model: aiResult.model,
         operation: 'CATEGORY_SUGGESTION',
@@ -347,8 +349,9 @@ export class CategoryResolutionService {
 
     // Log uso de IA
     const aiUsageLogId = await this.aiUsageLogger.logUsage({
-      userCacheId: options.userId,
+      gastoCertoId: options.userId,
       phoneNumber: options.phoneNumber || 'unknown',
+      platform: options.platform,
       provider: aiResult.provider,
       model: aiResult.model,
       operation: 'CATEGORY_SUGGESTION',

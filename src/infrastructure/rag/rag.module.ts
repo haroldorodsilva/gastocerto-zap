@@ -3,7 +3,8 @@ import { RAGService } from './services/rag.service';
 import { RAGLearningService } from './services/rag-learning.service';
 import { CategoryResolutionService } from './services/category-resolution.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
-import { PrismaService } from '@core/database/prisma.service';
+import { TextProcessingService } from './services/text-processing.service';
+import { UserSynonymService } from './services/user-synonym.service';
 
 /**
  * RAG Module
@@ -13,12 +14,13 @@ import { PrismaService } from '@core/database/prisma.service';
  */
 @Module({
   providers: [
-    PrismaService,
+    TextProcessingService,
+    UserSynonymService,
     RAGService,
     RAGLearningService,
     AIUsageLoggerService,
     CategoryResolutionService,
   ],
-  exports: [RAGService, RAGLearningService, CategoryResolutionService],
+  exports: [RAGService, RAGLearningService, CategoryResolutionService, TextProcessingService, UserSynonymService],
 })
 export class RAGModule {}

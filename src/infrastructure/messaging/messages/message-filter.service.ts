@@ -106,13 +106,14 @@ export class MessageFilterService implements IMessageFilter {
 
       // Construir objeto base
       const filteredMessage: IFilteredMessage = {
+        platformId: phoneNumber,
         phoneNumber,
         messageId: message.key.id || '',
         isFromMe: message.key.fromMe || false,
         timestamp: Number(message.messageTimestamp) || Date.now(),
         pushName: message.pushName,
         type: MessageType.UNKNOWN,
-        platform: 'whatsapp', // Por enquanto só temos WhatsApp, depois adicionar Telegram
+        platform: 'whatsapp',
       };
 
       // Processar por tipo

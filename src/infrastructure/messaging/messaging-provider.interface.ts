@@ -6,6 +6,7 @@
 export enum MessagingPlatform {
   WHATSAPP = 'whatsapp',
   TELEGRAM = 'telegram',
+  WEBCHAT = 'webchat',
   DISCORD = 'discord',
 }
 
@@ -72,6 +73,12 @@ export interface MessagingConnectionConfig {
   platform: MessagingPlatform;
   credentials: any; // Token do bot, API key, etc
   sessionId?: string;
+  /** Modo de conexão: 'polling' (default/dev) ou 'webhook' (prod) */
+  mode?: 'polling' | 'webhook';
+  /** URL base para webhooks (obrigatório quando mode='webhook') */
+  webhookBaseUrl?: string;
+  /** Secret token para validação de webhooks */
+  webhookSecret?: string;
   [key: string]: any;
 }
 
@@ -103,6 +110,9 @@ export enum MessageType {
   VIDEO = 'video',
   DOCUMENT = 'document',
   STICKER = 'sticker',
+  LOCATION = 'location',
+  CONTACT = 'contact',
+  UNKNOWN = 'unknown',
 }
 
 export interface SendMessageOptions {

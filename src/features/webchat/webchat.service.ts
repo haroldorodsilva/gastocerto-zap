@@ -8,6 +8,7 @@ import { RedisService } from '@common/services/redis.service';
 import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
 import { WebChatResponse } from './webchat.controller';
 import { UploadResponse } from './dto/upload.dto';
+import { GREETING_KEYWORDS, HELP_KEYWORDS } from '@features/intent/intent-keywords';
 import type { Multer } from 'multer';
 import {
   WEBCHAT_SHOW_PROFILE_COMMANDS,
@@ -186,6 +187,20 @@ export class WebChatService {
         `✅ [WebChat] Usuário encontrado: ${user.name} (${phoneNumber}) | AccountId do header: ${accountId || 'default'}`,
       );
 
+      // 🆕 Webchat: verificar frescor do cache de assinatura (janela de 1h)
+      // Necessário porque o cache padrão tem TTL de 12h, mas mudanças de plano
+      // (ex: downgrade para free) devem ser refletidas em até 1h.
+      const ONE_HOUR_MS = 60 * 60 * 1000;
+      const cacheAge = user.updatedAt ? Date.now() - new Date(user.updatedAt).getTime() : Infinity;
+      if (cacheAge > ONE_HOUR_MS) {
+        this.logger.log(
+          `🔄 [WebChat] Cache de assinatura expirado (${Math.round(cacheAge / 60000)} min) — sincronizando para ${userId}`,
+        );
+        await this.userCacheService.syncSubscriptionStatus(user.gastoCertoId);
+        const refreshed = await this.userCacheService.getUser(phoneNumber);
+        if (refreshed) user = refreshed;
+      }
+
       // 🆕 Validação de bloqueio e assinatura (equivalent ao MessageValidationService)
       if (user.isBlocked) {
         this.logger.warn(`❌ [WebChat] Usuário ${userId} está BLOQUEADO`);
@@ -200,34 +215,43 @@ export class WebChatService {
       }
 
       if (!user.hasActiveSubscription || !user.canUseGastoZap) {
-        this.logger.warn(`💳 [WebChat] Usuário ${userId} sem assinatura ativa ou sem permissão`);
+        this.logger.warn(`💳 [WebChat] Usuário ${userId} sem acesso ao GastoZap (hasActiveSubscription=${user.hasActiveSubscription}, canUseGastoZap=${user.canUseGastoZap}) — forçando sync`);
 
-        // Sincronizar status antes de negar acesso (pode estar desatualizado)
-        if (this.userCacheService.needsSync(user)) {
-          this.logger.log(`⏰ [WebChat] Syncing subscription status for ${userId}`);
-          await this.userCacheService.syncSubscriptionStatus(user.gastoCertoId);
-          const updatedUser = await this.userCacheService.getUser(phoneNumber);
-          if (updatedUser && updatedUser.hasActiveSubscription && updatedUser.canUseGastoZap) {
-            user = updatedUser;
+        // Sempre forçar sync quando assinatura falha no webchat:
+        // o cache pode ter sido criado via getUserById (sem hasActiveSubscription)
+        // e o timer de 12h pode não ter expirado ainda.
+        await this.userCacheService.syncSubscriptionStatus(user.gastoCertoId);
+        const updatedUser = await this.userCacheService.getUser(phoneNumber);
+
+        if (updatedUser && updatedUser.hasActiveSubscription && updatedUser.canUseGastoZap) {
+          this.logger.log(`✅ [WebChat] Assinatura confirmada após sync forçado para ${userId}`);
+          user = updatedUser;
+        } else {
+          // Checar se a mensagem é uma saudação ou pedido de ajuda:
+          // esses intents não precisam de assinatura ativa
+          const lowerMsg = messageText.toLowerCase().trim();
+          const isNonTransactionIntent =
+            GREETING_KEYWORDS.some((kw) => lowerMsg === kw || lowerMsg.includes(kw)) ||
+            HELP_KEYWORDS.some((kw) => lowerMsg === kw || lowerMsg.includes(kw));
+
+          if (isNonTransactionIntent) {
+            this.logger.log(
+              `ℹ️ [WebChat] Mensagem sem assinatura mas é saudação/ajuda — permitindo: "${messageText}"`,
+            );
+            // Continua o fluxo normal (vai retornar saudação/ajuda sem precisar de assinatura)
           } else {
+            this.logger.warn(`❌ [WebChat] Acesso ao GastoZap negado após sync: ${userId} (hasActiveSubscription=${updatedUser?.hasActiveSubscription ?? false}, canUseGastoZap=${updatedUser?.canUseGastoZap ?? false})`);
             return {
               success: false,
               messageType: 'error',
               message: this.removeEmojis(
-                '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
+                updatedUser?.hasActiveSubscription
+                ? '💳 Seu plano atual não inclui o GastoZap. Faça upgrade para usar esse recurso.'
+                : '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
               ),
               formatting: { color: 'warning' },
             };
           }
-        } else {
-          return {
-            success: false,
-            messageType: 'error',
-            message: this.removeEmojis(
-              '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
-            ),
-            formatting: { color: 'warning' },
-          };
         }
       }
 

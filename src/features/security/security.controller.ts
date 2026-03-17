@@ -8,13 +8,16 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { SecurityService } from './security.service';
 
 /**
  * Controller para gestão de segurança via gastocerto-admin
  */
 @Controller('api/security')
+@UseGuards(JwtAuthGuard)
 export class SecurityController {
   constructor(private securityService: SecurityService) {}
 

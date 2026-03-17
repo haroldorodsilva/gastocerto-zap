@@ -43,6 +43,7 @@ export class ApiRetryJob {
         where: {
           status: ConfirmationStatus.CONFIRMED,
           apiSent: false,
+          deletedAt: null,
           apiRetryCount: {
             lt: this.MAX_RETRY_ATTEMPTS,
           },
@@ -93,7 +94,7 @@ export class ApiRetryJob {
       if (result.success) {
         // Sucesso!
         await this.prisma.transactionConfirmation.update({
-          where: { id: confirmation.id },
+          where: { id: confirmation.id, deletedAt: null },
           data: {
             apiSent: true,
             apiSentAt: new Date(),
@@ -117,7 +118,7 @@ export class ApiRetryJob {
       } else {
         // Falhou novamente
         await this.prisma.transactionConfirmation.update({
-          where: { id: confirmation.id },
+          where: { id: confirmation.id, deletedAt: null },
           data: {
             apiError: result.error || 'Erro desconhecido',
             apiRetryCount: retryCount,
@@ -147,7 +148,7 @@ export class ApiRetryJob {
       this.logger.error(`❌ Erro ao processar retry:`, error);
 
       await this.prisma.transactionConfirmation.update({
-        where: { id: confirmation.id },
+        where: { id: confirmation.id, deletedAt: null },
         data: {
           apiError: error.message || 'Erro desconhecido',
           apiRetryCount: retryCount,

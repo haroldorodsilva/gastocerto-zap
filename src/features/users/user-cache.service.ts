@@ -525,42 +525,93 @@ export class UserCacheService {
   }
 
   /**
-   * Verifica se usuário precisa sincronizar (última atualização > 1h)
+   * Verifica se usuário precisa sincronizar (última atualização > 12h)
+   * Sincroniza licença, contas e categorias do usuário
    */
-  needsSync(user: { updatedAt?: Date }): boolean {
+  needsSync(user: { updatedAt?: Date | string }): boolean {
     if (!user.updatedAt) {
       return true; // Nunca sincronizou
     }
 
-    const oneHourAgo = Date.now() - 60 * 60 * 1000; // 1 hora em ms
-    return user.updatedAt.getTime() < oneHourAgo;
+    const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000; // 12 horas em ms
+    const updatedAtTime =
+      user.updatedAt instanceof Date
+        ? user.updatedAt.getTime()
+        : new Date(user.updatedAt).getTime();
+    return updatedAtTime < twelveHoursAgo;
   }
 
   /**
-   * Sincroniza status de assinatura do usuário
-   * Busca dados atualizados da API e atualiza cache local
+   * Sincroniza dados completos do usuário (licença, contas e categorias)
+   * Chamado quando needsSync() retorna true (a cada 12h)
    */
   async syncSubscriptionStatus(gastoCertoId: string): Promise<void> {
     try {
-      this.logger.log(`⏰ Sincronizando status de assinatura: ${gastoCertoId}`);
+      this.logger.log(`⏰ Sincronizando dados do usuário: ${gastoCertoId}`);
 
-      // 1. Buscar status atual na API
+      // 1. Buscar status de assinatura na API
       const status = await this.gastoCertoApi.getSubscriptionStatus(gastoCertoId);
 
-      // 2. Atualizar cache local (PostgreSQL + Redis)
-      await this.updateUserCache(gastoCertoId, {
+      // 2. Buscar contas e categorias atualizadas
+      let accounts: any[] | undefined;
+      let categories: any[] | undefined;
+
+      try {
+        const [apiAccounts, apiCategoriesResponse] = await Promise.all([
+          this.gastoCertoApi.getUserAccounts(gastoCertoId),
+          this.gastoCertoApi.getUserCategories(gastoCertoId),
+        ]);
+        accounts = apiAccounts;
+
+        // Extrair categorias de todas as contas retornadas pela API
+        if (apiCategoriesResponse?.success && apiCategoriesResponse.accounts) {
+          categories = [];
+          for (const acc of apiCategoriesResponse.accounts) {
+            if (acc.categories) {
+              for (const cat of acc.categories) {
+                categories.push({ ...cat, accountId: acc.id });
+              }
+            }
+          }
+        }
+      } catch (syncError) {
+        this.logger.warn(
+          `⚠️ Erro ao sincronizar contas/categorias (mantendo dados anteriores): ${syncError.message}`,
+        );
+      }
+
+      // 3. Atualizar cache local (PostgreSQL + Redis) de uma vez
+      const updateData: Record<string, any> = {
         hasActiveSubscription: status.isActive,
         canUseGastoZap: status.canUseGastoZap,
-        updatedAt: new Date(), // Resetar timer
-      });
+        updatedAt: new Date(), // Resetar timer de 12h
+      };
+      if (accounts !== undefined) updateData.accounts = accounts;
+      if (categories !== undefined) updateData.categories = categories;
+
+      await this.updateUserCache(gastoCertoId, updateData);
 
       this.logger.log(
-        `✅ Status sincronizado: ${gastoCertoId} | ` +
+        `✅ Dados sincronizados: ${gastoCertoId} | ` +
           `canUseGastoZap=${status.canUseGastoZap} | ` +
-          `hasActiveSubscription=${status.isActive}`,
+          `hasActiveSubscription=${status.isActive}` +
+          (accounts ? ` | contas=${accounts.length}` : '') +
+          (categories ? ` | categorias=${Array.isArray(categories) ? categories.length : 0}` : ''),
       );
+
+      // 4. Atualizar índice RAG se categorias foram sincronizadas
+      if (categories && this.ragService) {
+        try {
+          const user = await this.prisma.userCache.findUnique({ where: { gastoCertoId } });
+          if (user) {
+            await this.syncUserCategoriesToRAG(user.phoneNumber);
+          }
+        } catch (ragError) {
+          this.logger.warn(`⚠️ Erro ao atualizar índice RAG: ${ragError.message}`);
+        }
+      }
     } catch (error) {
-      this.logger.error(`❌ Erro ao sincronizar status de assinatura: ${error.message}`);
+      this.logger.error(`❌ Erro ao sincronizar dados do usuário: ${error.message}`);
       // Não lançar erro - manter status anterior em caso de falha
     }
   }
@@ -995,6 +1046,89 @@ export class UserCacheService {
   }
 
   /**
+   * Sincroniza contas do usuário a partir da API externa.
+   * Chamado automaticamente quando o cache local está vazio.
+   *
+   * Responsabilidades:
+   * 1. Buscar contas na API
+   * 2. Mapear para formato local
+   * 3. Resolver conta ativa (preservar escolha do usuário se ainda existir)
+   * 4. Atualizar Prisma + Redis
+   *
+   * @returns Contas mapeadas e activeAccountId atualizado, ou null se falhou
+   */
+  private async syncAccountsFromApi(user: UserCache): Promise<{
+    accounts: Array<{ id: string; name: string; type: string; isPrimary?: boolean }>;
+    activeAccountId: string | null;
+  } | null> {
+    try {
+      const apiAccounts = await this.gastoCertoApi.getUserAccounts(user.gastoCertoId);
+
+      if (apiAccounts.length === 0) {
+        this.logger.warn(`⚠️ API não retornou contas para gastoCertoId: ${user.gastoCertoId}`);
+        return null;
+      }
+
+      // Mapear contas da API
+      const mappedAccounts = apiAccounts.map((acc) => ({
+        id: acc.id,
+        name: acc.name,
+        type: acc.role || 'PF',
+        isPrimary: acc.isPrimary,
+      }));
+
+      // Resolver conta ativa (preservar escolha do usuário se possível)
+      let activeAccountId = user.activeAccountId;
+      if (!activeAccountId) {
+        activeAccountId =
+          mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+        this.logger.log(`🆕 Definindo conta ativa inicial: ${activeAccountId} (não existia antes)`);
+      } else {
+        const stillExists = mappedAccounts.some((acc) => acc.id === activeAccountId);
+        if (!stillExists) {
+          this.logger.warn(
+            `⚠️ Conta ativa ${activeAccountId} não existe mais. Redefinindo para primária.`,
+          );
+          activeAccountId =
+            mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
+        } else {
+          this.logger.log(
+            `✅ Mantendo conta ativa existente: ${activeAccountId} (banco é fonte da verdade)`,
+          );
+        }
+      }
+
+      // Atualizar cache no banco
+      const updatedUser = await this.prisma.userCache.update({
+        where: { gastoCertoId: user.gastoCertoId },
+        data: {
+          accounts: mappedAccounts as any,
+          activeAccountId,
+          lastSyncAt: new Date(),
+        },
+      });
+
+      // Invalidar cache Redis (todas as chaves de plataforma)
+      if (user.phoneNumber) await this.redisService.getClient().del(`user:${user.phoneNumber}`);
+      if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
+      if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
+
+      // Salvar no Redis usando chave universal (gastoCertoId)
+      const cacheKey = this.getCacheKey(updatedUser.gastoCertoId);
+      await this.setUserInRedisByKey(cacheKey, updatedUser);
+
+      this.logger.log(
+        `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
+      );
+
+      return { accounts: mappedAccounts, activeAccountId };
+    } catch (syncError) {
+      this.logger.error(`❌ Erro ao sincronizar contas da API:`, syncError);
+      return null;
+    }
+  }
+
+  /**
    * Atualiza a lista de contas do usuário
    */
   async updateAccounts(
@@ -1142,83 +1276,15 @@ export class UserCacheService {
 
       this.logger.debug(`📋 Contas no cache para ${phoneNumber}: ${accounts.length}`);
       this.logger.debug(JSON.stringify(accounts, null, 2));
-      // 🆕 Se não tem contas no cache, buscar na API
+
+      // Se não tem contas no cache, buscar na API
       if (accounts.length === 0) {
         this.logger.log(`📥 Nenhuma conta no cache para ${phoneNumber}. Buscando na API...`);
 
-        try {
-          // Buscar contas na API
-          const apiAccounts = await this.gastoCertoApi.getUserAccounts(user.gastoCertoId);
-
-          if (apiAccounts.length > 0) {
-            // Mapear contas da API
-            const mappedAccounts = apiAccounts.map((acc) => ({
-              id: acc.id,
-              name: acc.name,
-              type: acc.role || 'PF',
-              isPrimary: acc.isPrimary,
-            }));
-
-            // Definir conta ativa APENAS se não existir (não sobrescrever escolha do usuário)
-            let activeAccountId = user.activeAccountId;
-            if (!activeAccountId) {
-              // Priorizar conta primária ou primeira conta
-              activeAccountId =
-                mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
-              this.logger.log(
-                `🆕 Definindo conta ativa inicial: ${activeAccountId} (não existia antes)`,
-              );
-            } else {
-              // Verificar se o activeAccountId atual ainda existe nas contas
-              const stillExists = mappedAccounts.some((acc) => acc.id === activeAccountId);
-              if (!stillExists) {
-                this.logger.warn(
-                  `⚠️ Conta ativa ${activeAccountId} não existe mais. Redefinindo para primária.`,
-                );
-                activeAccountId =
-                  mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
-              } else {
-                this.logger.log(
-                  `✅ Mantendo conta ativa existente: ${activeAccountId} (banco é fonte da verdade)`,
-                );
-              }
-            }
-
-            // Atualizar cache no banco
-            const updatedUser = await this.prisma.userCache.update({
-              where: { gastoCertoId: user.gastoCertoId },
-              data: {
-                accounts: mappedAccounts as any,
-                activeAccountId,
-                lastSyncAt: new Date(),
-              },
-            });
-
-            // Invalidar cache Redis e atualizar com dados novos
-            // Deletar chaves antigas (por plataforma) se existirem + nova chave universal
-            if (user.phoneNumber)
-              await this.redisService.getClient().del(`user:${user.phoneNumber}`);
-            if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
-            if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
-
-            // Salvar no Redis usando chave universal (gastoCertoId)
-            const cacheKey = this.getCacheKey(updatedUser.gastoCertoId);
-            await this.setUserInRedisByKey(cacheKey, updatedUser);
-
-            this.logger.log(
-              `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
-            );
-
-            // Atualizar variável local com dados do banco
-            accounts = mappedAccounts;
-            user.activeAccountId = updatedUser.activeAccountId;
-            user.accounts = updatedUser.accounts;
-          } else {
-            this.logger.warn(`⚠️ API não retornou contas para gastoCertoId: ${user.gastoCertoId}`);
-          }
-        } catch (syncError) {
-          this.logger.error(`❌ Erro ao sincronizar contas da API:`, syncError);
-          // Continuar com lista vazia
+        const synced = await this.syncAccountsFromApi(user);
+        if (synced) {
+          accounts = synced.accounts;
+          user.activeAccountId = synced.activeAccountId;
         }
       }
 
@@ -1226,16 +1292,17 @@ export class UserCacheService {
 
       return accounts.map((acc) => ({
         ...acc,
+        type: acc.type || acc.role || 'PF',
         isActive: acc.id === activeAccountId,
       }));
     } catch (error) {
-      this.logger.error(`Erro ao listar contas do usuário ${phoneNumber}:`, error);
+      this.logger.error(`Erro ao listar contas do usu\u00e1rio ${phoneNumber}:`, error);
       return [];
     }
   }
 
   /**
-   * Obtém a conta ativa do usuário
+   * Obt\u00e9m a conta ativa do usu\u00e1rio
    */
   async getActiveAccount(
     phoneNumber: string,
@@ -1257,82 +1324,15 @@ export class UserCacheService {
 
       let accounts = (user.accounts as any[]) || [];
 
-      // 🆕 Se não tem contas no cache, buscar na API
+      // Se não tem contas no cache, buscar na API
       if (accounts.length === 0) {
         this.logger.log(`📥 Nenhuma conta no cache para ${phoneNumber}. Buscando na API...`);
 
-        try {
-          // Buscar contas na API
-          const apiAccounts = await this.gastoCertoApi.getUserAccounts(user.gastoCertoId);
-
-          if (apiAccounts.length > 0) {
-            // Mapear contas da API
-            const mappedAccounts = apiAccounts.map((acc) => ({
-              id: acc.id,
-              name: acc.name,
-              type: acc.role || 'PF',
-              isPrimary: acc.isPrimary,
-            }));
-
-            // Definir conta ativa APENAS se não existir (não sobrescrever escolha do usuário)
-            let activeAccountId = user.activeAccountId;
-            if (!activeAccountId) {
-              // Priorizar conta primária ou primeira conta
-              activeAccountId =
-                mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
-              this.logger.log(
-                `🆕 Definindo conta ativa inicial: ${activeAccountId} (não existia antes)`,
-              );
-            } else {
-              // Verificar se o activeAccountId atual ainda existe nas contas
-              const stillExists = mappedAccounts.some((acc) => acc.id === activeAccountId);
-              if (!stillExists) {
-                this.logger.warn(
-                  `⚠️ Conta ativa ${activeAccountId} não existe mais. Redefinindo para primária.`,
-                );
-                activeAccountId =
-                  mappedAccounts.find((acc) => acc.isPrimary)?.id || mappedAccounts[0]?.id || null;
-              } else {
-                this.logger.log(
-                  `✅ Mantendo conta ativa existente: ${activeAccountId} (banco é fonte da verdade)`,
-                );
-              }
-            }
-
-            // Atualizar cache no banco
-            const updatedUser = await this.prisma.userCache.update({
-              where: { gastoCertoId: user.gastoCertoId },
-              data: {
-                accounts: mappedAccounts as any,
-                activeAccountId,
-                lastSyncAt: new Date(),
-              },
-            });
-
-            // Invalidar cache Redis e atualizar com dados novos
-            // Deletar chaves antigas (por plataforma) se existirem + nova chave universal
-            if (user.phoneNumber)
-              await this.redisService.getClient().del(`user:${user.phoneNumber}`);
-            if (user.telegramId) await this.redisService.getClient().del(`user:${user.telegramId}`);
-            if (user.whatsappId) await this.redisService.getClient().del(`user:${user.whatsappId}`);
-
-            // Salvar no Redis usando chave universal (gastoCertoId)
-            const cacheKey = this.getCacheKey(updatedUser.gastoCertoId);
-            await this.setUserInRedisByKey(cacheKey, updatedUser);
-
-            this.logger.log(
-              `✅ ${apiAccounts.length} conta(s) sincronizada(s) da API | ContaAtiva: ${activeAccountId}`,
-            );
-
-            // Usar dados atualizados do banco
-            accounts = mappedAccounts;
-            user.activeAccountId = updatedUser.activeAccountId;
-            user.accounts = updatedUser.accounts;
-          } else {
-            this.logger.warn(`⚠️ API não retornou contas para gastoCertoId: ${user.gastoCertoId}`);
-          }
-        } catch (syncError) {
-          this.logger.error(`❌ Erro ao sincronizar contas da API:`, syncError);
+        const synced = await this.syncAccountsFromApi(user);
+        if (synced) {
+          accounts = synced.accounts;
+          user.activeAccountId = synced.activeAccountId;
+        } else {
           return null;
         }
       }

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CryptoService } from '../../../common/services/crypto.service';
+import { PrismaService } from '../../../core/database/prisma.service';
 import { IAIProvider, TransactionData, UserContext, TransactionType } from '../ai.interface';
 import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
@@ -37,6 +38,7 @@ export class GoogleGeminiProvider implements IAIProvider {
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
+    private prismaService: PrismaService,
   ) {
     // Inicialização assíncrona será feita no primeiro uso
   }
@@ -48,11 +50,8 @@ export class GoogleGeminiProvider implements IAIProvider {
     if (this.initialized) return;
 
     try {
-      // Tentar buscar do banco primeiro
-      const { PrismaService } = await import('../../../core/database/prisma.service');
-      const prisma = new PrismaService();
-
-      const providerConfig = await prisma.aIProviderConfig.findUnique({
+      // Buscar configuração do banco via PrismaService injetado
+      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'google_gemini' },
       });
 

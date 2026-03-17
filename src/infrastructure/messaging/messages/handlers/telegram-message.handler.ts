@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
+import { OnEvent } from '@nestjs/event-emitter';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import {
   MessagingPlatform,
   IncomingMessage,
@@ -7,8 +9,9 @@ import {
 } from '@infrastructure/messaging/messaging-provider.interface';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { TransactionsService } from '@features/transactions/transactions.service';
-import { MultiPlatformSessionService } from '@infrastructure/messaging/core/services/multi-platform-session.service';
+import { MultiPlatformSessionService } from '@infrastructure/sessions/core/multi-platform-session.service';
 import { MessageContextService } from '../message-context.service';
+import { PlatformReplyService } from '../platform-reply.service';
 import { IFilteredMessage } from '@infrastructure/messaging/message.interface';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
@@ -17,6 +20,7 @@ import {
   MessageValidationService,
   ValidationAction,
 } from '@features/messages/message-validation.service';
+import { MESSAGE_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 interface MessageReceivedEvent {
   sessionId: string;
@@ -33,16 +37,16 @@ export class TelegramMessageHandler {
     private readonly transactionsService: TransactionsService,
     private readonly multiPlatformService: MultiPlatformSessionService,
     private readonly contextService: MessageContextService,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly platformReply: PlatformReplyService,
     private readonly userCacheService: UserCacheService,
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly messageValidation: MessageValidationService,
+    @InjectQueue('telegram-messages') private readonly messageQueue: Queue,
   ) {}
 
-  @OnEvent('telegram.message')
+  @OnEvent(MESSAGE_EVENTS.TELEGRAM)
   async handleMessage(event: MessageReceivedEvent): Promise<void> {
     this.logger.log('🔔 Event telegram.message captured!');
-    this.logger.log(`📱 Platform: ${event.platform}`);
 
     // Processar apenas mensagens do Telegram
     if (event.platform !== MessagingPlatform.TELEGRAM) {
@@ -51,15 +55,13 @@ export class TelegramMessageHandler {
     }
 
     const { sessionId, message } = event;
+    const userId = message.chatId;
 
     this.logger.log(
       `Processing Telegram message from ${message.userId} (chat: ${message.chatId}), type: ${message.type}`,
     );
 
     try {
-      // Usar chatId como identificador do usuário (equivalente ao phoneNumber no WhatsApp)
-      const userId = message.chatId;
-
       // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
       const rateLimitCheck = await this.userRateLimiter.checkLimit(userId);
 
@@ -71,13 +73,13 @@ export class TelegramMessageHandler {
           rateLimitCheck.reason!,
           rateLimitCheck.retryAfter!,
         );
-        this.eventEmitter.emit('telegram.reply', {
+        await this.platformReply.sendReply({
           platformId: userId,
           message: limitMessage,
           context: 'ERROR',
           platform: MessagingPlatform.TELEGRAM,
         });
-        return; // ❌ Bloqueia processamento
+        return;
       }
 
       // ✅ Registrar uso da mensagem
@@ -88,9 +90,7 @@ export class TelegramMessageHandler {
       let phoneNumber: string | undefined;
 
       try {
-        // Buscar usuário pelo telegramId via método público do UserCacheService
         const userCache = await this.userCacheService.getUserByTelegram(userId);
-
         if (userCache) {
           gastoCertoId = userCache.gastoCertoId;
           phoneNumber = userCache.phoneNumber;
@@ -102,35 +102,85 @@ export class TelegramMessageHandler {
         this.logger.debug(`Erro ao buscar usuário: ${userId}`, error);
       }
 
-      // ✨ NOVO: Registrar contexto da plataforma para roteamento de respostas
-      this.contextService.registerContext(
+      // Registrar contexto da plataforma para roteamento de respostas
+      await this.contextService.registerContext(
         userId,
         sessionId,
         MessagingPlatform.TELEGRAM,
         gastoCertoId,
         phoneNumber,
       );
-      this.logger.debug(
-        `📝 Contexto registrado: Telegram [${userId}] → ${sessionId}` +
-          (gastoCertoId ? ` | userId: ${gastoCertoId}` : ''),
-      );
 
-      // ✨ NOVO: Usar MessageValidationService para validação unificada
+      // Enfileirar mensagem para processamento assíncrono (com retry)
+      await this.messageQueue.add('process-message', {
+        sessionId,
+        message,
+        timestamp: Date.now(),
+        platform: 'telegram',
+        userId: gastoCertoId,
+      });
+
+      this.logger.debug(`[Telegram] Message from ${userId} added to queue`);
+    } catch (error) {
+      this.logger.error(`Error enqueuing Telegram message:`, error);
+      await this.sendErrorMessage(sessionId, userId);
+    }
+  }
+
+  /**
+   * Processa mensagem da fila (chamado pelo TelegramMessagesProcessor)
+   * Verifica usuário e roteia para onboarding ou transações
+   */
+  async processMessage(data: {
+    sessionId: string;
+    message: IncomingMessage;
+    timestamp: number;
+    platform: string;
+    userId?: string;
+  }): Promise<void> {
+    const { sessionId, message } = data;
+    const userId = message.chatId;
+
+    try {
+      // Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(userId, 'telegram');
 
-      // 🔄 SINCRONIZAÇÃO: Verificar se precisa sincronizar status (1h) — mesmo padrão do WhatsApp
-      if (validation.user && this.userCacheService.needsSync(validation.user)) {
-        this.logger.log(`⏰ [Telegram] Syncing subscription status for ${userId}`);
+      // 🔄 SINCRONIZAÇÃO: Forçar sync se timer expirou OU se assinatura/canUseGastoZap está inativa
+      // (mesmo comportamento do WebChat — atualiza cache desatualizado imediatamente)
+      const needsSubscriptionSync =
+        validation.user &&
+        (
+          this.userCacheService.needsSync(validation.user) ||
+          !validation.user.canUseGastoZap ||
+          !validation.user.hasActiveSubscription
+        );
+
+      if (needsSubscriptionSync && validation.user) {
+        const syncReason = !validation.user.canUseGastoZap
+          ? 'canUseGastoZap=false'
+          : !validation.user.hasActiveSubscription
+          ? 'hasActiveSubscription=false'
+          : 'timer expirado';
+        this.logger.log(`⏰ [Telegram] Sincronizando assinatura para ${userId} (motivo: ${syncReason})`);
         await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
 
         // Revalidar usuário com dados atualizados
         const updatedValidation = await this.messageValidation.validateUser(userId, 'telegram');
 
-        if (updatedValidation.action === ValidationAction.NO_SUBSCRIPTION) {
-          this.logger.warn(`[Telegram] 💳 User ${userId} subscription expired after sync`);
-          this.eventEmitter.emit('telegram.reply', {
+        // Bloquear se ação for NO_SUBSCRIPTION OU se os flags ainda indicam sem acesso
+        // (cobre casos onde a chave de cache do Telegram não foi atualizada pelo sync)
+        const blockedAfterSync =
+          updatedValidation.action === ValidationAction.NO_SUBSCRIPTION ||
+          !updatedValidation.user?.canUseGastoZap ||
+          !updatedValidation.user?.hasActiveSubscription;
+
+        if (blockedAfterSync) {
+          this.logger.warn(`[Telegram] 💳 Acesso negado após sync: ${userId} (hasActiveSubscription=${updatedValidation.user?.hasActiveSubscription}, canUseGastoZap=${updatedValidation.user?.canUseGastoZap})`);
+          await this.platformReply.sendReply({
             platformId: userId,
-            message: updatedValidation.message!,
+            message: updatedValidation.user?.hasActiveSubscription
+              ? '💳 Seu plano atual não inclui o GastoZap. Faça upgrade para usar esse recurso.'
+              : '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
             context: 'ERROR',
             platform: MessagingPlatform.TELEGRAM,
           });
@@ -141,21 +191,18 @@ export class TelegramMessageHandler {
       // Tratar ações conforme resultado da validação
       switch (validation.action) {
         case ValidationAction.ONBOARDING:
-          // Usuário está em onboarding - processar mensagem
           this.logger.log(`[Telegram] 📝 User ${userId} is in onboarding`);
           await this.handleOnboardingMessage(sessionId, message);
           return;
 
         case ValidationAction.START_ONBOARDING:
-          // Novo usuário - iniciar onboarding
           this.logger.log(`[Telegram] ⭐ Starting onboarding for new user ${userId}`);
           await this.startOnboarding(sessionId, message);
           return;
 
         case ValidationAction.BLOCKED:
-          // Usuário bloqueado
           this.logger.warn(`[Telegram] ❌ User ${userId} is BLOCKED`);
-          this.eventEmitter.emit('telegram.reply', {
+          await this.platformReply.sendReply({
             platformId: userId,
             message: validation.message!,
             context: 'ERROR',
@@ -164,15 +211,13 @@ export class TelegramMessageHandler {
           return;
 
         case ValidationAction.INACTIVE:
-          // Usuário inativo - reativar
           this.logger.log(`[Telegram] 🔄 Reactivating user ${userId}`);
           await this.onboardingService.reactivateUser(userId, 'telegram');
           return;
 
         case ValidationAction.NO_SUBSCRIPTION:
-          // Sem assinatura ativa
           this.logger.warn(`[Telegram] 💳 User ${userId} has no subscription`);
-          this.eventEmitter.emit('telegram.reply', {
+          await this.platformReply.sendReply({
             platformId: userId,
             message: validation.message!,
             context: 'ERROR',
@@ -181,7 +226,6 @@ export class TelegramMessageHandler {
           return;
 
         case ValidationAction.LEARNING_PENDING:
-          // Aprendizado pendente
           this.logger.log(`[Telegram] 🎓 Processing learning for ${userId}`);
           const learningResult = await this.messageValidation.processLearning(
             userId,
@@ -192,7 +236,7 @@ export class TelegramMessageHandler {
           );
 
           if (learningResult.success) {
-            this.eventEmitter.emit('telegram.reply', {
+            await this.platformReply.sendReply({
               platformId: userId,
               message: learningResult.message,
               context: 'INTENT_RESPONSE',
@@ -202,7 +246,6 @@ export class TelegramMessageHandler {
           return;
 
         case ValidationAction.PROCEED:
-          // Usuário válido - prosseguir com processamento normal
           this.logger.log(`[Telegram] ✅ Processing message for user ${validation.user!.name}`);
           break;
 
@@ -213,7 +256,6 @@ export class TelegramMessageHandler {
 
       // Continuar com fluxo normal de transações
       const user = validation.user!;
-      this.logger.log(`[Telegram] Processing message from registered user ${user.name}`);
       await this.processRegisteredUserMessage(sessionId, message, user);
     } catch (error) {
       this.logger.error(`Error processing Telegram message:`, error);
@@ -237,7 +279,7 @@ export class TelegramMessageHandler {
       this.logger.warn(
         `⚠️ User ${userId} already completed onboarding - sending completion message`,
       );
-      this.eventEmitter.emit('telegram.reply', {
+      await this.platformReply.sendReply({
         platformId: userId,
         message: response.message || '✅ Seu cadastro já foi concluído anteriormente.',
         context: 'INTENT_RESPONSE',
@@ -247,7 +289,7 @@ export class TelegramMessageHandler {
     }
 
     // Enviar mensagem de boas-vindas via evento
-    this.eventEmitter.emit('telegram.reply', {
+    await this.platformReply.sendReply({
       platformId: userId,
       message:
         `🎉 *Bem-vindo ao GastoCerto!*\n\n` +
@@ -278,7 +320,7 @@ export class TelegramMessageHandler {
     // Aceitar mensagens de texto ou contact (para compartilhamento de telefone)
     if (message.type !== MessageType.TEXT || !message.text) {
       this.logger.log(`📝 [HANDLE ONBOARDING] Invalid message type, sending error`);
-      this.eventEmitter.emit('telegram.reply', {
+      await this.platformReply.sendReply({
         platformId: userId,
         message: '❌ Por favor, envie uma mensagem de texto.',
         context: 'ERROR',
@@ -290,8 +332,9 @@ export class TelegramMessageHandler {
     this.logger.log(`📝 [HANDLE ONBOARDING] Converting to IFilteredMessage...`);
     // Converter IncomingMessage para IFilteredMessage
     const filteredMessage: IFilteredMessage = {
+      platformId: userId,
       messageId: message.id,
-      phoneNumber: userId, // Usar chatId como phoneNumber (identificador da plataforma)
+      phoneNumber: userId, // Compatível com fluxos que usam phoneNumber
       text: message.text,
       type: MessageType.TEXT,
       isFromMe: false,
@@ -360,7 +403,7 @@ export class TelegramMessageHandler {
         break;
 
       default:
-        this.eventEmitter.emit('telegram.reply', {
+        await this.platformReply.sendReply({
           platformId: userId,
           message:
             '❌ Tipo de mensagem não suportado.\n\n' +
@@ -379,7 +422,7 @@ export class TelegramMessageHandler {
    */
   private async sendErrorMessage(sessionId: string, chatId: string): Promise<void> {
     try {
-      this.eventEmitter.emit('telegram.reply', {
+      await this.platformReply.sendReply({
         platformId: chatId,
         message:
           '❌ Desculpe, ocorreu um erro ao processar sua mensagem.\n\n' +

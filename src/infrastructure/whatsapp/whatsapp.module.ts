@@ -6,7 +6,6 @@ import { SessionManagerService } from '@infrastructure/core/session-manager.serv
 import { WhatsAppSessionManager } from './providers/baileys/whatsapp-session-manager.service';
 import { MessagingGateway } from '@infrastructure/messaging/gateway/messaging.gateway';
 import { WhatsAppChatCacheService } from '@infrastructure/chat/whatsapp-chat-cache.service';
-import { PrismaService } from '@core/database/prisma.service';
 import { WhatsAppIntegrationService } from './whatsapp-integration.service';
 
 
@@ -28,7 +27,6 @@ import { WhatsAppIntegrationService } from './whatsapp-integration.service';
   imports: [ConfigModule],
   controllers: [WhatsAppController],
   providers: [
-    PrismaService,
     SessionsService,
     SessionManagerService,
     WhatsAppSessionManager,

@@ -710,22 +710,48 @@ export class OnboardingStateService {
   /**
    * Marca onboarding como completo
    */
-  async completeOnboarding(platformId: string): Promise<void> {
+  async completeOnboarding(platformId: string, userCacheId?: string): Promise<void> {
     try {
       this.logger.log(
         `\n========================================\n` +
           `✅ [ONBOARDING] COMPLETE ONBOARDING\n` +
           `========================================\n` +
           `platformId: ${platformId}\n` +
+          `userCacheId: ${userCacheId || 'auto-lookup'}\n` +
           `========================================`,
       );
 
+      // Auto-lookup userCacheId se não fornecido
+      let resolvedUserCacheId = userCacheId;
+      if (!resolvedUserCacheId) {
+        const userCache = await this.prisma.userCache.findFirst({
+          where: {
+            OR: [
+              { phoneNumber: platformId },
+              { whatsappId: platformId },
+              { telegramId: platformId },
+            ],
+          },
+          select: { id: true },
+        });
+        resolvedUserCacheId = userCache?.id;
+        if (resolvedUserCacheId) {
+          this.logger.log(`🔗 Auto-linked userCacheId: ${resolvedUserCacheId}`);
+        }
+      }
+
+      const updateData: any = {
+        completed: true,
+        currentStep: OnboardingStep.COMPLETED,
+      };
+
+      if (resolvedUserCacheId) {
+        updateData.userCacheId = resolvedUserCacheId;
+      }
+
       const result = await this.prisma.onboardingSession.updateMany({
         where: { platformId },
-        data: {
-          completed: true,
-          currentStep: OnboardingStep.COMPLETED,
-        },
+        data: updateData,
       });
 
       this.logger.log(

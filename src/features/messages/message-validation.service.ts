@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { MessageLearningService } from '@features/transactions/message-learning.service';
 import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
+import { PlatformReplyService } from '@infrastructure/messaging/messages/platform-reply.service';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { UserCache } from '@prisma/client';
 
@@ -67,7 +67,7 @@ export class MessageValidationService {
     private readonly onboardingService: OnboardingService,
     private readonly messageLearningService: MessageLearningService,
     private readonly gastoCertoApi: GastoCertoApiService,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly platformReply: PlatformReplyService,
   ) {}
 
   /**
@@ -79,7 +79,7 @@ export class MessageValidationService {
    */
   async validateUser(
     platformId: string,
-    platform: 'whatsapp' | 'telegram' | 'web',
+    platform: 'whatsapp' | 'telegram' | 'webchat',
   ): Promise<ValidationResult> {
     try {
       this.logger.debug(`🔍 [${platform}] Validating user: ${platformId}`);
@@ -119,12 +119,12 @@ export class MessageValidationService {
         };
       }
 
-      // 4. Se usuário não existe, iniciar onboarding (exceto web)
+      // 4. Se usuário não existe, iniciar onboarding (exceto webchat)
       if (!user) {
         this.logger.log(`⭐ [${platform}] New user detected: ${platformId}`);
 
-        // Web chat não tem onboarding
-        if (platform === 'web') {
+        // WebChat não tem onboarding — usuário já está autenticado via JWT
+        if (platform === 'webchat') {
           return {
             isValid: false,
             action: ValidationAction.BLOCKED,
@@ -255,7 +255,7 @@ export class MessageValidationService {
     messageText: string,
     messageId: string,
     user: UserCache,
-    platform: 'whatsapp' | 'telegram',
+    platform: 'whatsapp' | 'telegram' | 'webchat',
   ): Promise<{
     success: boolean;
     message: string;
@@ -329,12 +329,15 @@ export class MessageValidationService {
    */
   async startOnboarding(
     platformId: string,
-    platform: 'whatsapp' | 'telegram',
+    platform: 'whatsapp' | 'telegram' | 'webchat',
   ): Promise<string | null> {
     try {
       this.logger.log(`🚀 [${platform}] Starting onboarding for ${platformId}`);
 
-      const response = await this.onboardingService.startOnboarding(platformId, platform);
+      const response = await this.onboardingService.startOnboarding(
+        platformId,
+        platform as 'whatsapp' | 'telegram', // webchat nunca chega aqui (retorna BLOCKED)
+      );
 
       // Se usuário já completou onboarding
       if (response.completed) {
@@ -369,11 +372,8 @@ export class MessageValidationService {
     platform: MessagingPlatform,
     context: string = 'ERROR',
   ): void {
-    const eventName = platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
-
-    this.logger.debug(`📤 [${platform}] Sending message to ${platformId}`);
-
-    this.eventEmitter.emit(eventName, {
+    // Delegar para PlatformReplyService (centralizado)
+    void this.platformReply.sendReply({
       platformId,
       message,
       context,
@@ -385,11 +385,11 @@ export class MessageValidationService {
    * Busca usuário de acordo com a plataforma
    * - WhatsApp: usa phoneNumber diretamente
    * - Telegram: usa chatId/telegramId
-   * - Web: usa userId
+   * - WebChat: usa gastoCertoId (já autenticado via JWT)
    */
   private async fetchUser(
     platformId: string,
-    platform: 'whatsapp' | 'telegram' | 'web',
+    platform: 'whatsapp' | 'telegram' | 'webchat',
   ): Promise<UserCache | null> {
     try {
       switch (platform) {
@@ -399,11 +399,8 @@ export class MessageValidationService {
         case 'telegram':
           return await this.userCacheService.getUserByTelegram(platformId);
 
-        case 'web':
-          // Web usa gastoCertoId diretamente
-          return await this.userCacheService['prisma'].userCache.findUnique({
-            where: { gastoCertoId: platformId },
-          });
+        case 'webchat':
+          return await this.userCacheService.getUserByGastoCertoId(platformId);
 
         default:
           this.logger.warn(`Unknown platform: ${platform}`);

@@ -12,7 +12,7 @@ import {
   HttpException,
   Put,
 } from '@nestjs/common';
-import { MultiPlatformSessionService } from '@infrastructure/messaging/core/services/multi-platform-session.service';
+import { MultiPlatformSessionService } from '@infrastructure/sessions/core/multi-platform-session.service';
 import { TelegramSessionsService } from '../providers/telegram-sessions.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CreateTelegramSessionDto } from '@infrastructure/messaging/core/dto/session.dto';

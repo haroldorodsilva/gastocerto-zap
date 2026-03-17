@@ -15,7 +15,7 @@ import {
   IncomingMessage,
 } from '@infrastructure/messaging/messaging-provider.interface';
 import { TelegramProvider } from '@infrastructure/telegram/providers/telegram.provider';
-import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
+import { MESSAGE_EVENTS, SESSION_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 import { SessionStatus } from '@prisma/client';
 
 interface PlatformSession {
@@ -38,7 +38,6 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: ConfigService,
-    private readonly userRateLimiter: UserRateLimiterService,
   ) {}
 
   async onModuleInit() {
@@ -49,7 +48,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   async onModuleDestroy() {
     this.logger.log('🛑 MultiPlatformSessionService destroying - cleaning up sessions');
 
-    // Desconectar todas as sessões
+    // Desconectar todas as sessões SEM desativar isActive
     const disconnectPromises: Promise<void>[] = [];
 
     for (const [sessionId, session] of this.sessions.entries()) {
@@ -59,7 +58,34 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
             this.logger.log(`🧹 Disconnecting session: ${sessionId} (${session.platform})`);
             await session.provider.disconnect();
             ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
-            this.logger.log(`✅ Session ${sessionId} disconnected successfully`);
+
+            // Atualizar apenas o status para DISCONNECTED, MAS manter isActive = true
+            // para que reconecte automaticamente no próximo deploy
+            if (session.platform === MessagingPlatform.TELEGRAM) {
+              await this.prisma.telegramSession
+                .update({
+                  where: { sessionId },
+                  data: {
+                    status: SessionStatus.DISCONNECTED,
+                    // isActive permanece como está (true) para auto-reconectar
+                  },
+                })
+                .catch(() => {});
+            } else {
+              await this.prisma.whatsAppSession
+                .update({
+                  where: { sessionId },
+                  data: {
+                    status: SessionStatus.DISCONNECTED,
+                    // isActive permanece como está (true) para auto-reconectar
+                  },
+                })
+                .catch(() => {});
+            }
+
+            this.logger.log(
+              `✅ Session ${sessionId} disconnected (isActive mantido para auto-reconexão)`,
+            );
           } catch (error) {
             this.logger.error(`❌ Error disconnecting session ${sessionId}:`, error);
           }
@@ -72,12 +98,9 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
 
     this.sessions.clear();
 
-    // ℹ️ NÃO alteramos isActive no banco de dados aqui!
-    // Motivo: Quando o container subir novamente, ele precisa saber quais
-    // sessões estavam ativas para reconectá-las automaticamente.
-    // Apenas desconectamos os providers (stopPolling, etc).
-
-    this.logger.log('✅ MultiPlatformSessionService cleanup complete');
+    this.logger.log(
+      '✅ MultiPlatformSessionService cleanup complete - sessões mantidas ativas para reconexão automática',
+    );
   }
 
   /**
@@ -225,17 +248,26 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
         this.logger.log(`✅ Sessões conflitantes desativadas`);
       }
 
+      if (!session?.token) {
+        throw new Error(
+          `Telegram bot token not found for session ${sessionId}. Create session with token first.`,
+        );
+      }
+
       // Marcar como ativa no singleton global ANTES de inicializar
       ACTIVE_SESSIONS_GLOBAL.set(sessionId, true);
 
       // ✅ FIX: Criar uma NOVA instância de TelegramProvider para cada sessão
-      const telegramProvider = new TelegramProvider(this.userRateLimiter);
+      const telegramProvider = new TelegramProvider();
 
       const config: MessagingConnectionConfig = {
         platform: MessagingPlatform.TELEGRAM,
         credentials: { token: session.token },
         sessionId,
         sessionName: session.name, // Nome da sessão para logs
+        mode: (this.configService.get<string>('TELEGRAM_MODE') || 'polling') as 'polling' | 'webhook',
+        webhookBaseUrl: this.configService.get<string>('TELEGRAM_WEBHOOK_BASE_URL'),
+        webhookSecret: this.configService.get<string>('TELEGRAM_WEBHOOK_SECRET'),
       };
 
       await telegramProvider.initialize(config, {
@@ -323,7 +355,10 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       throw new NotFoundException(`Session ${sessionId} not found`);
     }
 
-    await session.provider.sendTextMessage(chatId, text);
+    const result = await session.provider.sendTextMessage(chatId, text);
+    if (result && !result.success) {
+      throw new Error(`Failed to send message to ${chatId}: ${result.error || 'unknown error'}`);
+    }
   }
 
   /**
@@ -359,7 +394,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
 
   private handleConnected(sessionId: string, platform: MessagingPlatform): void {
     this.logger.log(`✅ ${platform} session ${sessionId} connected`);
-    this.eventEmitter.emit('session.connected', { sessionId, platform });
+    this.eventEmitter.emit(SESSION_EVENTS.CONNECTED, { sessionId, platform });
   }
 
   private handleDisconnected(
@@ -368,7 +403,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     reason?: string,
   ): void {
     this.logger.warn(`📴 ${platform} session ${sessionId} disconnected: ${reason || 'unknown'}`);
-    this.eventEmitter.emit('session.disconnected', { sessionId, platform, reason });
+    this.eventEmitter.emit(SESSION_EVENTS.DISCONNECTED, { sessionId, platform, reason });
   }
 
   private async handleMessage(sessionId: string, message: IncomingMessage): Promise<void> {
@@ -421,7 +456,7 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       this.logger.log(
         `🚀 [MultiPlatformSessionService] Emitting telegram.message event for session ${sessionId}`,
       );
-      this.eventEmitter.emit('telegram.message', {
+      this.eventEmitter.emit(MESSAGE_EVENTS.TELEGRAM, {
         sessionId,
         platform: message.platform,
         message,
@@ -522,6 +557,6 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
     }
 
     this.logger.error(`❌ Error in session ${sessionId}: ${errorMsg}`);
-    this.eventEmitter.emit('session.error', { sessionId, error });
+    this.eventEmitter.emit(SESSION_EVENTS.ERROR, { sessionId, error });
   }
 }

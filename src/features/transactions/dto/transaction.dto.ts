@@ -179,6 +179,14 @@ export class CreateGastoCertoTransactionDto {
   @IsOptional()
   isCreditCard?: boolean; // false = banco, true = cartão de crédito
 
+  @IsNumber()
+  @IsOptional()
+  installments?: number; // Número de parcelas
+
+  @IsString()
+  @IsOptional()
+  installmentType?: 'INSTALLMENT_VALUE' | 'GROSS_VALUE'; // Tipo do valor informado
+
   @IsString()
   @IsOptional()
   observation?: string; // Observações adicionais

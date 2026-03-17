@@ -6,7 +6,7 @@ import { TelegramModule } from '@infrastructure/telegram/telegram.module';
 import { MultiPlatformSessionModule } from './multi-platform-session.module';
 import { SessionsService } from './core/sessions.service';
 import { SessionManagerService } from './core/session-manager.service';
-import { PrismaService } from '@core/database/prisma.service';
+import { SessionHealthMonitorService } from './core/session-health-monitor.service';
 import { UsersModule } from '@features/users/users.module';
 
 /**
@@ -20,7 +20,7 @@ import { UsersModule } from '@features/users/users.module';
 @Module({
   imports: [ConfigModule, MultiPlatformSessionModule, WhatsAppModule, TelegramModule, UsersModule],
   controllers: [ExternalController],
-  providers: [PrismaService, SessionsService, SessionManagerService],
-  exports: [SessionsService, SessionManagerService, MultiPlatformSessionModule],
+  providers: [SessionsService, SessionManagerService, SessionHealthMonitorService],
+  exports: [SessionsService, SessionManagerService, MultiPlatformSessionModule, SessionHealthMonitorService],
 })
 export class SessionsModule {}

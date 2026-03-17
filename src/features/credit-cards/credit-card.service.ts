@@ -147,9 +147,11 @@ export class CreditCardService {
       const cards = result.data;
 
       // Identificar cartão pelo nome na mensagem
+      // Suporta: "usar nubank", "usar cartão nubank", "nubank", "cartão nubank"
       const cardName = messageText
         .toLowerCase()
-        .replace(/usar cartao|usar cartão|cartao|cartão/gi, '')
+        .replace(/^usar\s+(?:cartao|cartão)?\s*/i, '') // strip "usar [cartão] " prefix
+        .replace(/cartao|cartão/gi, '') // strip remaining cartão word
         .trim();
 
       const targetCard = cards.find((c) =>
@@ -283,7 +285,7 @@ export class CreditCardService {
       // Extrair nome do cartão da mensagem
       const cardName = messageText
         .toLowerCase()
-        .replace(/ver fatura|fatura|do|da/gi, '')
+        .replace(/\bver\s+faturas?\b|\bfaturas?\b|\bdo\b|\bda\b|\bde\b/gi, '')
         .trim();
 
       // Buscar cartões

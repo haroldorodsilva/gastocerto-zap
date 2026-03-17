@@ -19,8 +19,15 @@ export class CryptoService {
     const secret = this.configService.get<string>('ENCRYPTION_KEY');
     if (secret) {
       // Derivar chave de 32 bytes via scrypt
-      this.key = scryptSync(secret, 'gastocerto-salt', 32);
+      // Salt configurável via env var — NUNCA usar valor hardcoded em produção
+      const salt = this.configService.get<string>('ENCRYPTION_SALT', 'gastocerto-salt-default');
+      this.key = scryptSync(secret, salt, 32);
       this.logger.log('🔒 CryptoService inicializado com ENCRYPTION_KEY');
+      if (salt === 'gastocerto-salt-default') {
+        this.logger.warn(
+          '⚠️  ENCRYPTION_SALT não definida — usando salt padrão. Defina ENCRYPTION_SALT em produção!',
+        );
+      }
     } else {
       this.key = null;
       this.logger.warn(

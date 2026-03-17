@@ -5,7 +5,6 @@ import { EmailValidator } from './validators/email.validator';
 import { NameValidator } from './validators/name.validator';
 import { PhoneValidator } from './validators/phone.validator';
 import { UsersModule } from '@features/users/users.module';
-import { PrismaService } from '@core/database/prisma.service';
 import { MessagesModule } from '@infrastructure/messaging/messages/messages.module';
 
 @Module({
@@ -19,7 +18,6 @@ import { MessagesModule } from '@infrastructure/messaging/messages/messages.modu
     EmailValidator,
     NameValidator,
     PhoneValidator,
-    PrismaService,
   ],
   exports: [OnboardingService, OnboardingStateService],
 })

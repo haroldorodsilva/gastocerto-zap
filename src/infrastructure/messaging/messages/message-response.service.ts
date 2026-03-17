@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { MultiPlatformSessionService } from '@infrastructure/messaging/core/services/multi-platform-session.service';
+import { MultiPlatformSessionService } from '@infrastructure/sessions/core/multi-platform-session.service';
 import { SessionsService } from '@infrastructure/sessions/core/sessions.service';
 import { WhatsAppSessionManager } from '@infrastructure/whatsapp/providers/baileys/whatsapp-session-manager.service';
 import { MessageContextService } from './message-context.service';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
+import { REPLY_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * Evento para solicitar envio de mensagem
@@ -57,7 +58,7 @@ export class MessageResponseService {
   /**
    * Escuta evento 'whatsapp.reply' e envia mensagem ao usuário via WhatsApp
    */
-  @OnEvent('whatsapp.reply')
+  @OnEvent(REPLY_EVENTS.WHATSAPP)
   async handleWhatsAppReply(event: SendMessageEvent): Promise<void> {
     await this.sendReply(event, MessagingPlatform.WHATSAPP);
   }
@@ -65,7 +66,7 @@ export class MessageResponseService {
   /**
    * Escuta evento 'telegram.reply' e envia mensagem ao usuário via Telegram
    */
-  @OnEvent('telegram.reply')
+  @OnEvent(REPLY_EVENTS.TELEGRAM)
   async handleTelegramReply(event: SendMessageEvent): Promise<void> {
     await this.sendReply(event, MessagingPlatform.TELEGRAM);
   }
@@ -76,6 +77,7 @@ export class MessageResponseService {
   private async sendReply(
     event: SendMessageEvent,
     expectedPlatform: MessagingPlatform,
+    isRetry = false,
   ): Promise<void> {
     const { platformId, message, context, metadata, sessionId, platform } = event;
 
@@ -96,7 +98,7 @@ export class MessageResponseService {
       // 1. Se não fornecido sessionId, buscar contexto no MessageContextService
       if (!targetSessionId) {
         this.logger.debug(`🔍 Buscando contexto para ${platformId}...`);
-        const messageContext = this.contextService.getContext(platformId);
+        const messageContext = await this.contextService.getContext(platformId);
 
         if (messageContext) {
           targetSessionId = messageContext.sessionId;
@@ -159,15 +161,31 @@ export class MessageResponseService {
         error.stack,
       );
 
-      // TODO: Implementar retry ou dead letter queue
-      // Para contextos críticos (CONFIRMATION_REQUEST, TRANSACTION_RESULT)
-      if (context === 'CONFIRMATION_REQUEST' || context === 'TRANSACTION_RESULT') {
-        this.logger.error(
-          `🚨 MENSAGEM CRÍTICA NÃO ENVIADA! Requer ação manual.\n` +
+      // Retry automático para mensagens críticas (apenas 1 tentativa extra)
+      const criticalContexts = ['CONFIRMATION_REQUEST', 'TRANSACTION_RESULT'];
+      if (!isRetry && criticalContexts.includes(context)) {
+        this.logger.warn(
+          `🔄 Mensagem crítica falhou. Tentando reenvio em 5s...\n` +
             `🆔 PlatformId: ${platformId}\n` +
-            `🏷️  Context: ${context}\n` +
-            `💬 Message: ${message}`,
+            `🏷️  Context: ${context}`,
         );
+
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          await this.sendReply(
+            { platformId, message, context, metadata, sessionId, platform } as SendMessageEvent,
+            expectedPlatform,
+            true,
+          );
+          this.logger.log(`✅ Mensagem crítica reenviada com sucesso para ${platformId}`);
+        } catch (retryError) {
+          this.logger.error(
+            `🚨 MENSAGEM CRÍTICA NÃO ENVIADA após retry! Requer ação manual.\n` +
+              `🆔 PlatformId: ${platformId}\n` +
+              `🏷️  Context: ${context}\n` +
+              `💬 Message: ${message}`,
+          );
+        }
       }
     }
   }

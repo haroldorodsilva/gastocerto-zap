@@ -10,11 +10,14 @@
 
 export const SYNONYM_ENTRIES: [string, string[]][] = [
   // Cartão e Finanças
-  ['cartao', ['credito', 'debito', 'fatura', 'anuidade', 'parcelamento']],
+  // NOTA: 'anuidade' removido dos sinônimos de 'cartao' para evitar que frases como
+  // "comprei X no cartão" sejam classificadas como Taxas > Anuidade
+  ['cartao', ['credito', 'debito', 'fatura', 'parcelamento']],
   ['credito', ['cartao', 'debito', 'fatura']],
   ['debito', ['cartao', 'credito', 'fatura']],
   ['fatura', ['cartao', 'credito', 'debito', 'pagamento']],
-  ['anuidade', ['cartao', 'credito', 'debito']],
+  ['anuidade', ['taxa', 'cobranca', 'tarifa', 'fee', 'mensalidade']],
+  ['mensalidade', ['anuidade', 'taxa', 'cobranca', 'tarifa', 'assinatura']],
   ['rotativo', ['cartao', 'credito', 'fatura']],
   ['emprestimo', ['credito', 'financiamento', 'divida']],
   ['financiamento', ['emprestimo', 'credito', 'divida']],
@@ -36,8 +39,8 @@ export const SYNONYM_ENTRIES: [string, string[]][] = [
   ['melancia', ['hortifruti', 'frutas', 'fruta', 'feira']],
   ['verduras', ['hortifruti', 'feira', 'verdura', 'legumes', 'salada']],
   ['verdura', ['hortifruti', 'feira', 'verduras', 'legumes', 'salada']],
-  ['padaria', ['pao', 'pães', 'cafe']],
-  ['pao', ['pães', 'padaria', 'paes']],
+  ['padaria', ['pao', 'pães', 'cafe', 'alimentacao', 'panificadora']],
+  ['pao', ['pães', 'padaria', 'paes', 'alimentacao', 'cafe', 'panificadora']],
   ['restaurante', ['comida', 'refeicao', 'jantar', 'bar', 'restaurantes']],
   ['restaurantes', ['comida', 'refeicao', 'jantar', 'bar', 'restaurante']],
   ['lanche', ['lanches', 'salgado', 'coxinha', 'pastel', 'sanduiche']],

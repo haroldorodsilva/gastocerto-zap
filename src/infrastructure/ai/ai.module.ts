@@ -7,14 +7,10 @@ import { DeepSeekProvider } from './providers/deepseek.provider';
 import { RateLimiterService } from '../../common/services/rate-limiter.service';
 import { AICacheService } from '../../common/services/ai-cache.service';
 import { AIUsageLoggerService } from './ai-usage-logger.service';
-import { AIUsageTrackerService } from './ai-usage-tracker.service';
 import { AIConfigService } from './ai-config.service';
 import { AINormalizationService } from './ai-normalization.service';
-import { PrismaService } from '@core/database/prisma.service';
-
 @Module({
   providers: [
-    PrismaService,
     AIProviderFactory,
     OpenAIProvider,
     GoogleGeminiProvider,
@@ -23,7 +19,6 @@ import { PrismaService } from '@core/database/prisma.service';
     RateLimiterService,
     AICacheService,
     AIUsageLoggerService,
-    AIUsageTrackerService,
     AIConfigService,
     AINormalizationService,
   ],
@@ -32,7 +27,6 @@ import { PrismaService } from '@core/database/prisma.service';
     RateLimiterService,
     AICacheService,
     AIUsageLoggerService,
-    AIUsageTrackerService,
     AIConfigService,
   ],
 })

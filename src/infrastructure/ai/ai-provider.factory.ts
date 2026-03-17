@@ -559,6 +559,8 @@ export class AIProviderFactory implements OnModuleInit {
   async logAIUsage(params: {
     phoneNumber: string;
     userCacheId?: string;
+    gastoCertoId?: string;
+    platform?: string;
     operation: AIOperationType;
     inputType: AIInputType;
     inputText?: string;
@@ -572,6 +574,8 @@ export class AIProviderFactory implements OnModuleInit {
     await this.aiUsageLogger.logUsage({
       phoneNumber: params.phoneNumber,
       userCacheId: params.userCacheId,
+      gastoCertoId: params.gastoCertoId,
+      platform: params.platform,
       provider: providerType,
       model,
       operation: params.operation,

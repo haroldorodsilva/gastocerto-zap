@@ -20,6 +20,7 @@ import { SessionManagerService } from '@infrastructure/core/session-manager.serv
 import { WhatsAppSessionManager } from '../providers/baileys/whatsapp-session-manager.service';
 import { WhatsAppChatCacheService } from '@infrastructure/chat/whatsapp-chat-cache.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { SESSION_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 import {
   CreateSessionDto,
   UpdateSessionDto,
@@ -497,7 +498,7 @@ export class WhatsAppController {
     }
 
     // Emitir evento de mensagem enviada via WebSocket
-    this.eventEmitter.emit('session.message.sent', {
+    this.eventEmitter.emit(SESSION_EVENTS.MESSAGE_SENT, {
       sessionId: session.sessionId,
       to: body.to,
       messageId: result.messageId,

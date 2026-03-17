@@ -10,6 +10,8 @@ import { AIProcessingProcessor } from './processors/ai-processing.processor';
 import { TransactionConfirmationProcessor } from './processors/transaction-confirmation.processor';
 import { TransactionRegistrationProcessor } from './processors/transaction-registration.processor';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
+import { TransactionApiSenderService } from './contexts/registration/transaction-api-sender.service';
+import { TransactionMessageFormatterService } from './contexts/registration/transaction-message-formatter.service';
 import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
 import { TransactionSummaryService } from './contexts/summary/summary.service';
@@ -25,6 +27,7 @@ import { CreditCardParserService } from '@features/transactions/services/parsers
 import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { PaymentStatusResolverService } from './services/payment-status-resolver.service';
 import { RecurringTransactionService } from './services/recurring-transaction.service';
+import { CategoryResolverService } from './services/category-resolver.service';
 import { AiModule } from '../../infrastructure/ai/ai.module';
 import { RAGModule } from '@infrastructure/rag/rag.module';
 import { UsersModule } from '@features/users/users.module';
@@ -32,7 +35,28 @@ import { IntentModule } from '@features/intent/intent.module';
 import { AccountsModule } from '@features/accounts/accounts.module';
 import { MessagesModule } from '@infrastructure/messaging/messages/messages.module';
 import { SecurityModule } from '@features/security/security.module';
-import { PrismaService } from '@core/database/prisma.service';
+// Intent Handlers (Strategy Pattern)
+import {
+  INTENT_HANDLERS,
+  AccountIntentHandler,
+  ConfirmationIntentHandler,
+  PaymentIntentHandler,
+  SummaryIntentHandler,
+  CreditCardIntentHandler,
+  ListingIntentHandler,
+  RegistrationIntentHandler,
+} from './intent-handlers';
+
+/** Todas as classes de IntentHandler para injeção via factory */
+const INTENT_HANDLER_CLASSES = [
+  AccountIntentHandler,
+  ConfirmationIntentHandler,
+  PaymentIntentHandler,
+  SummaryIntentHandler,
+  CreditCardIntentHandler,
+  ListingIntentHandler,
+  RegistrationIntentHandler,
+];
 
 @Module({
   imports: [
@@ -96,12 +120,21 @@ import { PrismaService } from '@core/database/prisma.service';
     TransactionRegistrationProcessor,
     // Context Services
     TransactionRegistrationService,
+    TransactionApiSenderService,
+    TransactionMessageFormatterService,
     TransactionListingService,
     TransactionPaymentService,
     TransactionSummaryService,
     MessageLearningService, // ✅ Serviço de aprendizado inteligente
     CreditCardService, // ✅ Serviço de cartões de crédito
     ListContextService, // ✅ Serviço de contexto de lista
+    // Intent Handlers (Strategy Pattern)
+    ...INTENT_HANDLER_CLASSES,
+    {
+      provide: INTENT_HANDLERS,
+      useFactory: (...handlers) => handlers,
+      inject: INTENT_HANDLER_CLASSES,
+    },
     // Serviços NLP para transações avançadas
     TemporalParserService,
     InstallmentParserService,
@@ -110,7 +143,7 @@ import { PrismaService } from '@core/database/prisma.service';
     CreditCardInvoiceCalculatorService,
     PaymentStatusResolverService,
     RecurringTransactionService,
-    PrismaService,
+    CategoryResolverService,
   ],
   exports: [
     TransactionsService,

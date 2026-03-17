@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -18,7 +18,6 @@ import { CommonModule } from './common/common.module';
 import { SharedModule } from '@shared/shared.module';
 import { EventsModule } from './core/events/events.module'; // ← Event Bus
 import { SecurityModule } from './features/security/security.module'; // ← Segurança
-import { AssistantModule } from './features/assistant/assistant.module'; // ← Assistente
 import { MultiPlatformSessionModule } from './infrastructure/sessions/multi-platform-session.module';
 import { SessionsModule } from './infrastructure/sessions/sessions.module';
 import { MessagesModule } from './infrastructure/messaging/messages/messages.module';
@@ -62,11 +61,13 @@ import { WebChatModule } from '@features/webchat/webchat.module';
 
     // Bull (Redis queues)
     BullModule.forRootAsync({
-      useFactory: () => ({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
         redis: {
-          host: process.env.REDIS_HOST || 'localhost',
-          port: parseInt(process.env.REDIS_PORT || '6379'),
-          password: process.env.REDIS_PASSWORD,
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD'),
         },
       }),
     }),
@@ -81,7 +82,6 @@ import { WebChatModule } from '@features/webchat/webchat.module';
     MessagesModule,
     UsersModule,
     OnboardingModule,
-    AssistantModule, // Assistente conversacional
     AiModule,
     TransactionsModule,
     AdminModule,

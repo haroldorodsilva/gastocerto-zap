@@ -1,32 +1,36 @@
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { AdminController } from './admin.controller';
-import { RagAdminController } from '../admin-controllers/controllers/rag-admin.controller';
-import { UserCacheService } from '../users/user-cache.service';
-import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
-import { PrismaService } from '@core/database/prisma.service';
-import { ServiceAuthService } from '@common/services/service-auth.service';
-import { JwtValidationService } from '@common/services/jwt-validation.service';
-import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
+import { AdminUsersController } from './controllers/admin-users.controller';
+import { AdminAIConfigController } from './controllers/admin-ai-config.controller';
+import { AdminRagController } from './controllers/admin-rag.controller';
+import { AdminSynonymsController } from './controllers/admin-synonyms.controller';
+import { AdminOnboardingController } from './controllers/admin-onboarding.controller';
+import { AdminMessagesController } from './controllers/admin-messages.controller';
 import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
 import { TelegramModule } from '../../infrastructure/telegram/telegram.module';
 import { RAGModule } from '@infrastructure/rag/rag.module';
+import { UsersModule } from '../users/users.module';
+import { AiModule } from '../../infrastructure/ai/ai.module';
 
 @Module({
   imports: [
     HttpModule,
-    WhatsAppModule, // Importa serviços de sessão WhatsApp
-    TelegramModule, // Importa serviços de sessão Telegram
-    RAGModule, // Importa serviços RAG
+    WhatsAppModule,
+    TelegramModule,
+    RAGModule,
+    UsersModule,
+    AiModule,
   ],
-  controllers: [AdminController, RagAdminController],
-  providers: [
-    UserCacheService,
-    GastoCertoApiService,
-    ServiceAuthService,
-    JwtValidationService,
-    AIConfigService,
-    PrismaService,
+  controllers: [
+    AdminController,
+    AdminUsersController,
+    AdminAIConfigController,
+    AdminRagController,
+    AdminSynonymsController,
+    AdminOnboardingController,
+    AdminMessagesController,
   ],
+  providers: [],
 })
 export class AdminModule {}

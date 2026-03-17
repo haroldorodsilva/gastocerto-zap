@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { CryptoService } from '../../../common/services/crypto.service';
+import { PrismaService } from '../../../core/database/prisma.service';
 import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
 import {
   getTransactionSystemPrompt,
@@ -25,6 +26,7 @@ export class OpenAIProvider implements IAIProvider {
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
+    private prismaService: PrismaService,
   ) {
     // Inicialização assíncrona será feita no primeiro uso
     this.client = new OpenAI({ apiKey: 'sk-dummy-key-not-configured' });
@@ -37,11 +39,8 @@ export class OpenAIProvider implements IAIProvider {
     if (this.initialized) return;
 
     try {
-      // Tentar buscar do banco primeiro
-      const { PrismaService } = await import('../../../core/database/prisma.service');
-      const prisma = new PrismaService();
-
-      const providerConfig = await prisma.aIProviderConfig.findUnique({
+      // Buscar configuração do banco via PrismaService injetado
+      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'openai' },
       });
 

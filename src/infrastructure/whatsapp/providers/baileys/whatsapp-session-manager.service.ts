@@ -19,6 +19,7 @@ import { Boom } from '@hapi/boom';
 import * as path from 'path';
 import * as fs from 'fs';
 import { WhatsAppChatCacheService } from '@infrastructure/chat/whatsapp-chat-cache.service';
+import { MESSAGE_EVENTS, SESSION_EVENTS, CHAT_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * WhatsAppSessionManager
@@ -42,6 +43,12 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
   // Diretório base para autenticação (usa /tmp em produção para evitar problemas de permissão)
   private readonly BASE_AUTH_DIR =
     process.env.AUTH_SESSIONS_DIR || path.join(process.cwd(), '.auth_sessions');
+
+  // Delay (ms) antes de forçar restart das sessões ativas no startup
+  private readonly RESTART_DELAY_MS = parseInt(
+    process.env.WHATSAPP_RESTART_DELAY_MS || '5000',
+    10,
+  );
 
   // Logger compatível com Baileys
   private readonly baileysLogger: any = {
@@ -81,10 +88,10 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
     // Auto-restore active sessions on startup
     await this.restoreActiveSessions();
 
-    // Após 5 segundos, fazer force restart nas sessões ativas
+    // Após RESTART_DELAY_MS, fazer force restart nas sessões ativas
     setTimeout(async () => {
       await this.forceRestartActiveSessions();
-    }, 5000);
+    }, this.RESTART_DELAY_MS);
   }
 
   /**
@@ -260,13 +267,11 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Force restart de todas as sessões ativas
-   * Executado após delay de 5 segundos do startup
+   * Executado após delay configurável (WHATSAPP_RESTART_DELAY_MS) do startup
    */
   private async forceRestartActiveSessions(): Promise<void> {
     try {
-      this.logger.log('🔄 Starting force restart for active sessions (5s delay completed)...');
-
-      // Buscar sessões ativas
+      this.logger.log(`🔄 Starting force restart for active sessions (${this.RESTART_DELAY_MS}ms delay completed)...`);
       const activeSessions = await this.prisma.whatsAppSession.findMany({
         where: {
           isActive: true,
@@ -568,7 +573,7 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
 
         // Emitir evento para WebSocket
         this.logger.log(`📡 Emitting 'session.qr' event for session: ${sessionId}`);
-        this.eventEmitter.emit('session.qr', {
+        this.eventEmitter.emit(SESSION_EVENTS.QR, {
           sessionId,
           qr,
         });
@@ -587,7 +592,7 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
         this.currentQRCodes.delete(sessionId);
 
         // Emitir evento de desconexão
-        this.eventEmitter.emit('session.disconnected', {
+        this.eventEmitter.emit(SESSION_EVENTS.DISCONNECTED, {
           sessionId,
           reason: lastDisconnect?.error?.message || 'Unknown',
         });
@@ -654,13 +659,13 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
 
         // Emitir evento de QR code escaneado/concluído
         this.logger.log(`📱 Emitting 'session.qr.scanned' event for session: ${sessionId}`);
-        this.eventEmitter.emit('session.qr.scanned', {
+        this.eventEmitter.emit(SESSION_EVENTS.QR_SCANNED, {
           sessionId,
           success: true,
         });
 
         // Emitir evento de conexão
-        this.eventEmitter.emit('session.connected', {
+        this.eventEmitter.emit(SESSION_EVENTS.CONNECTED, {
           sessionId,
           phoneNumber: sock.user?.id,
           name: userName,
@@ -719,13 +724,13 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
         }
 
         // Emitir evento para processamento normal
-        this.eventEmitter.emit('whatsapp.message', {
+        this.eventEmitter.emit(MESSAGE_EVENTS.WHATSAPP, {
           sessionId,
           message: msg,
         });
 
         // Emitir evento de mensagem recebida para WebSocket
-        this.eventEmitter.emit('session.message.received', {
+        this.eventEmitter.emit(SESSION_EVENTS.MESSAGE_RECEIVED, {
           sessionId,
           from: msg.key.remoteJid,
           messageId: msg.key.id,
@@ -751,7 +756,7 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
         this.logger.debug(`📊 Message status updated: ${update.key.id}`);
 
         // Emitir evento de atualização de status
-        this.eventEmitter.emit('message.status.update', {
+        this.eventEmitter.emit(CHAT_EVENTS.MESSAGE_STATUS_UPDATE, {
           sessionId,
           messageId: update.key.id,
           chatId: update.key.remoteJid,

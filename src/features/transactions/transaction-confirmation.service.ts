@@ -1,9 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@core/database/prisma.service';
-import { MessageContextService } from '@infrastructure/messaging/messages/message-context.service';
-import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
+import { PlatformReplyService } from '@infrastructure/messaging/messages/platform-reply.service';
 import { TransactionConfirmation, ConfirmationStatus } from '@prisma/client';
 import { MessageSanitizerUtil } from '@core/utils/message-sanitizer.util';
 import { CreateTransactionConfirmationDto } from './dto/transaction.dto';
@@ -17,8 +15,7 @@ export class TransactionConfirmationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly contextService: MessageContextService,
+    private readonly platformReply: PlatformReplyService,
   ) {
     this.timeoutSeconds = this.configService.get<number>('CONFIRMATION_TIMEOUT_SECONDS', 300);
     this.logger.log(`⏱️  Timeout de confirmação configurado: ${this.timeoutSeconds}s`);
@@ -27,17 +24,12 @@ export class TransactionConfirmationService {
   /**
    * Helper para emitir eventos de resposta para a plataforma correta
    */
-  private emitReply(platformId: string, message: string, context: string, metadata?: any): void {
-    const messageContext = this.contextService.getContext(platformId);
-    const platform = messageContext?.platform || MessagingPlatform.WHATSAPP;
-    const eventName = platform === MessagingPlatform.TELEGRAM ? 'telegram.reply' : 'whatsapp.reply';
-
-    this.eventEmitter.emit(eventName, {
+  private async emitReply(platformId: string, message: string, context: string, metadata?: any): Promise<void> {
+    await this.platformReply.sendReply({
       platformId,
       message,
       context,
       metadata,
-      platform,
     });
   }
 
@@ -163,6 +155,7 @@ export class TransactionConfirmationService {
       where: {
         phoneNumber,
         status: ConfirmationStatus.PENDING,
+        deletedAt: null,
       },
       orderBy: {
         createdAt: 'desc',
@@ -178,6 +171,7 @@ export class TransactionConfirmationService {
       where: {
         phoneNumber,
         status: ConfirmationStatus.PENDING,
+        deletedAt: null,
         expiresAt: {
           gt: new Date(), // Apenas não expiradas
         },
@@ -196,6 +190,7 @@ export class TransactionConfirmationService {
       where: {
         phoneNumber,
         status: ConfirmationStatus.PENDING,
+        deletedAt: null,
         expiresAt: {
           gt: new Date(),
         },
@@ -211,7 +206,7 @@ export class TransactionConfirmationService {
     response: string,
   ): Promise<{
     confirmation: TransactionConfirmation | null;
-    action: 'confirmed' | 'rejected' | 'invalid' | 'list_shown';
+    action: 'confirmed' | 'rejected' | 'invalid' | 'list_shown' | 'change_category';
   }> {
     const sanitizedResponse = response.trim().toLowerCase();
 
@@ -237,6 +232,25 @@ export class TransactionConfirmationService {
       return { confirmation: null, action: 'invalid' };
     }
 
+    // Verificar se é pedido de troca de categoria
+    const sanitizedForCheck = MessageSanitizerUtil.normalize(response);
+    const isChangeRequest = [
+      'trocar',
+      'mudar',
+      'outra categoria',
+      'categoria errada',
+      'errou',
+      'categoria errado',
+      'errou categoria',
+      'mudar categoria',
+      'trocar categoria',
+      'categoria incorreta',
+    ].some((k) => sanitizedForCheck.includes(k));
+    if (isChangeRequest) {
+      this.logger.log(`🔄 Usuário pediu mudança de categoria para a confirmação: ${confirmation.id}`);
+      return { confirmation, action: 'change_category' };
+    }
+
     // Verificar resposta
     const isAffirmative = MessageSanitizerUtil.isAffirmative(response);
     const isNegative = MessageSanitizerUtil.isNegative(response);
@@ -246,7 +260,7 @@ export class TransactionConfirmationService {
       this.logger.log(`✅ Transação confirmada: ${confirmation.id}`);
 
       // Emitir evento para enviar mensagem de sucesso
-      this.emitReply(
+      await this.emitReply(
         phoneNumber,
         '✅ Transação confirmada! Estamos registrando...',
         'TRANSACTION_RESULT',
@@ -261,7 +275,7 @@ export class TransactionConfirmationService {
       this.logger.log(`❌ Transação rejeitada: ${confirmation.id}`);
 
       // Emitir evento para enviar mensagem de cancelamento
-      this.emitReply(phoneNumber, '❌ Transação cancelada.', 'TRANSACTION_RESULT', {
+      await this.emitReply(phoneNumber, '❌ Transação cancelada.', 'TRANSACTION_RESULT', {
         confirmationId: confirmation.id,
       });
 
@@ -289,7 +303,8 @@ export class TransactionConfirmationService {
       `\n*Por favor, responda:*\n` +
       `✅ *"sim"* para confirmar\n` +
       `❌ *"não"* para cancelar\n` +
-      `📋 *"lista"* para ver todas as pendentes`;
+      `� *"trocar"* para mudar a categoria\n` +
+      `�📋 *"lista"* para ver todas as pendentes`;
 
     // Verificar se há múltiplas confirmações
     const pendingCount = await this.countPendingConfirmations(phoneNumber);
@@ -297,7 +312,7 @@ export class TransactionConfirmationService {
       message += `\n\n⚠️ Você tem *${pendingCount} confirmações* pendentes. Digite *"lista"* para ver todas.`;
     }
 
-    this.emitReply(phoneNumber, message, 'CONFIRMATION_REQUEST', {
+    await this.emitReply(phoneNumber, message, 'CONFIRMATION_REQUEST', {
       confirmationId: confirmation.id,
       action: 'invalid_response_guidance',
       originalResponse: response,
@@ -313,7 +328,7 @@ export class TransactionConfirmationService {
     const confirmations = await this.getAllPendingConfirmations(phoneNumber);
 
     if (confirmations.length === 0) {
-      this.emitReply(phoneNumber, '✅ Você não tem confirmações pendentes.', 'INTENT_RESPONSE', {
+      await this.emitReply(phoneNumber, '✅ Você não tem confirmações pendentes.', 'INTENT_RESPONSE', {
         action: 'list_empty',
       });
       return;
@@ -342,7 +357,7 @@ export class TransactionConfirmationService {
       `✅ Digite *"sim"* para confirmar a mais recente\n` +
       `❌ Digite *"não"* para cancelar a mais recente`;
 
-    this.emitReply(phoneNumber, message, 'CONFIRMATION_REQUEST', {
+    await this.emitReply(phoneNumber, message, 'CONFIRMATION_REQUEST', {
       action: 'list_shown',
       count: confirmations.length,
     });
@@ -353,7 +368,7 @@ export class TransactionConfirmationService {
    */
   async confirm(confirmationId: string): Promise<TransactionConfirmation> {
     return this.prisma.transactionConfirmation.update({
-      where: { id: confirmationId },
+      where: { id: confirmationId, deletedAt: null },
       data: {
         status: ConfirmationStatus.CONFIRMED,
         confirmedAt: new Date(),
@@ -366,7 +381,7 @@ export class TransactionConfirmationService {
    */
   async reject(confirmationId: string): Promise<TransactionConfirmation> {
     return this.prisma.transactionConfirmation.update({
-      where: { id: confirmationId },
+      where: { id: confirmationId, deletedAt: null },
       data: {
         status: ConfirmationStatus.REJECTED,
       },
@@ -378,7 +393,7 @@ export class TransactionConfirmationService {
    */
   async expire(confirmationId: string): Promise<TransactionConfirmation> {
     return this.prisma.transactionConfirmation.update({
-      where: { id: confirmationId },
+      where: { id: confirmationId, deletedAt: null },
       data: {
         status: ConfirmationStatus.EXPIRED,
       },
@@ -392,6 +407,7 @@ export class TransactionConfirmationService {
     const result = await this.prisma.transactionConfirmation.updateMany({
       where: {
         status: ConfirmationStatus.PENDING,
+        deletedAt: null,
         expiresAt: {
           lt: new Date(),
         },
@@ -433,7 +449,7 @@ export class TransactionConfirmationService {
       message += `📅 *Data:* ${dateFormatted}\n`;
     }
 
-    message += `\n*Confirmar?* (sim/não)`;
+    message += `\n*Confirmar?* (sim/não/trocar)`;
 
     return message;
   }
@@ -455,6 +471,30 @@ export class TransactionConfirmationService {
   async getById(id: string): Promise<TransactionConfirmation | null> {
     return this.prisma.transactionConfirmation.findUnique({
       where: { id },
+    });
+  }
+
+  /**
+   * Atualiza a categoria de uma confirmação pendente
+   */
+  async updateCategory(
+    confirmationId: string,
+    category: string,
+    categoryId: string | null,
+    subCategoryId: string | null,
+    subCategoryName: string | null,
+  ): Promise<TransactionConfirmation> {
+    this.logger.log(
+      `🔄 Atualizando categoria da confirmação ${confirmationId}: ${category}`,
+    );
+    return this.prisma.transactionConfirmation.update({
+      where: { id: confirmationId, deletedAt: null },
+      data: {
+        category,
+        categoryId: categoryId ?? undefined,
+        subCategoryId: subCategoryId ?? undefined,
+        subCategoryName: subCategoryName ?? undefined,
+      },
     });
   }
 }

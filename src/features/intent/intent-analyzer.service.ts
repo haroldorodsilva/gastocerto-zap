@@ -1,5 +1,33 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@core/database/prisma.service';
+import {
+  GREETING_KEYWORDS,
+  HOW_ARE_YOU_KEYWORDS,
+  YES_RESPONSES,
+  NO_RESPONSES,
+  HELP_KEYWORDS,
+  BALANCE_KEYWORDS,
+  LIST_TRANSACTIONS_KEYWORDS,
+  LIST_PENDING_CONFIRMATION_KEYWORDS,
+  LIST_PENDING_PAYMENT_KEYWORDS,
+  PENDING_STANDALONE_WORDS,
+  SWITCH_ACCOUNT_KEYWORDS,
+  LIST_ACCOUNTS_KEYWORDS,
+  SHOW_ACTIVE_ACCOUNT_KEYWORDS,
+  PAY_BILL_KEYWORDS,
+  LIST_CREDIT_CARDS_KEYWORDS,
+  SET_DEFAULT_CARD_KEYWORDS,
+  SHOW_DEFAULT_CARD_KEYWORDS,
+  SHOW_DEFAULT_CARD_EXCLUSIONS,
+  LIST_INVOICES_KEYWORDS,
+  INVOICE_DETAILS_KEYWORDS,
+  PAY_INVOICE_KEYWORDS,
+  INVOICE_TRIGGER_KEYWORDS,
+  INVOICE_GENERIC_LIST_KEYWORDS,
+  TRANSACTION_VERBS,
+  CATEGORY_KEYWORDS,
+  TIME_INDICATORS,
+} from './intent-keywords';
 
 /**
  * Resultado da análise de intenção
@@ -316,26 +344,7 @@ export class IntentAnalyzerService {
     let score = 0;
 
     // Palavras-chave de transação (verbos de ação financeira)
-    const transactionVerbs = [
-      'gastei',
-      'paguei',
-      'comprei',
-      'comi',
-      'recebi',
-      'ganhei',
-      'vendi',
-      'transferi',
-      'depositei',
-      'saquei',
-      'gastar',
-      'pagar',
-      'comprar',
-      'receber',
-      'ganhar',
-      'vender',
-    ];
-
-    for (const verb of transactionVerbs) {
+    for (const verb of TRANSACTION_VERBS) {
       if (text.includes(verb)) {
         indicators.push(`verb:${verb}`);
         score += 0.35;
@@ -357,45 +366,8 @@ export class IntentAnalyzerService {
     }
 
     // Palavras-chave de categorias comuns
-    const categoryKeywords = [
-      'mercado',
-      'pararia',
-      'supermercado',
-      'alimentação',
-      'comida',
-      'restaurante',
-      'transporte',
-      'uber',
-      '99',
-      'taxi',
-      'gasolina',
-      'combustível',
-      'luz',
-      'água',
-      'internet',
-      'telefone',
-      'aluguel',
-      'farmácia',
-      'medicamento',
-      'médico',
-      'saúde',
-      'academia',
-      'lazer',
-      'cinema',
-      'salário',
-      'freelance',
-      'venda',
-      'cartão',
-      'rotativo',
-      'crédito',
-      'débito',
-      'parcelado',
-      'à vista',
-      'avista',
-    ];
-
     let hasCategory = false;
-    for (const keyword of categoryKeywords) {
+    for (const keyword of CATEGORY_KEYWORDS) {
       if (text.includes(keyword)) {
         indicators.push(`category:${keyword}`);
         score += 0.15;
@@ -411,8 +383,7 @@ export class IntentAnalyzerService {
     }
 
     // Indicadores temporais (ontem, hoje, anteontem, semana passada)
-    const timeIndicators = ['ontem', 'hoje', 'anteontem', 'semana passada', 'mês passado', 'agora'];
-    for (const time of timeIndicators) {
+    for (const time of TIME_INDICATORS) {
       if (text.includes(time)) {
         indicators.push(`time:${time}`);
         score += 0.1;
@@ -436,27 +407,7 @@ export class IntentAnalyzerService {
    * Verifica se é uma saudação
    */
   private isGreeting(text: string): boolean {
-    const greetings = [
-      '/start',
-      'oi',
-      'olá',
-      'ola',
-      'hey',
-      'opa',
-      'bom dia',
-      'boa tarde',
-      'boa noite',
-      'e aí',
-      'eai',
-      'tudo bem',
-      'como vai',
-      'como você está',
-      'tudo bom',
-      'beleza',
-      'fala aí',
-      'fala',
-    ];
-    return greetings.some((g) => text === g || text.startsWith(g + ' '));
+    return GREETING_KEYWORDS.some((g) => text === g || text.startsWith(g + ' '));
   }
 
   /**
@@ -476,12 +427,7 @@ export class IntentAnalyzerService {
     }
 
     // Detectar "tudo bem" / "como vai"
-    const isAskingHowAreYou =
-      text.includes('tudo bem') ||
-      text.includes('como vai') ||
-      text.includes('como você está') ||
-      text.includes('tudo bom') ||
-      text.includes('beleza');
+    const isAskingHowAreYou = HOW_ARE_YOU_KEYWORDS.some((k) => text.includes(k));
 
     let greeting = `${timeGreeting}! `;
 
@@ -515,120 +461,44 @@ export class IntentAnalyzerService {
    * Verifica se é um pedido de ajuda
    */
   private isHelpRequest(text: string): boolean {
-    const helpKeywords = [
-      'ajuda',
-      'help',
-      'como funciona',
-      'como usar',
-      'como faço',
-      'o que fazer',
-      'comandos',
-      'não entendi',
-      'nao entendi',
-      'e agora',
-    ];
-    return helpKeywords.some((k) => text.includes(k));
+    return HELP_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é consulta de saldo/extrato
    */
   private isBalanceCheck(text: string): boolean {
-    const balanceKeywords = [
-      'saldo',
-      'extrato',
-      'quanto gastei',
-      'quanto recebi',
-      'resumo',
-      'balanço',
-      'sobro quanto',
-      'sobrou quanto',
-      'tem dinheiro',
-      'posso gastar',
-      'meu saldo',
-      'saldo atual',
-      'quanto tenho',
-      'total gasto',
-      'total recebido',
-    ];
-    return balanceKeywords.some((k) => text.includes(k));
+    return BALANCE_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é listagem de transações
    */
   private isListTransactions(text: string): boolean {
-    const listKeywords = [
-      'minhas transações',
-      'minhas transacoes',
-      'meus gastos',
-      'minhas receitas',
-      'listar transações',
-      'listar transacoes',
-      'listar gastos',
-      'listar receitas',
-      'ver transações',
-      'ver transacoes',
-      'ver gastos',
-      'ver receitas',
-      'mostrar transações',
-      'mostrar transacoes',
-      'mostrar gastos',
-      'mostrar receitas',
-      'histórico',
-      'historico',
-    ];
-    return listKeywords.some((k) => text.includes(k));
+    return LIST_TRANSACTIONS_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é resposta de confirmação (sim/não)
    */
   private isConfirmationResponse(text: string): boolean {
-    // Respostas positivas
-    const yesResponses = [
-      'sim',
-      's',
-      'yes',
-      'confirmar',
-      'confirmo',
-      'ok',
-      'okay',
-      'pode ser',
-      'isso',
-      'exato',
-      'correto',
-      'certo',
-      'fecho',
-      'isso aí',
-      'bom demais',
-    ];
-
-    // Respostas negativas
-    const noResponses = [
-      'não',
-      'nao',
-      'n',
-      'no',
-      'cancelar',
-      'cancela',
-      'não quero',
-      'nao quero',
-      'errado',
-      'errado',
-      'deixa',
-      'deixa',
-    ];
-
     // Verifica se é uma resposta curta e direta (até 3 palavras)
     const words = text.trim().split(/\s+/);
     if (words.length > 3) {
       return false; // Mensagens longas não são confirmações simples
     }
 
+    // Verificar pedidos de troca de categoria (resposta a confirmação pendente)
+    // Palavras únicas correspondem exatamente; frases compostas usam startsWith
+    const exactMatchChanges = ['trocar', 'mudar', 'errou'];
+    const phraseChanges = ['outra categoria', 'mudar categoria', 'trocar categoria', 'categoria errada', 'categoria incorreta'];
+    if (exactMatchChanges.some((k) => text === k) || phraseChanges.some((k) => text === k || text.startsWith(k))) {
+      return true;
+    }
+
     return (
-      yesResponses.some((r) => text === r || text.startsWith(r + ' ')) ||
-      noResponses.some((r) => text === r || text.startsWith(r + ' '))
+      YES_RESPONSES.some((r) => text === r || text.startsWith(r + ' ')) ||
+      NO_RESPONSES.some((r) => text === r || text.startsWith(r + ' '))
     );
   }
 
@@ -637,22 +507,7 @@ export class IntentAnalyzerService {
    * Palavras-chave ESPECÍFICAS para evitar ambiguidade
    */
   private isListPendingRequest(text: string): boolean {
-    const listPendingKeywords = [
-      'pendente de confirmação',
-      'pendentes de confirmação',
-      'pendência de confirmação',
-      'pendências de confirmação',
-      'aguardando confirmação',
-      'falta confirmar',
-      'precisa confirmar',
-      'confirmar transação',
-      'transações para confirmar',
-      'transações pendentes de confirmação',
-      'o que está aguardando confirmação',
-      'o que precisa confirmar',
-      'minhas confirmações pendentes',
-    ];
-    return listPendingKeywords.some((k) => text.includes(k));
+    return LIST_PENDING_CONFIRMATION_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
@@ -662,42 +517,10 @@ export class IntentAnalyzerService {
    * IMPORTANTE: Este método só é chamado se isListPendingRequest() retornar false
    */
   private isListPendingPaymentsRequest(text: string): boolean {
-    const listPendingPaymentsKeywords = [
-      'contas pendentes',
-      'contas a pagar',
-      'contas abertas',
-      'contas em aberto',
-      'pagar pendentes',
-      'ver pendentes',
-      'mostrar pendentes',
-      'listar pendentes',
-      'lista pendentes',
-      'transações pendentes',
-      'transacoes pendentes',
-      'pagamentos pendentes',
-      'pendentes de pagamento',
-      'pendências de pagamento',
-      'o que tenho que pagar',
-      'o que tenho pra pagar',
-      'o que preciso pagar',
-      'o que falta pagar',
-      'minhas contas',
-      'minhas dívidas',
-      'dívidas pendentes',
-      'boletos pendentes',
-      'faturas pendentes',
-      'pendentes de recebimento',
-      'pendências de recebimento',
-      'o que tenho que receber',
-      'o que tenho pra receber',
-      'o que preciso receber',
-      'o que falta receber',
-    ];
-
     // Apenas palavra "pendentes" ou "pendente" sozinha também conta como PAGAMENTO
-    const hasPendingWord = text === 'pendentes' || text === 'pendente' || text === 'pendências';
+    const hasPendingWord = PENDING_STANDALONE_WORDS.some((w) => text === w);
 
-    return listPendingPaymentsKeywords.some((k) => text.includes(k)) || hasPendingWord;
+    return LIST_PENDING_PAYMENT_KEYWORDS.some((k) => text.includes(k)) || hasPendingWord;
   }
 
   /**
@@ -738,27 +561,19 @@ export class IntentAnalyzerService {
    * Verifica se é uma solicitação de troca de conta
    */
   private isSwitchAccountRequest(text: string): boolean {
-    const switchAccountKeywords = [
-      'mudar perfil',
-      'trocar perfil',
-      'mudar de perfil',
-      'trocar de perfil',
-      'alterar perfil',
-      'usar perfil',
-      'usar empresa',
-      'usar pessoal',
-      'selecionar perfil',
-      'escolher perfil',
-      'ativar perfil',
-    ];
-
     // Verificar padrões diretos
-    if (switchAccountKeywords.some((k) => text.includes(k))) {
+    if (SWITCH_ACCOUNT_KEYWORDS.some((k) => text.includes(k))) {
       return true;
     }
 
     // Verificar padrão "usar [nome da conta]"
-    if (text.startsWith('usar ') && text.split(' ').length >= 2) {
+    // ⚠️ Excluir "usar cartão/cartao" pois deve cair em SET_DEFAULT_CREDIT_CARD
+    if (
+      text.startsWith('usar ') &&
+      text.split(' ').length >= 2 &&
+      !text.includes('cartao') &&
+      !text.includes('cart\u00e3o')
+    ) {
       return true;
     }
 
@@ -769,122 +584,46 @@ export class IntentAnalyzerService {
    * Verifica se é uma solicitação de listagem de contas
    */
   private isListAccountsRequest(text: string): boolean {
-    const listAccountsKeywords = [
-      'meu perfil',
-      'meus perfis',
-      'listar perfil',
-      'mostrar perfil',
-      'ver perfil',
-      'quais perfil',
-      'todas perfil',
-      'lista de perfil',
-      'lista perfil',
-      'listar perfil',
-    ];
-    return listAccountsKeywords.some((k) => text.includes(k));
+    return LIST_ACCOUNTS_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para mostrar conta ativa
    */
   private isShowActiveAccountRequest(text: string): boolean {
-    const showActiveKeywords = [
-      '/conta',
-      'meu perfil',
-      'perfil',
-      'perfil atual',
-      'conta ativa',
-      'conta atual',
-      'qual conta',
-      'qual é minha conta',
-      'minha conta',
-      'conta em uso',
-    ];
-    return showActiveKeywords.some((k) => text.includes(k));
+    return SHOW_ACTIVE_ACCOUNT_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação de pagamento de fatura/conta
    */
   private isPayBillRequest(text: string): boolean {
-    const payBillKeywords = [
-      'pagar fatura',
-      'pagar conta',
-      'quitar fatura',
-      'quitar conta',
-      'pagamento de fatura',
-      'pagamento da fatura',
-      'pagar cartão',
-      'quitar cartão',
-    ];
-    return payBillKeywords.some((k) => text.includes(k));
+    return PAY_BILL_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para listar cartões de crédito
    */
   private isListCreditCardsRequest(text: string): boolean {
-    const listCardsKeywords = [
-      'meus cartões',
-      'meus cartoes',
-      'listar cartões',
-      'listar cartoes',
-      'ver cartões',
-      'ver cartoes',
-      'mostrar cartões',
-      'mostrar cartoes',
-      'quais cartões',
-      'quais cartoes',
-      'cartões de crédito',
-      'cartoes de credito',
-      'lista de cartões',
-      'lista de cartoes',
-    ];
-    return listCardsKeywords.some((k) => text.includes(k));
+    return LIST_CREDIT_CARDS_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para definir cartão padrão
    */
   private isSetDefaultCreditCardRequest(text: string): boolean {
-    const setCardKeywords = [
-      'usar cartao',
-      'usar cartão',
-      'definir cartao',
-      'definir cartão',
-      'trocar cartao',
-      'trocar cartão',
-      'mudar cartao',
-      'mudar cartão',
-      'cartao padrao',
-      'cartão padrão',
-      'cartao default',
-      'cartão default',
-    ];
-    return setCardKeywords.some((k) => text.includes(k));
+    return SET_DEFAULT_CARD_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para ver cartão padrão
    */
   private isShowDefaultCreditCardRequest(text: string): boolean {
-    const showCardKeywords = [
-      'qual cartao',
-      'qual cartão',
-      'cartao atual',
-      'cartão atual',
-      'cartao ativo',
-      'cartão ativo',
-      'cartao padrao',
-      'cartão padrão',
-      'meu cartao',
-      'meu cartão',
-    ];
     // Evitar match com "qual cartao pagar" ou "qual cartao usar"
-    if (text.includes('pagar') || text.includes('usar') || text.includes('trocar')) {
+    if (SHOW_DEFAULT_CARD_EXCLUSIONS.some((e) => text.includes(e))) {
       return false;
     }
-    return showCardKeywords.some((k) => text.includes(k));
+    return SHOW_DEFAULT_CARD_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
@@ -892,19 +631,15 @@ export class IntentAnalyzerService {
    * Ex: "ver fatura nubank", "fatura itau", "fatura do inter"
    */
   private isShowInvoiceByCardNameRequest(text: string): boolean {
-    const invoiceKeywords = ['fatura', 'faturas'];
-    const hasInvoiceKeyword = invoiceKeywords.some((k) => text.includes(k));
+    const hasInvoiceKeyword = INVOICE_TRIGGER_KEYWORDS.some((k) => text.includes(k));
 
     // Verificar se não é comando de lista genérica
     const isGenericList =
-      text.includes('minhas faturas') ||
-      text.includes('listar faturas') ||
-      text.includes('todas as faturas') ||
+      INVOICE_GENERIC_LIST_KEYWORDS.some((k) => text.includes(k)) ||
       /ver fatura \d/.test(text) || // "ver fatura 1"
       /pagar fatura \d/.test(text); // "pagar fatura 1"
 
     // Se tem "fatura" mas não é lista genérica, pode ser busca por nome
-    // Ex: "fatura nubank", "ver fatura itau", "fatura do inter"
     return hasInvoiceKeyword && !isGenericList && text.length > 6;
   }
 
@@ -912,61 +647,21 @@ export class IntentAnalyzerService {
    * Verifica se é uma solicitação para listar faturas de cartão
    */
   private isListInvoicesRequest(text: string): boolean {
-    const listInvoicesKeywords = [
-      'minhas faturas',
-      'listar faturas',
-      'ver faturas',
-      'mostrar faturas',
-      'faturas do cartão',
-      'faturas do cartao',
-      'fatura do cartão',
-      'fatura do cartao',
-      'fatura pendente',
-      'faturas pendentes',
-      'quanto tenho de cartão',
-      'quanto tenho de cartao',
-      'quanto devo no cartão',
-      'quanto devo no cartao',
-      'minha fatura',
-      'quanto é a fatura',
-      'quanto é minha fatura',
-    ];
-    return listInvoicesKeywords.some((k) => text.includes(k));
+    return LIST_INVOICES_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para ver detalhes de uma fatura
    */
   private isShowInvoiceDetailsRequest(text: string): boolean {
-    const invoiceDetailsKeywords = [
-      'detalhes da fatura',
-      'ver fatura',
-      'listar fatura',
-      'faturas',
-      'mostrar fatura',
-      'o que tem na fatura',
-      'o que tem dentro da fatura',
-      'itens da fatura',
-      'gastos da fatura',
-    ];
-    return invoiceDetailsKeywords.some((k) => text.includes(k));
+    return INVOICE_DETAILS_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**
    * Verifica se é uma solicitação para pagar fatura de cartão (invoice)
    */
   private isPayInvoiceRequest(text: string): boolean {
-    const payInvoiceKeywords = [
-      'pagar invoice',
-      'quitar invoice',
-      'pagar fatura de cartão',
-      'pagar fatura de cartao',
-      'quitar fatura de cartão',
-      'quitar fatura de cartao',
-      'pagar fatura do cartão',
-      'pagar fatura do cartao',
-    ];
-    return payInvoiceKeywords.some((k) => text.includes(k));
+    return PAY_INVOICE_KEYWORDS.some((k) => text.includes(k));
   }
 
   /**

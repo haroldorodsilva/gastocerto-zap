@@ -11,6 +11,7 @@ import { SessionStatus } from '@prisma/client';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as qrcode from 'qrcode-terminal';
+import { SESSION_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * Implementação SIMPLES do WhatsApp integrada com a API
@@ -33,13 +34,27 @@ const baileysLogger: any = {
   child: () => baileysLogger,
 };
 
-// Variável global para armazenar o socket (para envio de mensagens)
-let globalSocket: WASocket | null = null;
+/**
+ * Encapsula todo o estado mutável do WhatsApp simples.
+ * Substitui variáveis globais soltas para melhorar testabilidade e lifecycle.
+ */
+export class WhatsAppSocketState {
+  socket: WASocket | null = null;
+  messageHandler: any = null;
+  prisma: any = null;
+  eventEmitter: any = null;
 
-// Event emitter para integração com o sistema
-let internalMessageHandler: any = null;
-let prismaService: any = null;
-let eventEmitter: any = null;
+  reset(): void {
+    this.socket = null;
+    this.messageHandler = null;
+    this.prisma = null;
+    this.eventEmitter = null;
+  }
+}
+
+/** Singleton do estado — importado pelo WhatsAppIntegrationService e testes */
+export const whatsAppState = new WhatsAppSocketState();
+
 const SESSION_ID: string = 'whatsapp-simple-session';
 const TEST_PHONE_NUMBER = process.env.TEST_PHONE_NUMBER || '';
 
@@ -50,9 +65,9 @@ const AUTH_DIR = path.join(process.cwd(), '.auth_info');
  * Configura os serviços necessários para integração
  */
 export function setupWhatsAppIntegration(handler: any, prisma: any, emitter?: any) {
-  internalMessageHandler = handler;
-  prismaService = prisma;
-  eventEmitter = emitter;
+  whatsAppState.messageHandler = handler;
+  whatsAppState.prisma = prisma;
+  whatsAppState.eventEmitter = emitter;
   logger.log('✅ Integração configurada com handler e Prisma');
 }
 
@@ -60,13 +75,13 @@ export function setupWhatsAppIntegration(handler: any, prisma: any, emitter?: an
  * Verifica se a sessão está ativa no banco de dados
  */
 async function isSessionActive(): Promise<boolean> {
-  if (!prismaService) {
+  if (!whatsAppState.prisma) {
     logger.warn('⚠️  PrismaService não disponível para verificar sessão');
     return false;
   }
 
   try {
-    const session = await prismaService.whatsAppSession.findUnique({
+    const session = await whatsAppState.prisma.whatsAppSession.findUnique({
       where: { sessionId: SESSION_ID },
       select: { isActive: true },
     });
@@ -88,7 +103,7 @@ async function isSessionActive(): Promise<boolean> {
  * Envia mensagem via WhatsApp
  */
 export async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
-  if (!globalSocket) {
+  if (!whatsAppState.socket) {
     logger.error('❌ Socket não disponível para envio');
     return false;
   }
@@ -97,7 +112,7 @@ export async function sendWhatsAppMessage(to: string, text: string): Promise<boo
     // Formatar número no padrão do WhatsApp
     const jid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
 
-    await globalSocket.sendMessage(jid, { text });
+    await whatsAppState.socket.sendMessage(jid, { text });
     logger.log(`✅ Mensagem enviada para ${to}`);
     return true;
   } catch (error) {
@@ -110,19 +125,19 @@ export async function sendWhatsAppMessage(to: string, text: string): Promise<boo
  * Para a conexão do WhatsApp
  */
 export async function stopWhatsAppConnection(): Promise<void> {
-  if (!globalSocket) {
+  if (!whatsAppState.socket) {
     logger.warn('⚠️  Socket não está conectado');
     return;
   }
 
   try {
     logger.log('🛑 Encerrando conexão do WhatsApp...');
-    await globalSocket.logout();
-    globalSocket = null;
+    await whatsAppState.socket.logout();
+    whatsAppState.socket = null;
     logger.log('✅ Conexão encerrada com sucesso');
   } catch (error) {
     logger.error('❌ Erro ao encerrar conexão:', error.message);
-    globalSocket = null;
+    whatsAppState.socket = null;
   }
 }
 
@@ -130,18 +145,18 @@ export async function stopWhatsAppConnection(): Promise<void> {
  * Salva sessão no banco de dados
  */
 async function saveSessionToDatabase(userId: string, name: string, status: SessionStatus) {
-  if (!prismaService) {
+  if (!whatsAppState.prisma) {
     logger.warn('⚠️ Prisma não disponível, não é possível salvar sessão');
     return;
   }
 
   try {
-    const existingSession = await prismaService.whatsAppSession.findUnique({
+    const existingSession = await whatsAppState.prisma.whatsAppSession.findUnique({
       where: { sessionId: SESSION_ID },
     });
 
     if (existingSession) {
-      await prismaService.whatsAppSession.update({
+      await whatsAppState.prisma.whatsAppSession.update({
         where: { sessionId: SESSION_ID },
         data: {
           status,
@@ -151,7 +166,7 @@ async function saveSessionToDatabase(userId: string, name: string, status: Sessi
       });
       logger.log(`✅ Sessão ${SESSION_ID} atualizada no banco`);
     } else {
-      await prismaService.whatsAppSession.create({
+      await whatsAppState.prisma.whatsAppSession.create({
         data: {
           sessionId: SESSION_ID,
           name: name || 'WhatsApp Simple',
@@ -221,8 +236,8 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
       printQRInTerminal: false, // Desabilitar QR automático (já fazemos manual)
     });
 
-    // Armazenar socket global para envio de mensagens
-    globalSocket = sock;
+    // Armazenar socket no state holder para envio de mensagens
+    whatsAppState.socket = sock;
 
     // Keep-alive: Mostrar que o app está ativo a cada 30 segundos
     setInterval(() => {
@@ -252,8 +267,8 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
         logger.log('='.repeat(80) + '\n');
 
         // 📡 Emitir evento para WebSocket
-        if (eventEmitter) {
-          eventEmitter.emit('session.qr', {
+        if (whatsAppState.eventEmitter) {
+          whatsAppState.eventEmitter.emit(SESSION_EVENTS.QR, {
             sessionId: SESSION_ID,
             qr: qr,
           });
@@ -270,8 +285,8 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
         logger.warn(`Reason: ${lastDisconnect?.error?.message || 'Unknown'}`);
 
         // 📡 Emitir evento de desconexão
-        if (eventEmitter) {
-          eventEmitter.emit('session.disconnected', {
+        if (whatsAppState.eventEmitter) {
+          whatsAppState.eventEmitter.emit(SESSION_EVENTS.DISCONNECTED, {
             sessionId: SESSION_ID,
             reason: lastDisconnect?.error?.message || 'Unknown',
           });
@@ -300,8 +315,8 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
         }
 
         // 📡 Emitir evento de conexão
-        if (eventEmitter) {
-          eventEmitter.emit('session.connected', {
+        if (whatsAppState.eventEmitter) {
+          whatsAppState.eventEmitter.emit(SESSION_EVENTS.CONNECTED, {
             sessionId: SESSION_ID,
             phoneNumber: sock.user?.id,
             name: sock.user?.name,
@@ -393,7 +408,7 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
         }
 
         // ✨ INTEGRAÇÃO COM O SISTEMA EXISTENTE - Enviar para processamento
-        if (internalMessageHandler && msg.key.remoteJid && !msg.key.fromMe) {
+        if (whatsAppState.messageHandler && msg.key.remoteJid && !msg.key.fromMe) {
           try {
             // Filtrar por número de teste se configurado
             if (TEST_PHONE_NUMBER) {
@@ -410,7 +425,7 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
             logger.log(`🔄 Processando mensagem através do handler...`);
 
             // Emitir evento para o sistema processar
-            await internalMessageHandler.handleIncomingMessage({
+            await whatsAppState.messageHandler.handleIncomingMessage({
               sessionId: SESSION_ID,
               message: msg,
             });

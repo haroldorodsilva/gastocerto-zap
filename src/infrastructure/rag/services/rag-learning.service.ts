@@ -3,6 +3,8 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
 import { Cache } from 'cache-manager';
 import { RAGService } from './rag.service';
+import { UserSynonymService } from './user-synonym.service';
+import { TextProcessingService } from './text-processing.service';
 
 /**
  * RAGLearningService
@@ -26,6 +28,8 @@ export class RAGLearningService {
   constructor(
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly ragService: RAGService,
+    private readonly userSynonymService: UserSynonymService,
+    private readonly textProcessingService: TextProcessingService,
   ) {}
 
   /**
@@ -108,7 +112,7 @@ export class RAGLearningService {
       );
 
       // 2. Verificar se já tem sinônimo aprendido
-      const existingSynonym = await this.ragService.hasUserSynonym(userId, detection.detectedTerm);
+      const existingSynonym = await this.userSynonymService.hasUserSynonym(userId, detection.detectedTerm);
 
       if (existingSynonym.hasSynonym) {
         this.logger.log(
@@ -228,7 +232,7 @@ export class RAGLearningService {
           `Agora vou registrar sua transação... ⏳`;
       } else {
         // Categoria específica - aprender
-        await this.ragService.confirmAndLearn({
+        await this.userSynonymService.confirmAndLearn({
           userId,
           originalTerm: context.detectedTerm,
           confirmedCategoryId: context.suggestedCategoryId,
@@ -364,7 +368,7 @@ export class RAGLearningService {
           const originalText = context.originalText; // Salvar antes de limpar
 
           // Salvar correção
-          await this.ragService.rejectAndCorrect({
+          await this.userSynonymService.rejectAndCorrect({
             userId,
             originalTerm: context.detectedTerm,
             rejectedCategoryId: context.suggestedCategoryId,
@@ -464,7 +468,7 @@ export class RAGLearningService {
         const match = matches[0];
         const originalText = context.originalText; // Salvar antes de limpar
         
-        await this.ragService.rejectAndCorrect({
+        await this.userSynonymService.rejectAndCorrect({
           userId,
           originalTerm: context.detectedTerm,
           rejectedCategoryId: context.suggestedCategoryId,
@@ -590,7 +594,7 @@ export class RAGLearningService {
    */
   private extractMainTerm(text: string): string | null {
     this.logger.debug(`🔍 [extractMainTerm] Delegando para RAGService: "${text}"`);
-    return this.ragService.extractMainTermFromText(text);
+    return this.textProcessingService.extractMainTermFromText(text);
   }
 
   /**

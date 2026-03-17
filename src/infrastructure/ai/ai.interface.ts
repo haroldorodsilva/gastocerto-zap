@@ -73,6 +73,7 @@ export interface TransactionData {
   installmentNumber?: number;
   installmentValueType?: 'INSTALLMENT_VALUE' | 'GROSS_VALUE';
   creditCardId?: string;
+  creditCardName?: string; // Nome do cartão usado
   paymentStatus?: 'PENDING' | 'DONE';
   invoiceMonth?: string; // Mês da fatura (YYYY-MM)
 }

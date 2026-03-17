@@ -1,5 +1,6 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
+import { RedisService } from '@common/services/redis.service';
 
 /**
  * Contexto de uma conversa ativa
@@ -20,7 +21,12 @@ export interface MessageContext {
 }
 
 /**
- * Serviço que mantém o contexto de conversas ativas
+ * Redis key prefix para contextos
+ */
+const CONTEXT_PREFIX = 'msg_ctx:';
+
+/**
+ * Serviço que mantém o contexto de conversas ativas via Redis.
  *
  * Garante que mensagens sejam roteadas para a plataforma correta:
  * - Se mensagem veio do Telegram → resposta volta para Telegram
@@ -29,30 +35,18 @@ export interface MessageContext {
  * O contexto é indexado por `platformId`:
  * - Telegram: chatId (ex: "707624962")
  * - WhatsApp: phoneNumber@s.whatsapp.net (ex: "5566996285154@s.whatsapp.net")
+ *
+ * Persistido no Redis — sobrevive a restarts e funciona em multi-instância.
  */
 @Injectable()
-export class MessageContextService {
+export class MessageContextService implements OnModuleDestroy {
   private readonly logger = new Logger(MessageContextService.name);
 
-  // Cache: platformId -> MessageContext
-  private readonly contexts = new Map<string, MessageContext>();
+  // TTL padrão: 1 hora (em segundos para Redis)
+  private readonly DEFAULT_TTL_SECONDS = 60 * 60;
 
-  // TTL padrão: 1 hora
-  private readonly DEFAULT_TTL = 60 * 60 * 1000;
-
-  // Limpeza automática a cada 5 minutos
-  private readonly cleanupInterval: NodeJS.Timeout;
-
-  constructor() {
-    // Iniciar limpeza automática
-    this.cleanupInterval = setInterval(
-      () => {
-        this.cleanExpiredContexts();
-      },
-      5 * 60 * 1000,
-    );
-
-    this.logger.log('✅ MessageContextService inicializado');
+  constructor(private readonly redisService: RedisService) {
+    this.logger.log('✅ MessageContextService inicializado (Redis-backed)');
   }
 
   /**
@@ -64,13 +58,13 @@ export class MessageContextService {
    * @param userId - gastoCertoId do usuário (opcional, para rastreabilidade)
    * @param phoneNumber - Telefone normalizado (opcional, para logs)
    */
-  registerContext(
+  async registerContext(
     platformId: string,
     sessionId: string,
     platform: MessagingPlatform,
     userId?: string,
     phoneNumber?: string,
-  ): void {
+  ): Promise<void> {
     const now = Date.now();
     const context: MessageContext = {
       sessionId,
@@ -78,17 +72,27 @@ export class MessageContextService {
       userId,
       phoneNumber,
       lastActivity: now,
-      expiresAt: now + this.DEFAULT_TTL,
+      expiresAt: now + this.DEFAULT_TTL_SECONDS * 1000,
     };
 
-    this.contexts.set(platformId, context);
+    try {
+      if (!this.redisService.isReady()) {
+        this.logger.warn('⚠️ Redis não disponível — contexto não será persistido');
+        return;
+      }
 
-    this.logger.debug(
-      `📝 Contexto registrado: ${platformId} → [${platform}] ${sessionId}` +
-        (userId ? ` | userId: ${userId}` : '') +
-        (phoneNumber ? ` | phone: ${phoneNumber}` : '') +
-        ` (expires: ${new Date(context.expiresAt).toISOString()})`,
-    );
+      const key = `${CONTEXT_PREFIX}${platformId}`;
+      const client = this.redisService.getClient();
+      await client.set(key, JSON.stringify(context), 'EX', this.DEFAULT_TTL_SECONDS);
+
+      this.logger.debug(
+        `📝 Contexto registrado: ${platformId} → [${platform}] ${sessionId}` +
+          (userId ? ` | userId: ${userId}` : '') +
+          (phoneNumber ? ` | phone: ${phoneNumber}` : ''),
+      );
+    } catch (error) {
+      this.logger.error(`❌ Erro ao registrar contexto: ${error.message}`);
+    }
   }
 
   /**
@@ -96,112 +100,135 @@ export class MessageContextService {
    *
    * @returns MessageContext se encontrado e válido, null caso contrário
    */
-  getContext(platformId: string): MessageContext | null {
-    const context = this.contexts.get(platformId);
+  async getContext(platformId: string): Promise<MessageContext | null> {
+    try {
+      if (!this.redisService.isReady()) {
+        this.logger.warn('⚠️ Redis não disponível — contexto não encontrado');
+        return null;
+      }
 
-    if (!context) {
-      this.logger.debug(`❌ Contexto não encontrado: ${platformId}`);
+      const key = `${CONTEXT_PREFIX}${platformId}`;
+      const client = this.redisService.getClient();
+      const raw = await client.get(key);
+
+      if (!raw) {
+        this.logger.debug(`❌ Contexto não encontrado: ${platformId}`);
+        return null;
+      }
+
+      const context: MessageContext = JSON.parse(raw);
+
+      // Atualizar lastActivity e renovar TTL
+      context.lastActivity = Date.now();
+      await client.set(key, JSON.stringify(context), 'EX', this.DEFAULT_TTL_SECONDS);
+
+      this.logger.debug(
+        `✅ Contexto encontrado: ${platformId} → [${context.platform}] ${context.sessionId}`,
+      );
+
+      return context;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao obter contexto: ${error.message}`);
       return null;
     }
-
-    // Verificar se expirou
-    if (context.expiresAt < Date.now()) {
-      this.logger.debug(`⏰ Contexto expirado: ${platformId}`);
-      this.contexts.delete(platformId);
-      return null;
-    }
-
-    // Atualizar lastActivity
-    context.lastActivity = Date.now();
-
-    this.logger.debug(
-      `✅ Contexto encontrado: ${platformId} → [${context.platform}] ${context.sessionId}`,
-    );
-
-    return context;
   }
 
   /**
    * Atualiza TTL de um contexto (renova expiração)
    */
-  renewContext(platformId: string, ttl?: number): boolean {
-    const context = this.contexts.get(platformId);
+  async renewContext(platformId: string, ttlSeconds?: number): Promise<boolean> {
+    try {
+      if (!this.redisService.isReady()) return false;
 
-    if (!context) {
+      const key = `${CONTEXT_PREFIX}${platformId}`;
+      const client = this.redisService.getClient();
+      const raw = await client.get(key);
+
+      if (!raw) return false;
+
+      const context: MessageContext = JSON.parse(raw);
+      const ttl = ttlSeconds || this.DEFAULT_TTL_SECONDS;
+      context.lastActivity = Date.now();
+      context.expiresAt = Date.now() + ttl * 1000;
+
+      await client.set(key, JSON.stringify(context), 'EX', ttl);
+
+      this.logger.debug(
+        `🔄 Contexto renovado: ${platformId} (TTL: ${ttl}s)`,
+      );
+
+      return true;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao renovar contexto: ${error.message}`);
       return false;
     }
-
-    const now = Date.now();
-    context.lastActivity = now;
-    context.expiresAt = now + (ttl || this.DEFAULT_TTL);
-
-    this.logger.debug(
-      `🔄 Contexto renovado: ${platformId} (expires: ${new Date(context.expiresAt).toISOString()})`,
-    );
-
-    return true;
   }
 
   /**
    * Remove contexto manualmente
    */
-  removeContext(platformId: string): boolean {
-    const deleted = this.contexts.delete(platformId);
+  async removeContext(platformId: string): Promise<boolean> {
+    try {
+      if (!this.redisService.isReady()) return false;
 
-    if (deleted) {
-      this.logger.debug(`🗑️  Contexto removido: ${platformId}`);
-    }
+      const key = `${CONTEXT_PREFIX}${platformId}`;
+      const client = this.redisService.getClient();
+      const deleted = await client.del(key);
 
-    return deleted;
-  }
-
-  /**
-   * Limpa contextos expirados automaticamente
-   */
-  private cleanExpiredContexts(): void {
-    const now = Date.now();
-    let cleaned = 0;
-
-    for (const [platformId, context] of this.contexts.entries()) {
-      if (context.expiresAt < now) {
-        this.contexts.delete(platformId);
-        cleaned++;
+      if (deleted > 0) {
+        this.logger.debug(`🗑️  Contexto removido: ${platformId}`);
       }
-    }
 
-    if (cleaned > 0) {
-      this.logger.log(`🧹 Limpeza automática: ${cleaned} contexto(s) expirado(s) removido(s)`);
+      return deleted > 0;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao remover contexto: ${error.message}`);
+      return false;
     }
   }
 
   /**
    * Retorna estatísticas do serviço
    */
-  getStats(): {
+  async getStats(): Promise<{
     totalContexts: number;
     byPlatform: Record<string, number>;
     oldestContext: Date | null;
     newestContext: Date | null;
-  } {
+  }> {
     const byPlatform: Record<string, number> = {};
     let oldest: number | null = null;
     let newest: number | null = null;
+    let totalContexts = 0;
 
-    for (const context of this.contexts.values()) {
-      // Contar por plataforma
-      byPlatform[context.platform] = (byPlatform[context.platform] || 0) + 1;
+    try {
+      if (!this.redisService.isReady()) {
+        return { totalContexts: 0, byPlatform, oldestContext: null, newestContext: null };
+      }
 
-      // Rastrear mais antigo/mais novo
-      if (oldest === null || context.lastActivity < oldest) {
-        oldest = context.lastActivity;
+      const client = this.redisService.getClient();
+      const keys = await client.keys(`${CONTEXT_PREFIX}*`);
+      totalContexts = keys.length;
+
+      // Sample up to 100 keys for stats (avoid scanning all in large deployments)
+      const sampleKeys = keys.slice(0, 100);
+      if (sampleKeys.length > 0) {
+        const values = await client.mget(...sampleKeys);
+        for (const raw of values) {
+          if (!raw) continue;
+          try {
+            const context: MessageContext = JSON.parse(raw);
+            byPlatform[context.platform] = (byPlatform[context.platform] || 0) + 1;
+            if (oldest === null || context.lastActivity < oldest) oldest = context.lastActivity;
+            if (newest === null || context.lastActivity > newest) newest = context.lastActivity;
+          } catch { /* skip malformed */ }
+        }
       }
-      if (newest === null || context.lastActivity > newest) {
-        newest = context.lastActivity;
-      }
+    } catch (error) {
+      this.logger.error(`❌ Erro ao obter stats: ${error.message}`);
     }
 
     return {
-      totalContexts: this.contexts.size,
+      totalContexts,
       byPlatform,
       oldestContext: oldest ? new Date(oldest) : null,
       newestContext: newest ? new Date(newest) : null,
@@ -212,8 +239,8 @@ export class MessageContextService {
    * Envia mensagem para o usuário na plataforma correta
    */
   async sendMessage(platformId: string, message: string): Promise<boolean> {
-    const context = this.getContext(platformId);
-    
+    const context = await this.getContext(platformId);
+
     if (!context) {
       this.logger.warn(`⚠️ Tentativa de enviar mensagem sem contexto: ${platformId}`);
       return false;
@@ -228,7 +255,7 @@ export class MessageContextService {
         this.logger.warn(`⚠️ Envio de mensagens Telegram ainda não implementado`);
         return false;
       }
-      
+
       this.logger.warn(`⚠️ Plataforma desconhecida: ${context.platform}`);
       return false;
     } catch (error) {
@@ -241,9 +268,6 @@ export class MessageContextService {
    * Cleanup ao destruir o serviço
    */
   onModuleDestroy(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-    }
     this.logger.log('🛑 MessageContextService destruído');
   }
 }

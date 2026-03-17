@@ -5,11 +5,13 @@ import { JwtValidationService } from '@common/services/jwt-validation.service';
 /**
  * Controller para testes de autenticação JWT
  * APENAS para desenvolvimento/debug
+ * ⚠️ Desabilitado em produção automaticamente
  */
 @ApiTags('Auth Test')
 @Controller('auth-test')
 export class AuthTestController {
   private readonly logger = new Logger(AuthTestController.name);
+  private readonly isProduction = process.env.NODE_ENV === 'production';
 
   constructor(private readonly jwtValidationService: JwtValidationService) {}
 
@@ -24,6 +26,10 @@ export class AuthTestController {
     required: true,
   })
   async validateToken(@Query('token') token: string) {
+    if (this.isProduction) {
+      return { error: 'Endpoint disabled in production' };
+    }
+
     this.logger.log(`[Auth Test] Validating token...`);
 
     try {
@@ -74,6 +80,10 @@ export class AuthTestController {
     description: 'Mostra configuração de autenticação e conectividade',
   })
   async health() {
+    if (this.isProduction) {
+      return { error: 'Endpoint disabled in production' };
+    }
+
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),

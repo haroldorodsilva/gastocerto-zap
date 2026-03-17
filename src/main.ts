@@ -6,6 +6,8 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
+import { ErrorResponseInterceptor } from './common/interceptors/error-response.interceptor';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 /**
  * Resolve a lista de origens CORS permitidas a partir de CORS_ORIGINS (env).
@@ -37,8 +39,14 @@ async function bootstrap() {
   // 📦 Gzip compression
   app.use(compression());
 
-  // � Correlation ID para rastreabilidade
+  // 🔗 Correlation ID para rastreabilidade
   app.useGlobalInterceptors(new CorrelationIdInterceptor());
+
+  // 🗺️ Rota no retorno de erros de controller (success: false → adiciona route)
+  app.useGlobalInterceptors(new ErrorResponseInterceptor());
+
+  // 🛡️ Filtro global de exceções (respostas padronizadas, sem stack trace)
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   // �🔥 HABILITAR GRACEFUL SHUTDOWN
   // enableShutdownHooks() já registra os listeners de SIGTERM/SIGINT internamente

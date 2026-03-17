@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
+import { OnEvent } from '@nestjs/event-emitter';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { MessageFilterService } from '../message-filter.service';
 import { MessageContextService } from '../message-context.service';
+import { PlatformReplyService } from '../platform-reply.service';
 import { OnboardingService } from '@features/onboarding/onboarding.service';
 import { UserCacheService } from '@features/users/user-cache.service';
 import { UserRateLimiterService } from '@common/services/user-rate-limiter.service';
@@ -15,6 +16,7 @@ import {
   ValidationAction,
 } from '@features/messages/message-validation.service';
 import { TransactionsService } from '@features/transactions/transactions.service';
+import { MESSAGE_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * WhatsAppMessageHandler
@@ -34,12 +36,12 @@ export class WhatsAppMessageHandler {
   constructor(
     private readonly messageFilter: MessageFilterService,
     private readonly contextService: MessageContextService,
+    private readonly platformReply: PlatformReplyService,
     private readonly onboardingService: OnboardingService,
     private readonly transactionsService: TransactionsService,
     private readonly userCacheService: UserCacheService,
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
-    private readonly eventEmitter: EventEmitter2,
     private readonly messageValidation: MessageValidationService,
     @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
     @InjectQueue('transaction-confirmation') private readonly transactionQueue: Queue,
@@ -49,7 +51,7 @@ export class WhatsAppMessageHandler {
    * Escuta evento whatsapp.message emitido pelo SessionManager (Baileys/WhatsApp)
    * Processa mensagem e roteia para fila de processamento
    */
-  @OnEvent('whatsapp.message')
+  @OnEvent(MESSAGE_EVENTS.WHATSAPP)
   async handleIncomingMessage(payload: { sessionId: string; message: any }): Promise<void> {
     const { sessionId, message } = payload;
 
@@ -118,7 +120,7 @@ export class WhatsAppMessageHandler {
       const userId = user?.gastoCertoId;
 
       // ✨ Registrar contexto de WhatsApp para roteamento de respostas
-      this.contextService.registerContext(
+      await this.contextService.registerContext(
         phoneNumber,
         sessionId,
         MessagingPlatform.WHATSAPP,
@@ -168,9 +170,23 @@ export class WhatsAppMessageHandler {
       // ✨ NOVO: Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
 
-      // 🔄 SINCRONIZAÇÃO: Verificar se precisa sincronizar status (1h)
-      if (validation.user && this.userCacheService.needsSync(validation.user)) {
-        this.logger.log(`⏰ [WhatsApp] Syncing subscription status for ${phoneNumber}`);
+      // 🔄 SINCRONIZAÇÃO: Forçar sync se timer expirou OU se assinatura/canUseGastoZap está inativa
+      // (mesmo comportamento do WebChat — atualiza cache desatualizado imediatamente)
+      const needsSubscriptionSync =
+        validation.user &&
+        (
+          this.userCacheService.needsSync(validation.user) ||
+          !validation.user.canUseGastoZap ||
+          !validation.user.hasActiveSubscription
+        );
+
+      if (needsSubscriptionSync && validation.user) {
+        const syncReason = !validation.user.canUseGastoZap
+          ? 'canUseGastoZap=false'
+          : !validation.user.hasActiveSubscription
+          ? 'hasActiveSubscription=false'
+          : 'timer expirado';
+        this.logger.log(`⏰ [WhatsApp] Sincronizando assinatura para ${phoneNumber} (motivo: ${syncReason})`);
         await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
 
         // Revalidar usuário com dados atualizados
@@ -179,10 +195,21 @@ export class WhatsAppMessageHandler {
           'whatsapp',
         );
 
-        // Se agora não pode usar, bloquear
-        if (updatedValidation.action === ValidationAction.NO_SUBSCRIPTION) {
-          this.logger.warn(`[WhatsApp] 💳 User ${phoneNumber} subscription expired`);
-          this.sendMessage(phoneNumber, updatedValidation.message!);
+        // Se ainda não pode usar, bloquear — verifica action E flags diretamente
+        // (cobre casos onde a chave de cache não foi totalmente atualizada pelo sync)
+        const blockedAfterSync =
+          updatedValidation.action === ValidationAction.NO_SUBSCRIPTION ||
+          !updatedValidation.user?.canUseGastoZap ||
+          !updatedValidation.user?.hasActiveSubscription;
+
+        if (blockedAfterSync) {
+          this.logger.warn(`[WhatsApp] 💳 Acesso negado após sync: ${phoneNumber} (hasActiveSubscription=${updatedValidation.user?.hasActiveSubscription}, canUseGastoZap=${updatedValidation.user?.canUseGastoZap})`);
+          this.sendMessage(
+            phoneNumber,
+            updatedValidation.user?.hasActiveSubscription
+              ? '💳 Seu plano atual não inclui o GastoZap. Faça upgrade para usar esse recurso.'
+              : '💳 Sua assinatura não está ativa. Renove para continuar usando o serviço.',
+          );
           return;
         }
       }
@@ -387,7 +414,7 @@ export class WhatsAppMessageHandler {
   private sendMessage(phoneNumber: string, message: string): void {
     this.logger.debug(`📤 Enviando mensagem para ${phoneNumber}`);
 
-    this.eventEmitter.emit('whatsapp.reply', {
+    this.platformReply.sendReply({
       platformId: phoneNumber,
       message,
       context: 'ERROR',
@@ -408,6 +435,7 @@ export class WhatsAppMessageHandler {
         where: {
           phoneNumber,
           status: 'PENDING',
+          deletedAt: null,
           createdAt: {
             gte: new Date(Date.now() - 5 * 60 * 1000), // 5 minutos
           },

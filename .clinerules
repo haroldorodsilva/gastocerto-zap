@@ -21,8 +21,7 @@ src/
 ├── common/                 # Guards, decorators, services globais
 ├── core/                   # Database (Prisma), config base
 ├── features/               # Módulos de negócio
-│   ├── admin/             # Admin API endpoints
-│   ├── admin-controllers/ # Controladores específicos (RAG, etc)
+│   ├── admin/             # Admin API endpoints + controllers (RAG, users, AI config, etc)
 │   ├── intent/            # NLP intent analyzer
 │   ├── messages/          # Validação de mensagens
 │   ├── onboarding/        # Cadastro de novos usuários
