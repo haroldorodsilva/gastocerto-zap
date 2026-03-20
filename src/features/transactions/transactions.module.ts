@@ -78,7 +78,7 @@ const INTENT_HANDLER_CLASSES = [
             delay: 2000,
           },
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: { count: 50 },
         },
       },
       {
@@ -90,7 +90,7 @@ const INTENT_HANDLER_CLASSES = [
             delay: 1000,
           },
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: { count: 50 },
         },
       },
       {
@@ -102,7 +102,7 @@ const INTENT_HANDLER_CLASSES = [
             delay: 3000,
           },
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: { count: 50 },
         },
       },
     ),

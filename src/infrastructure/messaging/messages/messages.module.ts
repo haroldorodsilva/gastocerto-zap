@@ -27,7 +27,7 @@ import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
             delay: 2000,
           },
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: { count: 50 },
         },
       },
       {
@@ -42,7 +42,7 @@ import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
             delay: 2000,
           },
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: { count: 50 },
         },
       },
     ),

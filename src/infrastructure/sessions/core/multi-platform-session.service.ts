@@ -453,10 +453,13 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       }
 
       // Emitir evento para processamento apenas se sessão estiver ativa
+      const eventName = message.platform === MessagingPlatform.TELEGRAM
+        ? MESSAGE_EVENTS.TELEGRAM
+        : MESSAGE_EVENTS.WHATSAPP;
       this.logger.log(
-        `🚀 [MultiPlatformSessionService] Emitting telegram.message event for session ${sessionId}`,
+        `🚀 [MultiPlatformSessionService] Emitting ${eventName} event for session ${sessionId}`,
       );
-      this.eventEmitter.emit(MESSAGE_EVENTS.TELEGRAM, {
+      this.eventEmitter.emit(eventName, {
         sessionId,
         platform: message.platform,
         message,

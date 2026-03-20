@@ -360,11 +360,6 @@ export class WhatsAppController {
 
       // Aguardar novo QR ser gerado (max 15s)
       return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new BadRequestException('Timeout aguardando novo QR Code'));
-        }, 15000);
-
-        // Listener para novo QR
         const qrHandler = (data: { sessionId: string; qr: string }) => {
           if (data.sessionId === session.sessionId) {
             clearTimeout(timeout);
@@ -375,6 +370,11 @@ export class WhatsAppController {
             });
           }
         };
+
+        const timeout = setTimeout(() => {
+          this.eventEmitter.off('session.qr', qrHandler);
+          reject(new BadRequestException('Timeout aguardando novo QR Code'));
+        }, 15000);
 
         this.eventEmitter.on('session.qr', qrHandler);
       });

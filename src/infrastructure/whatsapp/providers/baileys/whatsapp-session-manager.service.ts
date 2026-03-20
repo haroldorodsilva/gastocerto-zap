@@ -474,6 +474,17 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
       // Marca como parada intencional para evitar auto-recuperação
       this.stoppingSessions.add(sessionId);
 
+      // Remover listeners antes de fechar para evitar memory leaks
+      if (sock.ev) {
+        const events = [
+          'creds.update', 'connection.update', 'messages.upsert',
+          'messages.update', 'chats.update', 'contacts.update', 'presence.update',
+        ] as const;
+        for (const event of events) {
+          sock.ev.removeAllListeners(event);
+        }
+      }
+
       // Fecha conexão sem fazer logout (preserva credenciais)
       sock.end(undefined);
 

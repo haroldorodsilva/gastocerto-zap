@@ -19,7 +19,7 @@ cmds = [
 # Comando de inicialização
 # Migrations e seed rodam no startup (DB precisa estar acessível)
 [start]
-cmd = "npx prisma migrate deploy --schema=src/prisma/schema.prisma && yarn db:seed && node dist/main.js"
+cmd = "npx prisma migrate deploy --schema=src/prisma/schema.prisma && yarn db:seed && NODE_OPTIONS='--max-old-space-size=512' node dist/main.js"
 
 # Variáveis de ambiente padrão (podem ser sobrescritas no Coolify)
 [variables]
