@@ -133,15 +133,26 @@ export class WhatsAppMessageHandler {
       );
 
       // Enfileira mensagem para processamento assíncrono
-      await this.messageQueue.add('process-message', {
-        sessionId,
-        message: filteredMessage,
-        timestamp: Date.now(),
-        platform: 'whatsapp', // ✅ Incluir plataforma
-        userId, // ✅ Incluir userId para rastreabilidade
-      });
-
-      this.logger.debug(`[WhatsApp] Message ${filteredMessage.messageId} added to queue`);
+      try {
+        await this.messageQueue.add('process-message', {
+          sessionId,
+          message: filteredMessage,
+          timestamp: Date.now(),
+          platform: 'whatsapp',
+          userId,
+        });
+        this.logger.debug(`[WhatsApp] Message ${filteredMessage.messageId} added to queue`);
+      } catch (queueError) {
+        this.logger.error(
+          `🚨 [WhatsApp] REDIS/QUEUE INDISPONÍVEL - Processando mensagem diretamente (sem fila). Erro: ${queueError.message}`,
+        );
+        // Fallback: processar diretamente sem fila
+        await this.processMessage({
+          sessionId,
+          message: filteredMessage,
+          timestamp: Date.now(),
+        });
+      }
     } catch (error) {
       this.logger.error(
         `[WhatsApp] Error handling message from session ${sessionId}: ${error.message}`,

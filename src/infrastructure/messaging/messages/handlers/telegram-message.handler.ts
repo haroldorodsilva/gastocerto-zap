@@ -112,17 +112,30 @@ export class TelegramMessageHandler {
       );
 
       // Enfileirar mensagem para processamento assíncrono (com retry)
-      await this.messageQueue.add('process-message', {
-        sessionId,
-        message,
-        timestamp: Date.now(),
-        platform: 'telegram',
-        userId: gastoCertoId,
-      });
-
-      this.logger.debug(`[Telegram] Message from ${userId} added to queue`);
+      try {
+        await this.messageQueue.add('process-message', {
+          sessionId,
+          message,
+          timestamp: Date.now(),
+          platform: 'telegram',
+          userId: gastoCertoId,
+        });
+        this.logger.debug(`[Telegram] Message from ${userId} added to queue`);
+      } catch (queueError) {
+        this.logger.error(
+          `🚨 [Telegram] REDIS/QUEUE INDISPONÍVEL - Processando mensagem diretamente (sem fila). Erro: ${queueError.message}`,
+        );
+        // Fallback: processar diretamente sem fila
+        await this.processMessage({
+          sessionId,
+          message,
+          timestamp: Date.now(),
+          platform: 'telegram',
+          userId: gastoCertoId,
+        });
+      }
     } catch (error) {
-      this.logger.error(`Error enqueuing Telegram message:`, error);
+      this.logger.error(`Error processing Telegram message:`, error);
       await this.sendErrorMessage(sessionId, userId);
     }
   }

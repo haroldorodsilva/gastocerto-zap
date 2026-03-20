@@ -63,13 +63,34 @@ import { WebChatModule } from '@features/webchat/webchat.module';
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        redis: {
-          host: config.get<string>('REDIS_HOST', 'localhost'),
-          port: config.get<number>('REDIS_PORT', 6379),
-          password: config.get<string>('REDIS_PASSWORD'),
-        },
-      }),
+      useFactory: (config: ConfigService) => {
+        const redisUrl = config.get<string>('REDIS_URL');
+
+        // Usar REDIS_URL se disponível (produção), senão REDIS_HOST/PORT
+        if (redisUrl) {
+          try {
+            const url = new URL(redisUrl);
+            return {
+              redis: {
+                host: url.hostname,
+                port: parseInt(url.port || '6379', 10),
+                password: url.password || undefined,
+                tls: url.protocol === 'rediss:' ? {} : undefined,
+              },
+            };
+          } catch {
+            // URL inválida, fallback para host/port
+          }
+        }
+
+        return {
+          redis: {
+            host: config.get<string>('REDIS_HOST', 'localhost'),
+            port: config.get<number>('REDIS_PORT', 6379),
+            password: config.get<string>('REDIS_PASSWORD'),
+          },
+        };
+      },
     }),
 
     // Módulos da aplicação
