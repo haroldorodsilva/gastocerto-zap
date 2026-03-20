@@ -450,10 +450,14 @@ export class UserCacheService {
         },
       });
 
-      // Atualizar Redis (usando telegramId ou whatsappId)
-      const cacheKey = updated.telegramId || updated.whatsappId;
-      if (cacheKey) {
-        await this.setUserInRedis(cacheKey, updated);
+      // Atualizar Redis usando chave universal (gastoCertoId)
+      const universalKey = this.getCacheKey(gastoCertoId);
+      await this.setUserInRedisByKey(universalKey, updated);
+
+      // Também atualizar pelas chaves de plataforma (telegramId/whatsappId) se existirem
+      const platformKey = updated.telegramId || updated.whatsappId;
+      if (platformKey) {
+        await this.setUserInRedis(platformKey, updated);
       }
 
       this.logger.log(`✅ Cache de usuário atualizado: ${gastoCertoId}`);

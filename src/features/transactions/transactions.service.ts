@@ -112,6 +112,18 @@ export class TransactionsService {
       
       // Usar accountId passado ou fallback para user.activeAccountId
       const activeAccountId = accountId || user.activeAccountId;
+
+      // Se accountId foi fornecido (ex: webchat x-account header) mas o cache não tem,
+      // atualizar o cache para que todos os services downstream usem a conta correta
+      if (accountId && user.activeAccountId !== accountId) {
+        this.logger.log(
+          `🔄 [Orchestrator] Atualizando activeAccountId no cache: ${user.activeAccountId} → ${accountId}`,
+        );
+        await this.userCache.updateUserCache(user.gastoCertoId, {
+          activeAccountId: accountId,
+        } as any);
+        user.activeAccountId = accountId;
+      }
       
       this.logger.log(
         `📝 [Orchestrator] Processando texto de ${phoneNumber} | Platform: ${platform} | UserId: ${user.id} | AccountId: ${activeAccountId}`,

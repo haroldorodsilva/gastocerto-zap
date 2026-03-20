@@ -70,8 +70,6 @@ export const NO_RESPONSES = [
   'não quero',
   'nao quero',
   'errado',
-  'errado',
-  'deixa',
   'deixa',
 ] as const;
 
@@ -97,9 +95,6 @@ export const HELP_KEYWORDS = [
 export const BALANCE_KEYWORDS = [
   'saldo',
   'extrato',
-  'quanto gastei',
-  'quanto recebi',
-  'resumo',
   'balanço',
   'sobro quanto',
   'sobrou quanto',
@@ -108,8 +103,53 @@ export const BALANCE_KEYWORDS = [
   'meu saldo',
   'saldo atual',
   'quanto tenho',
+  'balanço geral',
+  'meu balanço',
+] as const;
+
+// ──────────────────────────────────────────────
+// Monthly Summary
+// ──────────────────────────────────────────────
+export const MONTHLY_SUMMARY_KEYWORDS = [
+  'resumo do mês',
+  'resumo do mes',
+  'resumo mensal',
+  'resumo de',
+  'resumo',
+  'gastos do mês',
+  'gastos do mes',
+  'gastos de',
+  'quanto gastei',
+  'quanto recebi',
   'total gasto',
   'total recebido',
+  'como estou no mês',
+  'como estou no mes',
+  'como estão minhas finanças',
+  'como estao minhas financas',
+  'meu mês',
+  'meu mes',
+] as const;
+
+// ──────────────────────────────────────────────
+// Category Breakdown
+// ──────────────────────────────────────────────
+export const CATEGORY_BREAKDOWN_KEYWORDS = [
+  'gastos por categoria',
+  'resumo por categoria',
+  'análise por categoria',
+  'analise por categoria',
+  'categorias do mês',
+  'categorias do mes',
+  'quanto gastei em',
+  'quanto gastei de',
+  'quanto gastei com',
+  'onde mais gastei',
+  'onde gasto mais',
+  'maiores gastos',
+  'principais gastos',
+  'detalhamento por categoria',
+  'gastos por tipo',
 ] as const;
 
 // ──────────────────────────────────────────────
@@ -381,7 +421,7 @@ export const TRANSACTION_VERBS = [
 
 export const CATEGORY_KEYWORDS = [
   'mercado',
-  'pararia',
+  'padaria',
   'supermercado',
   'alimentação',
   'comida',

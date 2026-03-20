@@ -87,29 +87,48 @@ export class CreditCardIntentHandler implements IntentHandler {
       }
 
       case MessageIntent.SHOW_INVOICE_DETAILS: {
-        this.logger.log('✅ Delegando para CreditCardService.showInvoiceDetails');
-        // TODO: Extrair número da fatura da mensagem (ex: "ver fatura 1")
-        // Por ora, retornar mensagem pedindo número
+        const invoiceNumber = this.extractInvoiceNumber(text);
+        if (!invoiceNumber) {
+          this.logger.log('⚠️ Número da fatura não encontrado no texto');
+          return {
+            success: false,
+            message:
+              '💡 Para ver detalhes de uma fatura, primeiro liste as faturas com:\n' +
+              '*"minhas faturas"*\n\n' +
+              'Depois use: *"ver fatura 1"* (substituindo 1 pelo número da fatura)',
+            requiresConfirmation: false,
+            replyContext: 'INTENT_RESPONSE',
+          };
+        }
+        this.logger.log(`✅ Delegando para CreditCardService.showInvoiceDetails (#${invoiceNumber})`);
+        const detailsResult = await this.creditCardService.showInvoiceDetails(user, invoiceNumber);
         return {
-          success: false,
-          message:
-            '💡 Para ver detalhes de uma fatura, primeiro liste as faturas com:\n' +
-            '*"minhas faturas"*\n\n' +
-            'Depois use: *"ver fatura 1"* (substituindo 1 pelo número da fatura)',
+          success: detailsResult.success,
+          message: detailsResult.message,
           requiresConfirmation: false,
           replyContext: 'INTENT_RESPONSE',
         };
       }
 
       case MessageIntent.PAY_INVOICE: {
-        this.logger.log('✅ Delegando para CreditCardService.payInvoice');
-        // TODO: Extrair número da fatura da mensagem (ex: "pagar fatura 1")
+        const payInvoiceNumber = this.extractInvoiceNumber(text);
+        if (!payInvoiceNumber) {
+          this.logger.log('⚠️ Número da fatura não encontrado no texto');
+          return {
+            success: false,
+            message:
+              '💡 Para pagar uma fatura, primeiro liste as faturas com:\n' +
+              '*"minhas faturas"*\n\n' +
+              'Depois use: *"pagar fatura 1"* (substituindo 1 pelo número da fatura)',
+            requiresConfirmation: false,
+            replyContext: 'INTENT_RESPONSE',
+          };
+        }
+        this.logger.log(`✅ Delegando para CreditCardService.payInvoice (#${payInvoiceNumber})`);
+        const payResult = await this.creditCardService.payInvoice(user, payInvoiceNumber);
         return {
-          success: false,
-          message:
-            '💡 Para pagar uma fatura, primeiro liste as faturas com:\n' +
-            '*"minhas faturas"*\n\n' +
-            'Depois use: *"pagar fatura 1"* (substituindo 1 pelo número da fatura)',
+          success: payResult.success,
+          message: payResult.message,
           requiresConfirmation: false,
           replyContext: 'INTENT_RESPONSE',
         };
@@ -123,5 +142,25 @@ export class CreditCardIntentHandler implements IntentHandler {
           replyContext: 'ERROR',
         };
     }
+  }
+
+  /**
+   * Extrai número da fatura do texto
+   * Ex: "ver fatura 1" → 1, "pagar fatura 3" → 3, "fatura 2" → 2
+   */
+  private extractInvoiceNumber(text: string): number | null {
+    // Padrão: "fatura N", "invoice N", "fatura #N"
+    const match = text.match(/(?:fatura|invoice)\s*#?\s*(\d+)/i);
+    if (match) {
+      const num = parseInt(match[1]);
+      if (num >= 1 && num <= 50) return num;
+    }
+    // Fallback: último número na mensagem (ex: "ver 1", "pagar 2")
+    const numbers = text.match(/\d+/g);
+    if (numbers && numbers.length === 1) {
+      const num = parseInt(numbers[0]);
+      if (num >= 1 && num <= 50) return num;
+    }
+    return null;
   }
 }

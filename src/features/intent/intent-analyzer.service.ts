@@ -7,6 +7,8 @@ import {
   NO_RESPONSES,
   HELP_KEYWORDS,
   BALANCE_KEYWORDS,
+  MONTHLY_SUMMARY_KEYWORDS,
+  CATEGORY_BREAKDOWN_KEYWORDS,
   LIST_TRANSACTIONS_KEYWORDS,
   LIST_PENDING_CONFIRMATION_KEYWORDS,
   LIST_PENDING_PAYMENT_KEYWORDS,
@@ -49,6 +51,8 @@ export enum MessageIntent {
   LIST_PENDING = 'LIST_PENDING', // Listar transações pendentes de confirmação
   LIST_PENDING_PAYMENTS = 'LIST_PENDING_PAYMENTS', // Listar contas pendentes de pagamento
   CHECK_BALANCE = 'CHECK_BALANCE', // Consultar saldo
+  MONTHLY_SUMMARY = 'MONTHLY_SUMMARY', // Resumo mensal detalhado
+  CATEGORY_BREAKDOWN = 'CATEGORY_BREAKDOWN', // Análise por categoria
   LIST_TRANSACTIONS = 'LIST_TRANSACTIONS', // Listar transações
   SWITCH_ACCOUNT = 'SWITCH_ACCOUNT', // Trocar conta ativa
   LIST_ACCOUNTS = 'LIST_ACCOUNTS', // Listar todas as contas
@@ -259,7 +263,33 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 9. Verificar consultas de saldo/extrato
+    // 9. Verificar análise por categoria (mais específico, antes de resumo mensal)
+    if (this.isCategoryBreakdownRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: CATEGORY_BREAKDOWN (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.CATEGORY_BREAKDOWN,
+        confidence: 0.95,
+        shouldProcess: true,
+        metadata: {
+          monthReference: this.extractMonthReference(normalizedText),
+        },
+      };
+    }
+
+    // 9.1. Verificar resumo mensal (antes de saldo genérico)
+    if (this.isMonthlySummaryRequest(normalizedText)) {
+      this.logger.log(`✅ Intent: MONTHLY_SUMMARY (confidence: 0.95)`);
+      return {
+        intent: MessageIntent.MONTHLY_SUMMARY,
+        confidence: 0.95,
+        shouldProcess: true,
+        metadata: {
+          monthReference: this.extractMonthReference(normalizedText),
+        },
+      };
+    }
+
+    // 9.2. Verificar consultas de saldo/extrato (balanço geral)
     if (this.isBalanceCheck(normalizedText)) {
       this.logger.log(`✅ Intent: CHECK_BALANCE (confidence: 0.90)`);
       return {
@@ -269,13 +299,17 @@ export class IntentAnalyzerService {
       };
     }
 
-    // 9.1. Verificar listagem de transações
+    // 9.3. Verificar listagem de transações
     if (this.isListTransactions(normalizedText)) {
       this.logger.log(`✅ Intent: LIST_TRANSACTIONS (confidence: 0.90)`);
       return {
         intent: MessageIntent.LIST_TRANSACTIONS,
         confidence: 0.9,
         shouldProcess: true, // ✅ PROCESSA para listar transações
+        metadata: {
+          monthReference: this.extractMonthReference(normalizedText),
+          limit: this.extractLimit(normalizedText),
+        },
       };
     }
 
@@ -319,14 +353,16 @@ export class IntentAnalyzerService {
       confidence: transactionAnalysis.confidence,
       shouldProcess: false,
       suggestedResponse:
-        '❓ *Não entendi sua mensagem*\n' +
-        'Sou especializado em ajudar você a registrar suas *despesas* e *receitas*.\n\n' +
+        '❓ *Não entendi sua mensagem*\n\n' +
         '💡 *Exemplos do que posso fazer:*\n\n' +
-        '   • "Gastei 50 no mercado"\n' +
-        '   • "Recebi 1000 de salário"\n' +
-        '📷 *Envie foto da nota fiscal*\n' +
-        '🎤 *Grave um áudio descrevendo*\n\n' +
-        'Tente reformular sua mensagem seguindo esses exemplos!',
+        '💸 "Gastei 50 no mercado"\n' +
+        '💳 "Gastei 300 no cartão em 3x"\n' +
+        '📊 "Resumo do mês" ou "Meu saldo"\n' +
+        '📂 "Gastos por categoria"\n' +
+        '📋 "Minhas transações"\n' +
+        '📷 Envie foto da nota fiscal\n' +
+        '🎤 Grave um áudio descrevendo\n\n' +
+        '❓ Digite *"ajuda"* para ver todos os comandos.',
     };
   }
 
@@ -442,19 +478,96 @@ export class IntentAnalyzerService {
       '💡 *O que posso fazer por você hoje?*\n\n' +
       '💸 *Registrar transações:*\n' +
       '   • "Gastei 50 no mercado"\n' +
-      '   • "Recebi 1000 de salário"\n' +
-      '📊 *Consultar finanças:*\n' +
-      '   • "Meu saldo"\n' +
+      '   • "Gastei 300 no cartão em 3x"\n' +
+      '📊 *Resumos:*\n' +
+      '   • "Meu saldo" ou "Resumo do mês"\n' +
+      '   • "Gastos por categoria"\n' +
+      '📋 *Consultas:*\n' +
       '   • "Minhas transações"\n' +
-      '   • "Minhas faturas"\n' +
-      '   • "Meus cartões"\n' +
+      '   • "Minhas faturas" ou "Meus cartões"\n' +
       '📷 *Outras formas:*\n' +
       '   • Envie foto de nota fiscal\n' +
       '   • Grave um áudio descrevendo\n\n' +
       '✨ Use linguagem natural! Estou aqui para facilitar sua vida financeira.\n\n' +
-      '❓ Digite *"ajuda"* para ver todos os comandos disponíveis.';
+      '❓ Digite *"ajuda"* para ver todos os comandos.';
 
     return greeting;
+  }
+
+  /**
+   * Verifica se é uma solicitação de resumo mensal
+   * Ex: "resumo do mês", "gastos do mês", "como estou no mês"
+   */
+  private isMonthlySummaryRequest(text: string): boolean {
+    return MONTHLY_SUMMARY_KEYWORDS.some((k) => text.includes(k));
+  }
+
+  /**
+   * Verifica se é uma solicitação de análise por categoria
+   * Ex: "gastos por categoria", "quanto gastei em alimentação"
+   */
+  private isCategoryBreakdownRequest(text: string): boolean {
+    return CATEGORY_BREAKDOWN_KEYWORDS.some((k) => text.includes(k));
+  }
+
+  /**
+   * Extrai referência de mês da mensagem
+   * Retorna formato YYYY-MM ou undefined se não encontrar
+   */
+  private extractMonthReference(text: string): string | undefined {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth(); // 0-indexed
+
+    // "mês passado" / "mes passado"
+    if (text.includes('mês passado') || text.includes('mes passado')) {
+      const d = new Date(currentYear, currentMonth - 1, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    // Nomes de meses em português
+    const monthNames: Record<string, number> = {
+      janeiro: 1, fevereiro: 2, março: 3, marco: 3,
+      abril: 4, maio: 5, junho: 6,
+      julho: 7, agosto: 8, setembro: 9,
+      outubro: 10, novembro: 11, dezembro: 12,
+    };
+
+    for (const [name, month] of Object.entries(monthNames)) {
+      if (text.includes(name)) {
+        // Se o mês mencionado é futuro no ano atual, assume ano passado
+        let year = currentYear;
+        if (month > currentMonth + 1) {
+          year = currentYear - 1;
+        }
+        return `${year}-${String(month).padStart(2, '0')}`;
+      }
+    }
+
+    // Formato explícito MM/YYYY ou MM-YYYY
+    const dateMatch = text.match(/(\d{1,2})[\/\-](\d{4})/);
+    if (dateMatch) {
+      const month = parseInt(dateMatch[1]);
+      const year = parseInt(dateMatch[2]);
+      if (month >= 1 && month <= 12 && year >= 2020 && year <= 2030) {
+        return `${year}-${String(month).padStart(2, '0')}`;
+      }
+    }
+
+    return undefined; // mês atual (handler decide o default)
+  }
+
+  /**
+   * Extrai limite de resultados da mensagem
+   * Ex: "últimas 5 transações" → 5
+   */
+  private extractLimit(text: string): number | undefined {
+    const limitMatch = text.match(/(?:últimas?|ultimas?|top|primeiras?)\s+(\d+)/);
+    if (limitMatch) {
+      const num = parseInt(limitMatch[1]);
+      if (num >= 1 && num <= 100) return num;
+    }
+    return undefined;
   }
 
   /**
@@ -531,29 +644,34 @@ export class IntentAnalyzerService {
       '📖 *Guia de Uso - GastoCerto*\n\n' +
       '💸 *Registrar transações:*\n' +
       '   • "Gastei 50 no mercado"\n' +
-      '   • "Paguei 30 reais de uber"\n' +
       '   • "Recebi 1000 de salário"\n' +
-      '   • "Ganhei 200 de freelance"\n' +
-      '💵 *Consultar Finanças:*\n' +
-      '   • "Meu saldo" - Ver balanço geral\n' +
-      '   • "Minhas transações" - Listar últimas 10\n' +
+      '   • "Gastei 300 no cartão em 3x"\n' +
+      '   • "Paguei 80 no nubank"\n' +
+      '📊 *Resumos e Análises:*\n' +
+      '   • "Meu saldo" - Balanço geral\n' +
+      '   • "Resumo do mês" - Resumo mensal detalhado\n' +
+      '   • "Resumo de janeiro" - Resumo de outro mês\n' +
+      '   • "Gastos por categoria" - Análise por categoria\n' +
+      '📋 *Transações:*\n' +
+      '   • "Minhas transações" - Listar do mês\n' +
+      '   • "Transações de fevereiro" - Outro mês\n' +
+      '   • "Últimas 5 transações" - Limitar\n' +
       '💳 *Cartões de Crédito:*\n' +
       '   • "Meus cartões" - Listar cartões\n' +
+      '   • "Usar cartão nubank" - Definir padrão\n' +
+      '   • "Meu cartão" - Ver cartão padrão\n' +
       '   • "Minhas faturas" - Ver faturas\n' +
+      '   • "Fatura nubank" - Fatura de um cartão\n' +
+      '   • "Ver fatura 1" / "Pagar fatura 1"\n' +
       '📋 *Contas Pendentes:*\n' +
-      '   • "Pendentes" - Ver contas a pagar\n' +
-      '   • "Ver pendentes" - Listar pendências\n\n' +
-      '✅ *Confirmações:*\n' +
-      '   • "Pendentes de confirmação" - Ver aguardando\n' +
-      '🏦 *Gerenciar Perfil:*\n' +
+      '   • "Pendentes" - Contas a pagar/receber\n' +
+      '   • "Pendentes de confirmação"\n' +
+      '🏦 *Perfil:*\n' +
       '   • "Meus perfis" - Ver todas as contas\n' +
-      '   • "Perfil" ou "conta ativa" - Ver conta atual\n' +
-      '📷 *Nota Fiscal:*\n' +
-      '   • Tire uma foto e envie\n' +
-      '   • Detectamos valores automaticamente\n\n' +
-      '🎤 *Áudio:*\n' +
-      '   • Grave descrevendo a transação\n' +
-      '   • Ex: "Gastei 40 reais no posto"\n\n'
+      '   • "Perfil" - Ver conta ativa\n' +
+      '   • "Trocar perfil" - Mudar conta\n' +
+      '📷 *Nota Fiscal:* Envie uma foto\n' +
+      '🎤 *Áudio:* Grave descrevendo a transação\n\n'
     );
   }
 
