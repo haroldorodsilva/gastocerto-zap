@@ -70,7 +70,7 @@ RUN chmod +x scripts/docker-entrypoint.sh
 ENV NODE_ENV=production \
     PORT=3000 \
     AUTH_SESSIONS_DIR=/tmp/auth_sessions \
-    NODE_OPTIONS="--max-old-space-size=512"
+    NODE_OPTIONS="--max-old-space-size=1024"
 
 # Switch to non-root user
 USER nestjs

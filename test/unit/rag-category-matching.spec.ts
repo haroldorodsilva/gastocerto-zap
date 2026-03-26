@@ -1,5 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
+import { TextProcessingService } from '@infrastructure/rag/services/text-processing.service';
+import { UserSynonymService } from '@infrastructure/rag/services/user-synonym.service';
 import { CategoryResolutionService } from '@infrastructure/rag/services/category-resolution.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
 import { PrismaService } from '@core/database/prisma.service';
@@ -252,6 +254,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RAGService,
+        TextProcessingService,
         CategoryResolutionService,
         {
           provide: PrismaService,
@@ -295,6 +298,12 @@ describe('RAG Category Matching - Natural Language Processing', () => {
             get: jest.fn(),
             set: jest.fn(),
             del: jest.fn(),
+          },
+        },
+        {
+          provide: UserSynonymService,
+          useValue: {
+            getUserSynonyms: jest.fn().mockResolvedValue([]),
           },
         },
       ],

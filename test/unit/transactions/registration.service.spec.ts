@@ -20,6 +20,9 @@ import { CreditCardInvoiceCalculatorService } from '../../../src/features/transa
 import { PaymentStatusResolverService } from '../../../src/features/transactions/services/payment-status-resolver.service';
 import { CreditCardService } from '../../../src/features/credit-cards/credit-card.service';
 import { RecurringTransactionService } from '../../../src/features/transactions/services/recurring-transaction.service';
+import { CategoryResolverService } from '../../../src/features/transactions/services/category-resolver.service';
+import { TransactionApiSenderService } from '../../../src/features/transactions/contexts/registration/transaction-api-sender.service';
+import { TransactionMessageFormatterService } from '../../../src/features/transactions/contexts/registration/transaction-message-formatter.service';
 
 describe('TransactionRegistrationService - RAG Integration', () => {
   let service: TransactionRegistrationService;
@@ -253,6 +256,9 @@ describe('TransactionRegistrationService - RAG Integration', () => {
         { provide: PaymentStatusResolverService, useValue: mockPaymentStatusResolverService },
         { provide: CreditCardService, useValue: mockCreditCardService },
         { provide: RecurringTransactionService, useValue: { detectRecurring: jest.fn().mockReturnValue({ isRecurring: false, confidence: 0 }), processRecurring: jest.fn() } },
+        { provide: CategoryResolverService, useValue: { resolve: jest.fn().mockResolvedValue({ categoryId: 'cat-1', subCategoryId: 'sub-1' }) } },
+        { provide: TransactionApiSenderService, useValue: { sendTransactionToApi: jest.fn().mockResolvedValue({ success: true }), registerConfirmedTransaction: jest.fn().mockResolvedValue({ success: true }), sendConfirmedTransactionToApi: jest.fn().mockResolvedValue({ success: true }), resendTransaction: jest.fn().mockResolvedValue({ success: true }) } },
+        { provide: TransactionMessageFormatterService, useValue: { formatConfirmationMessage: jest.fn().mockReturnValue('Confirma?'), formatSuccessMessage: jest.fn().mockReturnValue('OK'), formatErrorMessage: jest.fn().mockReturnValue('Erro'), formatValidationError: jest.fn().mockReturnValue('Erro validação'), findAccountName: jest.fn().mockReturnValue('Conta Pessoal'), formatTemporalProfile: jest.fn().mockReturnValue('Hoje'), extractTemporalText: jest.fn().mockReturnValue('hoje') } },
       ],
     }).compile();
 

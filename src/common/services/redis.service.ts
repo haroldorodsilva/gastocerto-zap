@@ -30,22 +30,31 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       const redisPort = this.configService.get<number>('REDIS_PORT', 6379);
       const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
 
+      const commonOptions = {
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        lazyConnect: false,
+        retryStrategy: (times: number) => {
+          if (times > 10) {
+            this.logger.error(`❌ Redis: desistindo após ${times} tentativas`);
+            return null; // Para de reconectar (não crasha o app)
+          }
+          const delay = Math.min(times * 500, 5000);
+          this.logger.warn(`⚠️  Redis: reconectando em ${delay}ms (tentativa ${times})`);
+          return delay;
+        },
+      };
+
       if (redisUrl) {
         this.logger.log(`🔗 Conectando ao Redis via URL...`);
-        this.client = new Redis(redisUrl, {
-          maxRetriesPerRequest: 3,
-          enableReadyCheck: true,
-          lazyConnect: false,
-        });
+        this.client = new Redis(redisUrl, commonOptions);
       } else {
         this.logger.log(`🔗 Conectando ao Redis em ${redisHost}:${redisPort}...`);
         this.client = new Redis({
           host: redisHost,
           port: redisPort,
           password: redisPassword,
-          maxRetriesPerRequest: 3,
-          enableReadyCheck: true,
-          lazyConnect: false,
+          ...commonOptions,
         });
       }
 

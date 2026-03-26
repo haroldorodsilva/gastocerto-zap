@@ -1,14 +1,10 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { BullModule } from '@nestjs/bull';
 import { HttpModule } from '@nestjs/axios';
 import { TransactionsService } from './transactions.service';
 import { TransactionConfirmationService } from './transaction-confirmation.service';
 import { TransactionValidatorService } from './transaction-validator.service';
 import { ConfirmationExpirationJob } from './confirmation-expiration.job';
 import { ApiRetryJob } from './api-retry.job';
-import { AIProcessingProcessor } from './processors/ai-processing.processor';
-import { TransactionConfirmationProcessor } from './processors/transaction-confirmation.processor';
-import { TransactionRegistrationProcessor } from './processors/transaction-registration.processor';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { TransactionApiSenderService } from './contexts/registration/transaction-api-sender.service';
 import { TransactionMessageFormatterService } from './contexts/registration/transaction-message-formatter.service';
@@ -68,44 +64,6 @@ const INTENT_HANDLER_CLASSES = [
     AccountsModule,
     SecurityModule,
     forwardRef(() => MessagesModule),
-    BullModule.registerQueue(
-      {
-        name: 'ai-processing',
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-          removeOnComplete: true,
-          removeOnFail: { count: 50 },
-        },
-      },
-      {
-        name: 'transaction-confirmation',
-        defaultJobOptions: {
-          attempts: 2,
-          backoff: {
-            type: 'fixed',
-            delay: 1000,
-          },
-          removeOnComplete: true,
-          removeOnFail: { count: 50 },
-        },
-      },
-      {
-        name: 'transaction-registration',
-        defaultJobOptions: {
-          attempts: 5,
-          backoff: {
-            type: 'exponential',
-            delay: 3000,
-          },
-          removeOnComplete: true,
-          removeOnFail: { count: 50 },
-        },
-      },
-    ),
   ],
   controllers: [TransactionsController],
   providers: [
@@ -115,9 +73,6 @@ const INTENT_HANDLER_CLASSES = [
     ConfirmationExpirationJob,
     ApiRetryJob,
     DiscordNotificationService,
-    AIProcessingProcessor,
-    TransactionConfirmationProcessor,
-    TransactionRegistrationProcessor,
     // Context Services
     TransactionRegistrationService,
     TransactionApiSenderService,

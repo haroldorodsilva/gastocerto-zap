@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import { fireAndForget } from '@common/utils/with-retry';
+import { TransactionConfirmationService } from '@features/transactions/transaction-confirmation.service';
 import { MessageFilterService } from '../message-filter.service';
 import { MessageContextService } from '../message-context.service';
 import { PlatformReplyService } from '../platform-reply.service';
@@ -43,8 +43,7 @@ export class WhatsAppMessageHandler {
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly prisma: PrismaService,
     private readonly messageValidation: MessageValidationService,
-    @InjectQueue('whatsapp-messages') private readonly messageQueue: Queue,
-    @InjectQueue('transaction-confirmation') private readonly transactionQueue: Queue,
+    private readonly confirmationService: TransactionConfirmationService,
   ) {}
 
   /**
@@ -132,27 +131,11 @@ export class WhatsAppMessageHandler {
           (userId ? ` | userId: ${userId}` : ''),
       );
 
-      // Enfileira mensagem para processamento assíncrono
-      try {
-        await this.messageQueue.add('process-message', {
-          sessionId,
-          message: filteredMessage,
-          timestamp: Date.now(),
-          platform: 'whatsapp',
-          userId,
-        });
-        this.logger.debug(`[WhatsApp] Message ${filteredMessage.messageId} added to queue`);
-      } catch (queueError) {
-        this.logger.error(
-          `🚨 [WhatsApp] REDIS/QUEUE INDISPONÍVEL - Processando mensagem diretamente (sem fila). Erro: ${queueError.message}`,
-        );
-        // Fallback: processar diretamente sem fila
-        await this.processMessage({
-          sessionId,
-          message: filteredMessage,
-          timestamp: Date.now(),
-        });
-      }
+      // Processar mensagem de forma assíncrona (não bloqueia o event loop)
+      fireAndForget(
+        () => this.processMessage({ sessionId, message: filteredMessage, timestamp: Date.now() }),
+        { label: `whatsapp:${filteredMessage.phoneNumber}` },
+      );
     } catch (error) {
       this.logger.error(
         `[WhatsApp] Error handling message from session ${sessionId}: ${error.message}`,
@@ -298,13 +281,8 @@ export class WhatsAppMessageHandler {
       if (pendingConfirmation) {
         this.logger.log(`[WhatsApp] Processing transaction confirmation for ${phoneNumber}`);
 
-        // Enfileirar resposta de confirmação
-        await this.transactionQueue.add('process-confirmation', {
-          phoneNumber,
-          response: message.text,
-          confirmationId: pendingConfirmation.id,
-          timestamp: Date.now(),
-        });
+        // Processar confirmação diretamente
+        await this.confirmationService.processResponse(phoneNumber, message.text);
 
         return;
       }
@@ -317,15 +295,16 @@ export class WhatsAppMessageHandler {
       // 🆕 NOVO: Processar por tipo de mensagem (igual Telegram)
       switch (message.type) {
         case MessageType.TEXT:
-          // Texto: enfileirar para processamento assíncrono
-          this.logger.log(`[WhatsApp] Queueing text message for processing`);
-          await this.transactionQueue.add('create-confirmation', {
-            userId: user.gastoCertoId,
+          // Texto: processar transação diretamente
+          this.logger.log(`[WhatsApp] Processing text message`);
+          await this.transactionsService.processTextMessage(
+            user,
+            message.text || '',
+            message.messageId,
+            'whatsapp',
             phoneNumber,
-            message,
-            timestamp: Date.now(),
-            accountId, // Incluir accountId na fila
-          });
+            accountId,
+          );
           break;
 
         case MessageType.IMAGE:

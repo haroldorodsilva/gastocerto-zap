@@ -18,6 +18,9 @@ describe('OnboardingStateService - Bug platformId', () => {
         delete: jest.fn().mockResolvedValue({ id: 1 }),
         create: jest.fn().mockResolvedValue({ id: 1, platformId: '707624962', phoneNumber: null }),
       },
+      userCache: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
 
     const mockEmailValidator: any = {

@@ -25,6 +25,18 @@ function resolveCorsOrigins(configService: ConfigService): string | string[] {
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
+  // Global error handlers — evita crash por erros não capturados (ex: Redis limit exceeded)
+  process.on('unhandledRejection', (reason) => {
+    logger.error(`Unhandled Rejection: ${reason}`);
+  });
+  process.on('uncaughtException', (error) => {
+    logger.error(`Uncaught Exception: ${error.message}`, error.stack);
+    // Só mata o processo se for erro fatal (não Redis/rede)
+    if (error.message?.includes('FATAL') || error.message?.includes('out of memory')) {
+      process.exit(1);
+    }
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'error', 'warn', 'debug', 'verbose'],
   });

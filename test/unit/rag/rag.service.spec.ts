@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
 import { PrismaService } from '../../../src/core/database/prisma.service';
+import { TextProcessingService } from '../../../src/infrastructure/rag/services/text-processing.service';
+import { UserSynonymService } from '../../../src/infrastructure/rag/services/user-synonym.service';
 import { CategoryMatch } from '../../../src/infrastructure/rag/services/rag.interface';
 
 describe('RAGService', () => {
@@ -33,6 +35,7 @@ describe('RAGService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RAGService,
+        TextProcessingService,
         {
           provide: PrismaService,
           useValue: mockPrisma,
@@ -49,6 +52,12 @@ describe('RAGService', () => {
         {
           provide: CACHE_MANAGER,
           useValue: mockCacheManager,
+        },
+        {
+          provide: UserSynonymService,
+          useValue: {
+            getUserSynonyms: jest.fn().mockResolvedValue([]),
+          },
         },
       ],
     }).compile();

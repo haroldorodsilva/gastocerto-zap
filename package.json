@@ -39,7 +39,6 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@nestjs/axios": "^3.1.2",
-    "@nestjs/bull": "^11.0.4",
     "@nestjs/cache-manager": "^3.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^3.2.3",
@@ -55,7 +54,6 @@
     "@prisma/client": "^6.18.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.6",
     "axios": "^1.7.9",
-    "bull": "^4.16.5",
     "cache-manager": "^7.2.7",
     "cache-manager-redis-yet": "^5.1.5",
     "class-transformer": "^0.5.1",

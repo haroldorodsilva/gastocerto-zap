@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import { fireAndForget } from '@common/utils/with-retry';
 import {
   MessagingPlatform,
   IncomingMessage,
@@ -41,7 +40,6 @@ export class TelegramMessageHandler {
     private readonly userCacheService: UserCacheService,
     private readonly userRateLimiter: UserRateLimiterService,
     private readonly messageValidation: MessageValidationService,
-    @InjectQueue('telegram-messages') private readonly messageQueue: Queue,
   ) {}
 
   @OnEvent(MESSAGE_EVENTS.TELEGRAM)
@@ -111,29 +109,17 @@ export class TelegramMessageHandler {
         phoneNumber,
       );
 
-      // Enfileirar mensagem para processamento assíncrono (com retry)
-      try {
-        await this.messageQueue.add('process-message', {
+      // Processar mensagem de forma assíncrona (não bloqueia o event loop)
+      fireAndForget(
+        () => this.processMessage({
           sessionId,
           message,
           timestamp: Date.now(),
           platform: 'telegram',
           userId: gastoCertoId,
-        });
-        this.logger.debug(`[Telegram] Message from ${userId} added to queue`);
-      } catch (queueError) {
-        this.logger.error(
-          `🚨 [Telegram] REDIS/QUEUE INDISPONÍVEL - Processando mensagem diretamente (sem fila). Erro: ${queueError.message}`,
-        );
-        // Fallback: processar diretamente sem fila
-        await this.processMessage({
-          sessionId,
-          message,
-          timestamp: Date.now(),
-          platform: 'telegram',
-          userId: gastoCertoId,
-        });
-      }
+        }),
+        { label: `telegram:${userId}` },
+      );
     } catch (error) {
       this.logger.error(`Error processing Telegram message:`, error);
       await this.sendErrorMessage(sessionId, userId);

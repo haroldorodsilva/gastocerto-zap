@@ -6,6 +6,7 @@ import { GastoCertoApiService } from '../../../src/shared/gasto-certo-api.servic
 import { UserCacheService } from '../../../src/features/users/user-cache.service';
 import { PrismaService } from '../../../src/core/database/prisma.service';
 import { MessageContextService } from '../../../src/infrastructure/messaging/messages/message-context.service';
+import { PlatformReplyService } from '../../../src/infrastructure/messaging/messages/platform-reply.service';
 import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
 
 describe('OnboardingService', () => {
@@ -71,6 +72,10 @@ describe('OnboardingService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EventEmitter2, useValue: mockEventEmitter },
         { provide: MessageContextService, useValue: mockContextService },
+        {
+          provide: PlatformReplyService,
+          useValue: { sendReply: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: RAGService, useValue: mockRagService },
       ],
     }).compile();

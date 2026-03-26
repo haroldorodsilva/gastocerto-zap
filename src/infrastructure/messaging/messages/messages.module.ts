@@ -1,8 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { BullModule } from '@nestjs/bull';
 import { MessageFilterService } from './message-filter.service';
-import { MessagesProcessor } from './messages.processor';
-import { TelegramMessagesProcessor } from './telegram-messages.processor';
 import { TelegramMessageHandler } from './handlers/telegram-message.handler';
 import { WhatsAppMessageHandler } from './handlers/whatsapp-message.handler';
 import { MessageResponseService } from './message-response.service';
@@ -17,35 +14,6 @@ import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
 
 @Module({
   imports: [
-    BullModule.registerQueue(
-      {
-        name: 'whatsapp-messages',
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-          removeOnComplete: true,
-          removeOnFail: { count: 50 },
-        },
-      },
-      {
-        name: 'transaction-confirmation',
-      },
-      {
-        name: 'telegram-messages',
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-          removeOnComplete: true,
-          removeOnFail: { count: 50 },
-        },
-      },
-    ),
     WhatsAppModule,
     UsersModule,
     forwardRef(() => OnboardingModule),
@@ -54,8 +22,6 @@ import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
   ],
   providers: [
     MessageFilterService,
-    MessagesProcessor,
-    TelegramMessagesProcessor,
     TelegramMessageHandler,
     WhatsAppMessageHandler,
     MessageResponseService,
