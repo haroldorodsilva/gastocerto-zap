@@ -155,18 +155,20 @@ export class GastoCertoApiService {
   // ─── Balance (delegates to TransactionApiClient) ───────────
 
   async getMonthlySummary(
+    userId: string,
     accountId: string,
     month?: number,
     year?: number,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    return this.transactionApi.getMonthlySummary(accountId, month, year);
+    return this.transactionApi.getMonthlySummary(userId, accountId, month, year);
   }
 
   async getCategoryBreakdown(
+    userId: string,
     accountId: string,
     monthReference: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    return this.transactionApi.getCategoryBreakdown(accountId, monthReference);
+    return this.transactionApi.getCategoryBreakdown(userId, accountId, monthReference);
   }
 
   async getOverallBalance(
@@ -182,6 +184,7 @@ export class GastoCertoApiService {
 
   async getMonthlyBalance(
     userId: string,
+    accountId: string,
     monthYear?: string,
   ): Promise<{
     success: boolean;
@@ -199,7 +202,7 @@ export class GastoCertoApiService {
       pendingExpenses: number;
     };
   }> {
-    return this.transactionApi.getMonthlyBalance(userId, monthYear);
+    return this.transactionApi.getMonthlyBalance(userId, accountId, monthYear);
   }
 
   // ─── Credit Cards (delegates to CreditCardApiClient) ──────
@@ -261,5 +264,25 @@ export class GastoCertoApiService {
     error?: string;
   }> {
     return this.creditCardApi.payCreditCardInvoice(userId, invoiceId, bankId, amount, paidAt);
+  }
+
+  // ─── Charts (delegates to TransactionApiClient) ────────────
+
+  async getCategoryChart(
+    accountId: string,
+    year: number,
+    month: number,
+    type?: 'INCOME' | 'EXPENSE',
+    userId?: string,
+  ): Promise<{ success: boolean; imageBuffer?: Buffer; categories?: any[] }> {
+    return this.transactionApi.getCategoryChart(accountId, year, month, type, userId);
+  }
+
+  async getMonthlyOverviewChart(
+    accountId: string,
+    year: number,
+    month: number,
+  ): Promise<{ success: boolean; imageBuffer?: Buffer }> {
+    return this.transactionApi.getMonthlyOverviewChart(accountId, year, month);
   }
 }

@@ -21,7 +21,176 @@ GastoCerto-ZAP é um microserviço conversacional que permite gerenciar finança
 
 ---
 
-## 📚 Documentação
+## � O que o Usuário Pode Fazer pelo Chat
+
+O GastoZAP permite ao usuário gerenciar suas finanças pessoais inteiramente pelo WhatsApp (ou Telegram), usando linguagem natural. Abaixo estão **todos os recursos** disponíveis:
+
+### 📝 Registrar Despesas e Receitas
+
+O usuário pode registrar gastos e receitas simplesmente descrevendo o que aconteceu:
+
+| Tipo de Entrada | Exemplos |
+|-----------------|----------|
+| **Texto simples** | `Gastei 50 reais no supermercado` / `Paguei 120 na conta de luz` / `Recebi 3000 de salário` |
+| **Valor com R$** | `Comprei remédio por R$ 35,90` / `Paguei R$ 1.250,00 no financiamento` |
+| **Sem valor explícito** | `Almocei no restaurante e deu 65` / `Deixei 100 no mercado` |
+| **Com data** | `Ontem gastei 80 no jantar` / `Semana passada paguei 200 na oficina` |
+| **📸 Foto de nota/cupom** | Envie uma foto de nota fiscal, cupom ou comprovante – a IA extrai os dados automaticamente |
+| **🎤 Áudio/voz** | Grave um áudio descrevendo o gasto – o bot transcreve e processa |
+
+**Verbos reconhecidos:** gastei, paguei, comprei, recebi, ganhei, vendi, transferi, depositei, saquei, entre outros.
+
+**Categorização automática:** O bot identifica automaticamente a categoria (Alimentação, Saúde, Transporte, etc.) usando RAG + IA. Se a confiança for baixa, pede confirmação ao usuário.
+
+---
+
+### 💰 Consultar Saldo e Extrato
+
+| Comando | O que faz |
+|---------|-----------|
+| `saldo` | Mostra o saldo atual da conta |
+| `meu saldo` | Mostra o saldo atual |
+| `extrato` | Mostra o extrato financeiro |
+| `quanto tenho` | Consulta quanto tem disponível |
+| `quanto sobrou` | Verifica quanto sobrou no mês |
+| `tô devendo` | Verifica se está devendo |
+
+---
+
+### 📊 Resumos e Análises
+
+| Comando | O que faz |
+|---------|-----------|
+| `resumo do mês` | Resumo mensal completo (receitas vs despesas) |
+| `resumo mensal` | Mesmo que acima |
+| `quanto gastei` | Total gasto no mês |
+| `quanto recebi` | Total recebido no mês |
+| `como estou` | Visão geral das finanças |
+| `gastos por categoria` | Análise detalhada por categoria com percentuais |
+| `onde mais gastei` | Mostra as categorias com maiores gastos |
+| `maiores gastos` | Principais gastos do mês |
+| `gráfico` / `gerar gráfico` | Gera imagem com gráfico dos gastos por categoria |
+
+---
+
+### 📋 Listar Transações
+
+| Comando | O que faz |
+|---------|-----------|
+| `minhas transações` | Lista transações do mês |
+| `meus gastos` | Lista gastos recentes |
+| `histórico` | Histórico de transações |
+| `gastos recentes` | Últimas transações |
+| `trans` / `trx` | Atalho para listar transações |
+
+---
+
+### ⏳ Contas Pendentes
+
+| Comando | O que faz |
+|---------|-----------|
+| `contas pendentes` | Lista contas a pagar |
+| `contas a pagar` | Mesmo que acima |
+| `o que tenho que pagar` | Mostra débitos pendentes |
+| `o que falta pagar` | Pendências de pagamento |
+| `pendentes` | Lista todas as pendências |
+| `o que tenho que receber` | Valores a receber pendentes |
+
+---
+
+### 💳 Cartões de Crédito
+
+| Comando | O que faz |
+|---------|-----------|
+| `meus cartões` | Lista todos os cartões cadastrados |
+| `cc` | Atalho para listar cartões |
+| `minhas faturas` | Lista faturas dos cartões |
+| `minha fatura` | Detalhes da fatura atual |
+| `fatura do cartão [nome]` | Ver fatura de um cartão específico |
+| `quanto devo no cartão` | Valor total em aberto nos cartões |
+| `pagar fatura` | Marcar fatura como paga |
+| `usar cartão [nome]` | Definir cartão padrão |
+| `qual cartão` / `meu cartão` | Mostrar cartão padrão atual |
+
+---
+
+### 🏦 Gerenciamento de Perfis/Contas
+
+| Comando | O que faz |
+|---------|-----------|
+| `meu perfil` | Lista perfis disponíveis |
+| `perfil atual` | Mostra o perfil ativo |
+| `qual conta` | Mostra a conta ativa |
+| `trocar perfil` | Alterna entre perfis (pessoal/empresa) |
+| `mudar de perfil` | Mesmo que acima |
+
+---
+
+### ✅ Confirmação de Transações
+
+Quando o bot registra uma transação com baixa confiança, pede confirmação:
+
+| Resposta | Ação |
+|----------|------|
+| `sim` / `s` / `ok` / `confirmar` / `pode ser` | Confirma a transação |
+| `não` / `n` / `cancelar` / `errado` | Cancela e permite corrigir |
+
+---
+
+### ℹ️ Ajuda e Suporte
+
+| Comando | O que faz |
+|---------|-----------|
+| `ajuda` | Mostra menu de ajuda com comandos disponíveis |
+| `como funciona` | Explica como usar o bot |
+| `como usar` | Instruções de uso |
+| `comandos` | Lista de comandos |
+| `help` | Ajuda em inglês |
+
+---
+
+### 👋 Saudações
+
+O bot responde a saudações de forma amigável e contextual:
+
+`oi`, `olá`, `bom dia`, `boa tarde`, `boa noite`, `e aí`, `opa`, `fala`, `tudo bem`
+
+---
+
+### 🎯 Categorias Padrão do Sistema
+
+O sistema vem com 13 categorias de despesas pré-configuradas, cada uma com subcategorias:
+
+| Categoria | Subcategorias |
+|-----------|---------------|
+| 🛒 **Alimentação** | Feira, Lanches, Marmita, Padaria, Restaurante, Sorveteria, Supermercado, Outros |
+| 🏠 **Casa** | Cama e Banho, Diversos, Ferramentas, Manutenção, Móveis, Reforma, Utensílios |
+| 📚 **Educação** | Creche, Cursos, Escola Particular, Livros, Material Escolar, Outros |
+| 📱 **Eletrônicos** | Acessórios, Eletrodomésticos, Suprimentos, Outros |
+| 💰 **Investimentos** | Aluguel, Aplicação, Consórcio, Financiamentos, Outros |
+| 👤 **Pessoal** | Cabelo, Crianças, Manicure, Presente |
+| 🎮 **Recreação** | Brinquedos, Cinema, Clube, Esporte, Festas, Ingresso, Jogos, Lazer, Parque, Outros |
+| 🏥 **Saúde** | Consultas, Dentista, Exames, Farmácia, Fisioterapia, Médico, Plano Funerário, Plano de Saúde, Seguro Vida, Suplementação, Terapia, Ótica, Outros |
+| 🔧 **Serviços** | Academia, Assinaturas, Atendimento Técnico, Babá, Despachante, Energia, Frete, Gás, Internet, Lavanderia, Recarga Celular, Refrigeração, Segurança, Água, Outros |
+| 📄 **Taxas** | Anuidade, Cartório, Documentação Carro, Imposto de Renda, Multa ou Juros, Tarifa Bancária, Outras |
+| 🚗 **Transporte** | Combustível, Estacionamento, Lava Jato, Manutenção, Multas, Pedágio, Rotativo, Seguro |
+| 👕 **Vestuário** | Acessórios, Calçados, Roupas |
+| ✈️ **Viajem** | Alimentação, Bebidas, Combustível, Farmácia, Hotel, Passagens, Presentes, Restaurante, Taxi |
+
+---
+
+### 🧠 Sistema de Aprendizado (Sinônimos)
+
+O bot aprende com o uso! Termos não reconhecidos na primeira vez passam pela IA e, após confirmação, são registrados como sinônimos para resolução instantânea nas próximas vezes.
+
+**Exemplo:**
+1. Usuário envia: `paguei o uber` → Bot não reconhece "uber" → IA sugere "Transporte"
+2. Admin aprova sinônimo: `uber → Transporte > Combustível`
+3. Próxima vez: `paguei o uber` → Resolvido instantaneamente sem chamar IA
+
+---
+
+## �📚 Documentação
 
 ### 🎯 Fluxos Principais
 

@@ -81,7 +81,7 @@ export class RecurringTransactionService {
           description: confirmation.description
             ? `${confirmation.description} (${this.formatFrequency(frequency)})`
             : `Recorrência ${this.formatFrequency(frequency)}`,
-          date: occurrence.date.toISOString().split('T')[0], // YYYY-MM-DD
+          dueDate: occurrence.date.toISOString().split('T')[0], // YYYY-MM-DD
           source: confirmation.platform || 'whatsapp',
         };
 
@@ -211,7 +211,7 @@ export class RecurringTransactionService {
           description: confirmation.description
             ? `${confirmation.description} (${installment.installmentNumber}/${totalInstallments})`
             : `Parcela ${installment.installmentNumber}/${totalInstallments}`,
-          date: installment.date.toISOString().split('T')[0],
+          dueDate: installment.date.toISOString().split('T')[0],
           source: confirmation.platform || 'whatsapp',
         };
 

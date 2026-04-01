@@ -40,12 +40,13 @@ export abstract class GastoCertoApiClientBase {
     return response.data;
   }
 
-  protected async post<T>(path: string, body: any, hmacPayload?: any): Promise<T> {
+  protected async post<T>(path: string, body: any, hmacPayload?: any, extraConfig?: Record<string, any>): Promise<T> {
     const hmacHeaders = this.serviceAuthService.generateAuthHeaders(hmacPayload ?? body);
     const response = await firstValueFrom(
       this.httpService.post<T>(`${this.baseUrl}${path}`, body, {
         headers: { ...hmacHeaders, 'Content-Type': 'application/json' },
         timeout: this.timeout,
+        ...extraConfig,
       }),
     );
     return response.data;

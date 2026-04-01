@@ -123,11 +123,16 @@ export class TransactionApiSenderService {
 
       // API exige description não vazio - usar subcategoria ou categoria como fallback
       // Também ignora descrições que são apenas forma de pagamento (ex: "cartão", "cartã", "pix")
-      const descriptionValue =
+      let descriptionValue =
         (rawDescription && !isPaymentMethodOnly) ? rawDescription
         : (confirmation.subCategoryName && confirmation.subCategoryName.trim()) ? confirmation.subCategoryName.trim()
         : (confirmation.category && confirmation.category.trim()) ? confirmation.category.trim()
         : 'Transação';
+
+      // Incluir nome do estabelecimento na descrição
+      if (merchant && merchant.trim()) {
+        descriptionValue = `${descriptionValue} - ${merchant.trim()}`;
+      }
 
       const isCreditCard = !!confirmation.creditCardId;
 
@@ -139,15 +144,15 @@ export class TransactionApiSenderService {
         categoryId,
         subCategoryId,
         description: descriptionValue,
-        date: confirmation.date
+        dueDate: confirmation.date
           ? DateUtil.formatToISO(DateUtil.normalizeDate(confirmation.date))
           : DateUtil.formatToISO(DateUtil.today()),
-        ...(merchant && merchant.trim() ? { merchant: merchant.trim() } : {}),
         isCreditCard,
         ...(confirmation.installments && confirmation.installments > 1 ? {
           installments: confirmation.installments,
           installmentType: (confirmation.installmentValueType as 'INSTALLMENT_VALUE' | 'GROSS_VALUE') || 'GROSS_VALUE',
         } : {}),
+        ...(confirmation.isFixed ? { isFixed: true } : {}),
         source: confirmation.platform || 'telegram',
       };
 
@@ -229,15 +234,13 @@ export class TransactionApiSenderService {
         });
         this.logger.log(`✅ Confirmação ${confirmation.id} marcada como enviada`);
 
-        // Criar parcelas adicionais se transação for parcelada
-        if (confirmation.installments && confirmation.installments > 1) {
-          await this.recurringService.createAdditionalInstallments(confirmation);
-        }
+        // NOTA: Parcelas (installments) são criadas automaticamente pela API
+        // quando installments + installmentType são enviados no DTO.
+        // NÃO criar parcelas adicionais aqui para evitar duplicação.
 
-        // Criar próximas ocorrências se transação for fixa/recorrente
-        if (confirmation.isFixed && confirmation.fixedFrequency) {
-          await this.recurringService.createRecurringOccurrences(confirmation);
-        }
+        // NOTA: Transações fixas/recorrentes são criadas automaticamente pela API
+        // quando isFixed: true é enviado no DTO (via FixedTransactionsService).
+        // NÃO criar ocorrências adicionais aqui para evitar duplicação.
 
         // Buscar nome da conta
         const accountName = confirmation.accountId

@@ -16,4 +16,6 @@ export interface ProcessMessageResult {
     | 'CONFIRMATION_REQUEST'
     | 'TRANSACTION_RESULT'
     | 'ERROR';
+  /** Buffer de imagem para enviar junto com a mensagem (gráficos, PDFs futuros) */
+  imageBuffer?: Buffer;
 }

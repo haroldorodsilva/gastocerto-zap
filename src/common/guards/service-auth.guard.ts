@@ -26,17 +26,15 @@ export class ServiceAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
 
-    const serviceId = request.headers['x-service-id'] as string;
     const timestamp = request.headers['x-timestamp'] as string;
     const signature = request.headers['x-signature'] as string;
 
-    if (!serviceId || !timestamp || !signature) {
+    if (!timestamp || !signature) {
       this.logger.warn('Missing authentication headers');
       throw new UnauthorizedException('Missing service authentication headers');
     }
 
     const isValid = this.serviceAuthService.validateRequest(
-      serviceId,
       timestamp,
       signature,
       request.body,
@@ -46,8 +44,7 @@ export class ServiceAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid service authentication');
     }
 
-    // Adiciona serviceId no request para uso posterior
-    (request as any).serviceId = serviceId;
+    return true;
 
     return true;
   }

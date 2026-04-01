@@ -4,6 +4,11 @@ import { UserCache } from '@prisma/client';
 import { AccountManagementService } from '@features/accounts/account-management.service';
 import { formatCurrency, formatCurrencyFromCents } from '@/utils/currency';
 import { ListTransactionsResponseDto } from '@/shared/types';
+import {
+  getListingIntro,
+  getBalanceComment,
+  getEmptyListMessage,
+} from '@shared/utils/response-variations';
 
 export interface ListingFilters {
   period?: 'today' | 'week' | 'month' | 'last_month' | 'custom';
@@ -26,7 +31,6 @@ export interface TransactionListItem {
   date: string; // YYYY-MM-DD
   dueDate?: string; // YYYY-MM-DD
   paidAt?: string; // ISO 8601
-  merchant?: string;
   status: 'PENDING' | 'DONE' | 'OVERDUE';
   accountId: string;
   accountName: string; // STRING - Nome da conta
@@ -209,7 +213,7 @@ export class TransactionListingService {
     const resume = data.data?.resume;
 
     // Cabeçalho
-    let message = '📋 *Transações*\n\n';
+    let message = getListingIntro(transactions.length) + '\n\n';
 
     // Filtros aplicados
     if (type || category || period) {
@@ -238,6 +242,7 @@ export class TransactionListingService {
       message += `💸 *Gastos:* R$ ${formatCurrencyFromCents(resume.expenseTotal || 0)}\n`;
       message += `💰 *Receitas:* R$ ${formatCurrencyFromCents(resume.incomeTotal || 0)}\n`;
       message += `📊 *Balanço:* R$ ${formatCurrencyFromCents(resume.finalBalance || 0)}\n`;
+      message += getBalanceComment(resume.expenseTotal || 0, resume.incomeTotal || 0, resume.finalBalance || 0);
       message += '\n';
     }
 
@@ -338,32 +343,7 @@ export class TransactionListingService {
    * Formata mensagem quando não há transações
    */
   private formatEmptyListMessage(filters: ListingFilters): string {
-    let message = '📭 *Nenhuma transação encontrada*\n\n';
-
-    if (filters.category) {
-      message += `Não há transações na categoria *${filters.category}*`;
-    } else if (filters.type) {
-      const typeText = filters.type === 'EXPENSES' ? 'gastos' : 'receitas';
-      message += `Não há ${typeText} registrados`;
-    } else {
-      message += 'Você ainda não tem transações registradas';
-    }
-
-    const periodText = {
-      today: 'hoje',
-      week: 'esta semana',
-      month: 'este mês',
-      last_month: 'no mês passado',
-    };
-
-    if (filters.period && periodText[filters.period]) {
-      message += ` ${periodText[filters.period]}`;
-    }
-
-    message += '.\n\n';
-    message += '_Para registrar, envie:_\n';
-    message += '💬 "Gastei R$ 50 em alimentação"';
-
-    return message;
+    const context = filters.category || (filters.type === 'EXPENSES' ? 'gastos' : filters.type === 'INCOME' ? 'receitas' : undefined);
+    return getEmptyListMessage(context);
   }
 }

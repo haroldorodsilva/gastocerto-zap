@@ -356,6 +356,9 @@ export class WebChatService {
     if (result.requiresConfirmation) {
       messageType = 'confirmation';
       color = 'warning';
+    } else if (result.imageBuffer && Buffer.isBuffer(result.imageBuffer)) {
+      messageType = 'info';
+      color = 'success';
     } else if (result.success) {
       messageType = 'transaction';
       color = 'success';
@@ -378,10 +381,13 @@ export class WebChatService {
       data.amount = parseFloat(amountMatch[1].replace('.', '').replace(',', '.'));
     }
 
-    // Extrair categoria se mencionada
-    const categoryMatch = result.message.match(/categoria[:\s]+([^\n]+)/i);
-    if (categoryMatch) {
-      data.category = categoryMatch[1].trim();
+    // Extrair categoria se mencionada (não para respostas de gráfico)
+    const isChartResponse = result.imageBuffer && Buffer.isBuffer(result.imageBuffer);
+    if (!isChartResponse) {
+      const categoryMatch = result.message.match(/categoria[:\s]+([^\n]+)/i);
+      if (categoryMatch) {
+        data.category = categoryMatch[1].trim();
+      }
     }
 
     // Combinar mensagens se houver mensagem adicional (do aprendizado)
@@ -389,7 +395,7 @@ export class WebChatService {
       ? `${additionalMessage}\n\n${result.message}`
       : result.message;
 
-    return {
+    const response: WebChatResponse = {
       success: result.success,
       messageType,
       message: this.removeEmojis(finalMessage),
@@ -399,6 +405,14 @@ export class WebChatService {
         highlight: this.extractHighlights(finalMessage),
       },
     };
+
+    // Incluir imagem se disponível (gráficos)
+    if (result.imageBuffer && Buffer.isBuffer(result.imageBuffer)) {
+      response.imageBase64 = result.imageBuffer.toString('base64');
+      response.imageMimeType = 'image/png';
+    }
+
+    return response;
   }
 
   /**

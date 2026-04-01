@@ -31,10 +31,12 @@ import { IntentModule } from '@features/intent/intent.module';
 import { AccountsModule } from '@features/accounts/accounts.module';
 import { MessagesModule } from '@infrastructure/messaging/messages/messages.module';
 import { SecurityModule } from '@features/security/security.module';
+import { ConversationModule } from '@features/conversation/conversation.module';
 // Intent Handlers (Strategy Pattern)
 import {
   INTENT_HANDLERS,
   AccountIntentHandler,
+  ChartIntentHandler,
   ConfirmationIntentHandler,
   PaymentIntentHandler,
   SummaryIntentHandler,
@@ -46,6 +48,7 @@ import {
 /** Todas as classes de IntentHandler para injeção via factory */
 const INTENT_HANDLER_CLASSES = [
   AccountIntentHandler,
+  ChartIntentHandler,
   ConfirmationIntentHandler,
   PaymentIntentHandler,
   SummaryIntentHandler,
@@ -63,6 +66,7 @@ const INTENT_HANDLER_CLASSES = [
     IntentModule,
     AccountsModule,
     SecurityModule,
+    ConversationModule,
     forwardRef(() => MessagesModule),
   ],
   controllers: [TransactionsController],

@@ -96,6 +96,7 @@ export const BALANCE_KEYWORDS = [
   'saldo',
   'extrato',
   'balanço',
+  'balanco',
   'sobro quanto',
   'sobrou quanto',
   'tem dinheiro',
@@ -104,7 +105,13 @@ export const BALANCE_KEYWORDS = [
   'saldo atual',
   'quanto tenho',
   'balanço geral',
+  'balanco geral',
   'meu balanço',
+  'meu balanco',
+  'sobrou',
+  'quanto sobrou',
+  'to devendo',
+  'tô devendo',
 ] as const;
 
 // ──────────────────────────────────────────────
@@ -129,6 +136,11 @@ export const MONTHLY_SUMMARY_KEYWORDS = [
   'como estao minhas financas',
   'meu mês',
   'meu mes',
+  'como estou',
+  'como to',
+  'como tô',
+  'situacao do mes',
+  'situação do mês',
 ] as const;
 
 // ──────────────────────────────────────────────
@@ -150,6 +162,10 @@ export const CATEGORY_BREAKDOWN_KEYWORDS = [
   'principais gastos',
   'detalhamento por categoria',
   'gastos por tipo',
+  'gastei em que',
+  'gastei mais em que',
+  'em que gastei',
+  'por categoria',
 ] as const;
 
 // ──────────────────────────────────────────────
@@ -174,6 +190,12 @@ export const LIST_TRANSACTIONS_KEYWORDS = [
   'mostrar receitas',
   'histórico',
   'historico',
+  'transacoes',
+  'transacao',
+  'gastos recentes',
+  'ultimos gastos',
+  'ultimas transacoes',
+  'extrato de gastos',
 ] as const;
 
 // ──────────────────────────────────────────────
@@ -463,4 +485,43 @@ export const TIME_INDICATORS = [
   'semana passada',
   'mês passado',
   'agora',
+] as const;
+
+// ──────────────────────────────────────────────
+// Abbreviation map (slang → expanded form)
+// Applied before keyword matching
+// ──────────────────────────────────────────────
+export const ABBREVIATION_MAP: Record<string, string> = {
+  trans: 'transacoes',
+  trx: 'transacoes',
+  transacao: 'transacoes',
+  cat: 'por categoria',
+  cc: 'cartao de credito',
+  faturas: 'minhas faturas',
+};
+
+// ──────────────────────────────────────────────
+// Chart generation
+// ──────────────────────────────────────────────
+export const GENERATE_CHART_KEYWORDS = [
+  'gráfico',
+  'grafico',
+  'gerar gráfico',
+  'gerar grafico',
+  'mostra gráfico',
+  'mostra grafico',
+  'ver gráfico',
+  'ver grafico',
+  'gráfico de categorias',
+  'grafico de categorias',
+  'gráfico mensal',
+  'grafico mensal',
+  'gráfico do mês',
+  'grafico do mes',
+  'imagem dos gastos',
+  'chart',
+  'mostra imagem',
+  'ver imagem dos gastos',
+  'visão geral em imagem',
+  'visao geral em imagem',
 ] as const;

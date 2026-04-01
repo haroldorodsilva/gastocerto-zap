@@ -3,6 +3,13 @@ import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { AIProviderFactory } from '@infrastructure/ai/ai-provider.factory';
 import { UserCache } from '@prisma/client';
 import { DateUtil } from '@/utils/date.util';
+import {
+  getSummaryIntro,
+  getBalanceSummaryIntro,
+  getSummaryBalanceComment,
+  getCategoryInsight,
+  getPredictedBalanceComment,
+} from '@shared/utils/response-variations';
 
 export interface SummaryRequest {
   summaryType: 'monthly' | 'credit_card_invoice' | 'category_breakdown' | 'balance';
@@ -102,7 +109,7 @@ export class TransactionSummaryService {
 
       this.logger.log(`📊 Gerando resumo mensal: ${targetMonth}`);
 
-      const result = await this.gastoCertoApi.getMonthlySummary(user.activeAccountId, month, year);
+      const result = await this.gastoCertoApi.getMonthlySummary(user.gastoCertoId, user.activeAccountId, month, year);
 
       if (!result.success || !result.data) {
         return {
@@ -208,6 +215,7 @@ export class TransactionSummaryService {
       this.logger.log(`📊 Gerando análise por categoria: ${targetMonth}`);
 
       const result = await this.gastoCertoApi.getCategoryBreakdown(
+        user.gastoCertoId,
         user.activeAccountId,
         targetMonth,
       );
@@ -233,6 +241,13 @@ export class TransactionSummaryService {
           message += `   R$ ${cat.amount.toFixed(2)} • ${percentage.toFixed(1)}%\n`;
           message += `   📊 ${cat.count} transações\n\n`;
         });
+
+        // Insight sobre a maior categoria de despesa
+        if (breakdown.expenses.length > 0) {
+          const topExpense = breakdown.expenses[0];
+          const topPct = (topExpense.amount / breakdown.totalExpenses) * 100;
+          message += `${getCategoryInsight(topExpense.category, topPct)}\n\n`;
+        }
       }
 
       // Receitas
@@ -245,6 +260,10 @@ export class TransactionSummaryService {
           message += `   📊 ${cat.count} transações\n\n`;
         });
       }
+
+      // Balanço geral
+      const netBalance = (breakdown.totalIncome || 0) - (breakdown.totalExpenses || 0);
+      message += getSummaryBalanceComment(netBalance, breakdown.totalIncome || 0, breakdown.totalExpenses || 0);
 
       return {
         success: true,
@@ -289,11 +308,11 @@ export class TransactionSummaryService {
 
       const balanceEmoji = finalBalance >= 0 ? '✅' : '⚠️';
 
-      let message = `💰 *Resumo Financeiro ${DateUtil.formatYearMonthToMMYYYY(resume.yearMonth)}*\n`;
+      let message = `${getBalanceSummaryIntro()}\n\n`;
+      message += `💰 *Resumo Financeiro ${DateUtil.formatYearMonthToMMYYYY(resume.yearMonth)}*\n\n`;
 
       // Saldo inicial
-      message += `💼 *Saldo Atual*\n`;
-      message += `R$ ${balance.toFixed(2)}\n\n`;
+      message += `💼 *Saldo Atual:* R$ ${balance.toFixed(2)}\n\n`;
 
       // Movimentações
       message += `*Movimentações*\n`;
@@ -303,13 +322,15 @@ export class TransactionSummaryService {
 
       // Cartões
       if (cardInvoicesTotal > 0) {
-        message += `💳 *Faturas de Cartão*\n`;
-        message += `R$ ${cardInvoicesTotal.toFixed(2)}\n\n`;
+        message += `💳 *Faturas de Cartão:* R$ ${cardInvoicesTotal.toFixed(2)}\n\n`;
       }
 
-      const predictedEmoji = predictedFinalBalance >= 0 ? '📈' : '📉';
-      message += `${predictedEmoji} *Saldo Previsto*\n`;
-      message += `R$ ${predictedFinalBalance.toFixed(2)}\n`;
+      // Previsão
+      message += `*Saldo Previsto:* R$ ${predictedFinalBalance.toFixed(2)}\n`;
+      message += getPredictedBalanceComment(predictedFinalBalance) + '\n\n';
+
+      // Comentário contextual sobre a situação geral
+      message += getSummaryBalanceComment(finalBalance, income, expenses);
 
       return {
         success: true,
@@ -328,7 +349,8 @@ export class TransactionSummaryService {
    * Formato manual do resumo mensal (fallback)
    */
   private formatMonthlySummaryManual(summary: MonthlySummary, monthRef: string): string {
-    let message = `📊 *Resumo de ${this.formatMonthYear(monthRef)}*\n\n`;
+    const monthName = this.formatMonthYear(monthRef);
+    let message = `${getSummaryIntro(monthName)}\n\n`;
     message += '───────────────────\n\n';
     message += `💰 *Receitas:* R$ ${summary.totalIncome.toFixed(2)}\n`;
     message += `💸 *Despesas:* R$ ${summary.totalExpense.toFixed(2)}\n`;
@@ -345,7 +367,14 @@ export class TransactionSummaryService {
         message += `${index + 1}. ${this.getCategoryEmoji(cat.category)} ${cat.category}\n`;
         message += `   R$ ${cat.amount.toFixed(2)} (${cat.percentage.toFixed(1)}%)\n\n`;
       });
+
+      // Insight sobre a categoria principal
+      const top = summary.topCategories[0];
+      message += `${getCategoryInsight(top.category, top.percentage)}\n\n`;
     }
+
+    // Comentário contextual sobre o balanço
+    message += getSummaryBalanceComment(summary.balance, summary.totalIncome, summary.totalExpense);
 
     return message;
   }

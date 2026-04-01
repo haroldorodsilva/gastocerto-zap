@@ -235,6 +235,7 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
   // ─── Balance ────────────────────────────────────────────────
 
   async getMonthlySummary(
+    userId: string,
     accountId: string,
     month?: number,
     year?: number,
@@ -243,12 +244,13 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
       const currentDate = new Date();
       const targetMonth = month || currentDate.getMonth() + 1;
       const targetYear = year || currentDate.getFullYear();
+      const monthYear = `${targetYear}-${targetMonth.toString().padStart(2, '0')}`;
 
       this.logger.log(
-        `📊 Buscando resumo mensal ${targetYear}-${targetMonth.toString().padStart(2, '0')}`,
+        `📊 Buscando resumo mensal ${monthYear}`,
       );
 
-      const body = { accountId, month: targetMonth, year: targetYear };
+      const body = { userId, accountId, monthYear };
       const data = await this.post('/external/balance/monthly-resume', body);
 
       this.logger.log(`✅ Resumo mensal obtido com sucesso`);
@@ -261,6 +263,7 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
   }
 
   async getCategoryBreakdown(
+    userId: string,
     accountId: string,
     monthReference: string,
   ): Promise<{ success: boolean; data?: any; error?: string }> {
@@ -270,7 +273,7 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
       );
 
       const [year, month] = monthReference.split('-').map(Number);
-      const body = { accountId, month, year };
+      const body = { userId, accountId, month, year };
       const data = await this.post('/external/balance/category-breakdown', body);
 
       this.logger.log(`✅ Análise de categorias recebida`);
@@ -309,6 +312,7 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
 
   async getMonthlyBalance(
     userId: string,
+    accountId: string,
     monthYear?: string,
   ): Promise<{
     success: boolean;
@@ -330,7 +334,7 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
       const month = monthYear || new Date().toISOString().slice(0, 7);
       this.logger.log(`💰 Buscando resumo mensal - userId: ${userId}, month: ${month}`);
 
-      const body = { userId, monthYear: month };
+      const body = { userId, accountId, monthYear: month };
       const data = await this.post<any>('/external/balance/monthly-resume', body);
 
       if (data.success) {
@@ -339,6 +343,62 @@ export class TransactionApiClient extends GastoCertoApiClientBase {
       return data;
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar resumo mensal:`, error.message);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Gera gráfico de categorias (retorna Buffer PNG + dados das categorias)
+   */
+  async getCategoryChart(
+    accountId: string,
+    year: number,
+    month: number,
+    type?: 'INCOME' | 'EXPENSE',
+    userId?: string,
+  ): Promise<{ success: boolean; imageBuffer?: Buffer; categories?: any[] }> {
+    try {
+      this.logger.log(`📊 Gerando gráfico de categorias - accountId: ${accountId}, ${year}-${month}`);
+      const queryType = type === 'INCOME' ? 'INCOME' : 'EXPENSES';
+      const body = { accountId, year, month, userId: userId || 'system' };
+      const data = await this.post<any>(
+        `/external/charts/categories?format=json&type=${queryType}`,
+        body,
+      );
+      if (!data.success || !data.image) {
+        return { success: false };
+      }
+      const buffer = Buffer.from(data.image, 'base64');
+      this.logger.log(`✅ Gráfico de categorias gerado (${buffer.length} bytes, ${data.categories?.length || 0} categorias)`);
+      return { success: true, imageBuffer: buffer, categories: data.categories || [] };
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao gerar gráfico de categorias:`, error.message);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Gera gráfico de visão geral mensal (retorna Buffer PNG)
+   */
+  async getMonthlyOverviewChart(
+    accountId: string,
+    year: number,
+    month: number,
+  ): Promise<{ success: boolean; imageBuffer?: Buffer }> {
+    try {
+      this.logger.log(`📊 Gerando gráfico mensal - accountId: ${accountId}, ${year}-${month}`);
+      const body = { accountId, year, month };
+      const data = await this.post<ArrayBuffer>(
+        '/external/charts/monthly-overview?format=buffer',
+        body,
+        undefined,
+        { responseType: 'arraybuffer' },
+      );
+      const buffer = Buffer.from(data);
+      this.logger.log(`✅ Gráfico mensal gerado (${buffer.length} bytes)`);
+      return { success: true, imageBuffer: buffer };
+    } catch (error: any) {
+      this.logger.error(`❌ Erro ao gerar gráfico mensal:`, error.message);
       return { success: false };
     }
   }

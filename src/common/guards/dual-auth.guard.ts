@@ -19,7 +19,7 @@ import { JwtValidationService } from '../services/jwt-validation.service';
  *
  * Tentativas:
  * 1. Verifica se tem Authorization: Bearer <token> -> tenta JWT
- * 2. Verifica se tem X-Service-ID + X-Signature -> tenta HMAC
+ * 2. Verifica se tem X-Timestamp + X-Signature -> tenta HMAC
  * 3. Se nenhum funcionar -> UnauthorizedException
  *
  * Uso:
@@ -92,16 +92,14 @@ export class DualAuthGuard implements CanActivate {
    */
   private tryHmacAuth(request: Request): boolean {
     try {
-      const serviceId = request.headers['x-service-id'] as string;
       const timestamp = request.headers['x-timestamp'] as string;
       const signature = request.headers['x-signature'] as string;
 
-      if (!serviceId || !timestamp || !signature) {
+      if (!timestamp || !signature) {
         return false;
       }
 
       const isValid = this.serviceAuthService.validateRequest(
-        serviceId,
         timestamp,
         signature,
         request.body,
@@ -111,8 +109,6 @@ export class DualAuthGuard implements CanActivate {
         return false;
       }
 
-      // Adiciona serviceId no request
-      (request as any).serviceId = serviceId;
       (request as any).authType = 'hmac';
 
       return true;

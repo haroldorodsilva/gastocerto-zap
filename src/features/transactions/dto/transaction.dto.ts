@@ -166,11 +166,7 @@ export class CreateGastoCertoTransactionDto {
 
   @IsString()
   @IsOptional()
-  date?: string; // ISO 8601 format
-
-  @IsString()
-  @IsOptional()
-  merchant?: string;
+  dueDate?: string; // ISO 8601 format
 
   @IsString()
   source: string; // 'whatsapp' | 'telegram'
@@ -186,6 +182,10 @@ export class CreateGastoCertoTransactionDto {
   @IsString()
   @IsOptional()
   installmentType?: 'INSTALLMENT_VALUE' | 'GROSS_VALUE'; // Tipo do valor informado
+
+  @IsBoolean()
+  @IsOptional()
+  isFixed?: boolean; // Transação fixa/recorrente
 
   @IsString()
   @IsOptional()

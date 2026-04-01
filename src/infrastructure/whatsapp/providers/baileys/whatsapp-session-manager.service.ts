@@ -985,7 +985,7 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
     options: {
       text?: string;
       caption?: string;
-      image?: string;
+      image?: string | Buffer;
       document?: { url: string; mimetype: string; fileName: string };
     },
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
@@ -1019,7 +1019,9 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
       }
 
       if (options.image) {
-        messageContent.image = { url: options.image };
+        messageContent.image = Buffer.isBuffer(options.image)
+          ? options.image
+          : { url: options.image };
         if (options.caption) messageContent.caption = options.caption;
       }
 

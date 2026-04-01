@@ -45,6 +45,8 @@ export interface WebChatResponse {
   success: boolean;
   messageType: 'transaction' | 'confirmation' | 'learning' | 'info' | 'error';
   message: string;
+  imageBase64?: string; // Imagem em base64 (gráficos, etc.)
+  imageMimeType?: string; // MIME type da imagem (image/png)
   data?: {
     transactionId?: string;
     amount?: number;

@@ -5,18 +5,16 @@ import * as crypto from 'crypto';
 /**
  * ServiceAuthService
  * Autenticação entre serviços usando HMAC SHA-256
- * Sem necessidade de JWT - usa assinatura HMAC + timestamp
+ * Valida apenas o hash com SERVICE_SHARED_SECRET + timestamp
  */
 @Injectable()
 export class ServiceAuthService {
   private readonly logger = new Logger(ServiceAuthService.name);
   private readonly sharedSecret: string;
-  private readonly thisServiceId: string;
   private readonly requestTimeoutMs: number;
 
   constructor(private readonly configService: ConfigService) {
     this.sharedSecret = this.configService.get<string>('serviceAuth.sharedSecret')!;
-    this.thisServiceId = this.configService.get<string>('serviceAuth.thisServiceId')!;
     this.requestTimeoutMs = this.configService.get<number>('serviceAuth.requestTimeoutMs')!;
 
     if (this.sharedSecret === 'changeme-in-production') {
@@ -36,7 +34,6 @@ export class ServiceAuthService {
     const signature = this.generateSignature(timestamp, bodyStr);
 
     return {
-      'x-service-id': this.thisServiceId,
       'x-timestamp': timestamp,
       'x-signature': signature,
     };
@@ -44,13 +41,12 @@ export class ServiceAuthService {
 
   /**
    * Valida requisição recebida de outro serviço
-   * @param serviceId - ID do serviço que está chamando
    * @param timestamp - Timestamp da requisição
    * @param signature - Assinatura HMAC
    * @param body - Corpo da requisição
    * @returns true se válido, false caso contrário
    */
-  validateRequest(serviceId: string, timestamp: string, signature: string, body?: any): boolean {
+  validateRequest(timestamp: string, signature: string, body?: any): boolean {
     try {
       // 1. Verifica se timestamp não está expirado
       const requestTime = parseInt(timestamp);
@@ -58,7 +54,7 @@ export class ServiceAuthService {
       const diff = now - requestTime;
 
       if (diff < 0 || diff > this.requestTimeoutMs) {
-        this.logger.warn(`Request from ${serviceId} expired or future timestamp. Diff: ${diff}ms`);
+        this.logger.warn(`Request expired or future timestamp. Diff: ${diff}ms`);
         return false;
       }
 
@@ -67,11 +63,11 @@ export class ServiceAuthService {
       const expectedSignature = this.generateSignature(timestamp, bodyStr);
 
       if (!this.secureCompare(signature, expectedSignature)) {
-        this.logger.warn(`Invalid signature from service: ${serviceId}`);
+        this.logger.warn('Invalid HMAC signature');
         return false;
       }
 
-      this.logger.debug(`✅ Valid request from service: ${serviceId}`);
+      this.logger.debug('✅ Valid service request');
       return true;
     } catch (error) {
       this.logger.error(`Error validating request: ${error.message}`);

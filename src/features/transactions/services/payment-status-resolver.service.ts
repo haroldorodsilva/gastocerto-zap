@@ -7,7 +7,6 @@ export interface TransactionData {
   date?: string | null;
   category: string;
   subCategory?: string | null;
-  merchant?: string | null;
   confidence: number;
 
   // Campos avançados

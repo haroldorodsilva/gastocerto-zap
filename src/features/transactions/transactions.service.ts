@@ -1,9 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { UserCache } from '@prisma/client';
 import { UserCacheService } from '@features/users/user-cache.service';
-import { IntentAnalyzerService } from '@features/intent/intent-analyzer.service';
+import { IntentAnalyzerService, IntentAnalysisResult, MessageIntent } from '@features/intent/intent-analyzer.service';
 import { AccountManagementService } from '@features/accounts/account-management.service';
 import { SecurityService } from '@features/security/security.service';
+import { ConversationMemoryService } from '@features/conversation/conversation-memory.service';
+import { DisambiguationService } from '@features/conversation/disambiguation.service';
+import { getPostActionSuggestion } from '@shared/utils/response-variations';
 import { TransactionRegistrationService } from './contexts/registration/registration.service';
 import { TransactionListingService } from './contexts/listing/listing.service';
 import { TransactionPaymentService } from './contexts/payment/payment.service';
@@ -53,6 +56,8 @@ export class TransactionsService {
     private readonly confirmationService: TransactionConfirmationService,
     private readonly creditCardService: CreditCardService,
     private readonly listContext: ListContextService,
+    private readonly conversationMemory: ConversationMemoryService,
+    private readonly disambiguationService: DisambiguationService,
     @Inject(INTENT_HANDLERS) intentHandlers: IntentHandler[],
   ) {
     // Construir mapa de despacho: MessageIntent → IntentHandler
@@ -76,6 +81,7 @@ export class TransactionsService {
     context: 'INTENT_RESPONSE' | 'CONFIRMATION_REQUEST' | 'TRANSACTION_RESULT' | 'ERROR',
     metadata?: any,
     platformId?: string,
+    imageBuffer?: Buffer,
   ): void {
     const targetId = platformId || phoneNumber;
 
@@ -86,6 +92,7 @@ export class TransactionsService {
       context,
       platform,
       metadata,
+      imageBuffer,
     });
   }
 
@@ -218,9 +225,48 @@ export class TransactionsService {
       }
 
       // 2. Analisar intenção com NLP
+      // Salvar mensagem do usuário na memória de conversa
+      void this.conversationMemory.addEntry(phoneNumber, { role: 'user', text });
+
+      // 1.6. VERIFICAR DESAMBIGUAÇÃO PENDENTE ("1", "2", "3")
+      const resolvedIntent = await this.disambiguationService.resolveNumericResponse(phoneNumber, text);
+      if (resolvedIntent) {
+        this.logger.log(`🔢 Desambiguação resolvida: ${resolvedIntent}`);
+
+        // Converter string de intent para IntentAnalysisResult e processar normalmente
+        const intentResult: IntentAnalysisResult = {
+          intent: resolvedIntent as MessageIntent,
+          confidence: 0.9,
+          shouldProcess: true,
+        };
+
+        // Salvar resposta do bot na memória
+        void this.conversationMemory.addEntry(phoneNumber, {
+          role: 'bot',
+          text: `[desambiguação → ${resolvedIntent}]`,
+          intent: resolvedIntent,
+        });
+
+        // Despachar para o handler correto
+        const handler = this.intentHandlerMap.get(resolvedIntent);
+        if (handler) {
+          const ctx: IntentHandlerContext = { user, text, messageId, platform, platformId, accountId: activeAccountId, phoneNumber, intentResult };
+          return handler.handle(ctx);
+        }
+      }
+
       // Usar platformId real (chatId do Telegram, número do WhatsApp, etc) ao invés de user.phoneNumber
       const actualPhoneNumber = platformId || phoneNumber;
-      const intentResult = await this.intentAnalyzer.analyzeIntent(text, actualPhoneNumber, user.id);
+      let intentResult = await this.intentAnalyzer.analyzeIntent(text, actualPhoneNumber, user.id);
+
+      // 2.1. Follow-up contextual: se UNKNOWN, tentar resolver com memória de conversa
+      if (intentResult.intent === 'UNKNOWN') {
+        const resolved = await this.tryContextualFollowUp(phoneNumber, text, intentResult);
+        if (resolved) {
+          intentResult = resolved;
+          this.logger.log(`🔗 Follow-up contextual resolvido: ${intentResult.intent}`);
+        }
+      }
 
       this.logger.log(
         `🎯 Intent: ${intentResult.intent} | Confiança: ${(intentResult.confidence * 100).toFixed(1)}%`,
@@ -270,6 +316,13 @@ export class TransactionsService {
         const responseMessage =
           intentResult.suggestedResponse ||
           'Mensagem recebida. Para registrar transações, envie: "Gastei R$50 no mercado"';
+
+        // Salvar resposta do bot na memória
+        void this.conversationMemory.addEntry(phoneNumber, {
+          role: 'bot',
+          text: responseMessage,
+          intent: intentResult.intent,
+        });
 
         this.emitReply(phoneNumber, responseMessage, platform, 'INTENT_RESPONSE', {
           intent: intentResult.intent,
@@ -362,13 +415,30 @@ export class TransactionsService {
 
         const result = await handler.handle(ctx);
 
+        // Adicionar sugestão pós-ação (se sucesso e não requer confirmação)
+        if (result.success && !result.requiresConfirmation && result.message) {
+          const suggestion = getPostActionSuggestion(intentResult.intent);
+          if (suggestion) {
+            result.message = result.message + '\n\n' + suggestion;
+          }
+        }
+
+        // Salvar resposta do bot na memória
+        if (result.message) {
+          void this.conversationMemory.addEntry(phoneNumber, {
+            role: 'bot',
+            text: result.message,
+            intent: intentResult.intent,
+          });
+        }
+
         if (result.message) {
           const replyContext = result.replyContext ||
             (result.requiresConfirmation ? 'CONFIRMATION_REQUEST' : 'TRANSACTION_RESULT');
           this.emitReply(phoneNumber, result.message, platform, replyContext, {
             success: result.success,
             confirmationId: result.confirmationId,
-          }, platformId);
+          }, platformId, result.imageBuffer);
         }
 
         return { ...result, platform };
@@ -772,6 +842,98 @@ export class TransactionsService {
         success: false,
         message: '❌ Erro ao gerar resumo.',
       };
+    }
+  }
+
+  /**
+   * Tenta resolver uma mensagem UNKNOWN como follow-up contextual
+   * baseado na última intenção da conversa.
+   *
+   * Exemplos:
+   * - Última intent: LIST_TRANSACTIONS → "receitas" → LIST_TRANSACTIONS type=INCOME
+   * - Última intent: MONTHLY_SUMMARY → "e fevereiro?" → MONTHLY_SUMMARY mês=02
+   * - "outro" / "mais um" após REGISTER_TRANSACTION → nova transação (passthrough)
+   */
+  private async tryContextualFollowUp(
+    phoneNumber: string,
+    text: string,
+    originalResult: IntentAnalysisResult,
+  ): Promise<IntentAnalysisResult | null> {
+    try {
+      const lastIntent = await this.conversationMemory.getLastIntent(phoneNumber);
+      if (!lastIntent) return null;
+
+      const normalized = text.toLowerCase().trim();
+
+      // Follow-ups para LIST_TRANSACTIONS
+      if (lastIntent === 'LIST_TRANSACTIONS') {
+        if (/^(receitas?|entradas?|ganhos?)$/.test(normalized)) {
+          return {
+            intent: MessageIntent.LIST_TRANSACTIONS,
+            confidence: 0.8,
+            shouldProcess: true,
+            metadata: { type: 'INCOME' },
+          };
+        }
+        if (/^(gastos?|despesas?|saidas?)$/.test(normalized)) {
+          return {
+            intent: MessageIntent.LIST_TRANSACTIONS,
+            confidence: 0.8,
+            shouldProcess: true,
+            metadata: { type: 'EXPENSES' },
+          };
+        }
+      }
+
+      // Follow-ups para MONTHLY_SUMMARY / CATEGORY_BREAKDOWN
+      if (lastIntent === 'MONTHLY_SUMMARY' || lastIntent === 'CATEGORY_BREAKDOWN') {
+        const monthMatch = normalized.match(
+          /(?:e\s+)?(?:de\s+)?(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)/,
+        );
+        if (monthMatch) {
+          const monthNames: Record<string, number> = {
+            janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6,
+            julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+          };
+          const month = monthNames[monthMatch[1]];
+          const year = new Date().getFullYear();
+          const monthRef = `${year}-${String(month).padStart(2, '0')}`;
+          return {
+            intent: lastIntent === 'MONTHLY_SUMMARY' ? MessageIntent.MONTHLY_SUMMARY : MessageIntent.CATEGORY_BREAKDOWN,
+            confidence: 0.8,
+            shouldProcess: true,
+            metadata: { monthReference: monthRef },
+          };
+        }
+        if (/(?:e\s+)?(?:o\s+)?mes passado/.test(normalized)) {
+          const d = new Date();
+          d.setMonth(d.getMonth() - 1);
+          const monthRef = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          return {
+            intent: lastIntent === 'MONTHLY_SUMMARY' ? MessageIntent.MONTHLY_SUMMARY : MessageIntent.CATEGORY_BREAKDOWN,
+            confidence: 0.8,
+            shouldProcess: true,
+            metadata: { monthReference: monthRef },
+          };
+        }
+      }
+
+      // "outro" / "mais um" após REGISTER_TRANSACTION → passthrough (será processado como nova transação)
+      if (lastIntent === 'REGISTER_TRANSACTION') {
+        if (/^(outr[oa]|mais um[a]?|de novo)$/.test(normalized)) {
+          return {
+            intent: MessageIntent.REGISTER_TRANSACTION,
+            confidence: 0.6,
+            shouldProcess: true,
+            suggestedResponse: '📝 Pode mandar! O que mais você gastou ou recebeu?',
+          };
+        }
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(`Erro ao resolver follow-up: ${error.message}`);
+      return null;
     }
   }
 

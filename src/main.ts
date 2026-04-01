@@ -5,6 +5,7 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
 import { ErrorResponseInterceptor } from './common/interceptors/error-response.interceptor';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
@@ -13,13 +14,15 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
  * Resolve a lista de origens CORS permitidas a partir de CORS_ORIGINS (env).
  * Aceita lista separada por vírgula. Fallback: '*' em dev, nenhum em prod.
  */
-function resolveCorsOrigins(configService: ConfigService): string | string[] {
+function resolveCorsOrigins(configService: ConfigService): true | string[] {
   const raw = configService.get<string>('CORS_ORIGINS');
   if (raw) {
-    return raw.split(',').map((o) => o.trim());
+    const origins = raw.split(',').map((o) => o.trim());
+    if (origins.includes('*')) return true;
+    return origins;
   }
   const env = configService.get('NODE_ENV', 'development');
-  return env === 'production' ? [] : '*';
+  return env === 'production' ? [] : true;
 }
 
 async function bootstrap() {
@@ -82,6 +85,17 @@ async function bootstrap() {
     origin: corsOrigins,
     credentials: true,
   });
+
+  // 📄 Swagger docs (apenas fora de produção)
+  if (nodeEnv !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('GastoCerto ZAP API')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   await app.listen(port, '0.0.0.0');
 
