@@ -87,18 +87,20 @@ export class RAGService {
 
   /**
    * Indexa categorias do usuário no cache (Redis ou Map)
+   * @param accountId - Quando fornecido, a chave de cache é isolada por conta (n:m)
    */
-  async indexUserCategories(userId: string, categories: UserCategory[]): Promise<void> {
-    this.logger.log(`📚 Indexando ${categories.length} categorias para usuário ${userId}`);
+  async indexUserCategories(userId: string, categories: UserCategory[], accountId?: string | null): Promise<void> {
+    const cacheScope = accountId || userId;
+    this.logger.log(`📚 Indexando ${categories.length} categorias | userId: ${userId} | accountId: ${accountId || 'default'}`);
 
     if (this.useRedisCache) {
       // Salvar no Redis com TTL de 24h
-      const cacheKey = `rag:categories:${userId}`;
+      const cacheKey = `rag:categories:${cacheScope}`;
       await this.cacheManager.set(cacheKey, JSON.stringify(categories), this.cacheTTL * 1000);
       this.logger.debug(`✅ Categorias salvas no Redis: ${cacheKey}`);
     } else {
       // Fallback: Map em memória
-      this.categoryCache.set(userId, categories);
+      this.categoryCache.set(cacheScope, categories);
       this.logger.debug(`⚠️ Categorias salvas no Map (temporário)`);
     }
   }
@@ -106,10 +108,12 @@ export class RAGService {
   /**
    * Retorna categorias do cache (formato expandido usado pelo RAG)
    * Útil para resolver IDs de categoria/subcategoria após match do RAG
+   * @param accountId - Quando fornecido, usa chave isolada por conta (n:m)
    */
-  async getCachedCategories(userId: string): Promise<UserCategory[]> {
+  async getCachedCategories(userId: string, accountId?: string | null): Promise<UserCategory[]> {
+    const cacheScope = accountId || userId;
     if (this.useRedisCache) {
-      const cacheKey = `rag:categories:${userId}`;
+      const cacheKey = `rag:categories:${cacheScope}`;
       const cached = await this.cacheManager.get<string>(cacheKey);
       if (cached) {
         const categories = JSON.parse(cached);
@@ -117,7 +121,7 @@ export class RAGService {
         return categories;
       }
     } else {
-      const categories = this.categoryCache.get(userId) || [];
+      const categories = this.categoryCache.get(cacheScope) || [];
       this.logger.debug(`⚠️ Retornando ${categories.length} categorias do Map`);
       return categories;
     }
@@ -127,28 +131,30 @@ export class RAGService {
 
   /**
    * Busca categorias similares usando BM25 + Sinônimos Personalizados
+   * @param config.accountId - Quando fornecido, usa chave de cache isolada por conta (n:m)
    */
   async findSimilarCategories(
     text: string,
     userId: string,
-    config: Partial<RAGConfig> & { skipLogging?: boolean } = {},
+    config: Partial<RAGConfig> & { skipLogging?: boolean; accountId?: string | null } = {},
   ): Promise<CategoryMatch[]> {
     const startTime = Date.now();
-    const { skipLogging, ...configRest } = config;
+    const { skipLogging, accountId, ...configRest } = config;
     const finalConfig = { ...this.defaultConfig, ...configRest };
+    const cacheScope = accountId || userId;
 
     // Buscar categorias do cache (Redis ou Map)
     let categories: UserCategory[] = [];
 
     if (this.useRedisCache) {
-      const cacheKey = `rag:categories:${userId}`;
+      const cacheKey = `rag:categories:${cacheScope}`;
       const cached = await this.cacheManager.get<string>(cacheKey);
       if (cached) {
         categories = JSON.parse(cached);
         this.logger.debug(`✅ Categorias carregadas do Redis: ${categories.length} itens`);
       }
     } else {
-      categories = this.categoryCache.get(userId) || [];
+      categories = this.categoryCache.get(cacheScope) || [];
       this.logger.debug(`⚠️ Categorias carregadas do Map: ${categories.length} itens`);
     }
 

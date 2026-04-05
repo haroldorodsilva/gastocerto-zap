@@ -244,7 +244,7 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       // Indexar categorias no RAG
       if (ragEnabled && categoriesData.categories.length > 0) {
-        await this.indexCategoriesInRAG(user.gastoCertoId, categoriesData.categories);
+        await this.indexCategoriesInRAG(user.gastoCertoId, categoriesData.categories, activeAccountId);
       }
 
       // 2. FASE 1: Tentar RAG match direto (rápido, sem custo)
@@ -260,13 +260,13 @@ export class TransactionRegistrationService implements OnModuleInit {
       const detectedType = ragEnabled ? await this.detectTransactionType(text) : null;
 
       if (ragEnabled) {
-        extractedData = await this.matchWithRAG(text, user.gastoCertoId, aiSettings, detectedType);
+        extractedData = await this.matchWithRAG(text, user.gastoCertoId, activeAccountId, aiSettings, detectedType);
       }
 
       // 3. FASE 2+3: Se RAG não funcionou, usar IA + revalidação
       if (!extractedData) {
         const aiResult = await this.extractWithAIAndRevalidate(
-          text, userContext, user.gastoCertoId, aiSettings, ragEnabled, detectedType,
+          text, userContext, user.gastoCertoId, aiSettings, ragEnabled, detectedType, activeAccountId,
         );
         extractedData = aiResult.extractedData;
         responseTime = aiResult.responseTime;
@@ -1164,7 +1164,7 @@ export class TransactionRegistrationService implements OnModuleInit {
    * Indexa categorias do usuário no RAG para matching semântico.
    * Expande categorias com subcategorias em entradas individuais.
    */
-  private async indexCategoriesInRAG(userId: string, categories: any[]): Promise<void> {
+  private async indexCategoriesInRAG(userId: string, categories: any[], accountId?: string | null): Promise<void> {
     try {
       // Expandir cada categoria com suas subcategorias (criar entrada para cada uma)
       const { expandCategoriesForRAG } = await import('../../../users/user-cache.service');
@@ -1201,10 +1201,10 @@ export class TransactionRegistrationService implements OnModuleInit {
         );
       }
 
-      await this.ragService.indexUserCategories(userId, userCategories);
+      await this.ragService.indexUserCategories(userId, userCategories, accountId);
       this.logger.log(
         `🧠 RAG indexado: ${userCategories.length} categorias | ` +
-          `UserId: ${userId}`,
+          `UserId: ${userId} | AccountId: ${accountId || 'default'}`,
       );
     } catch (ragError) {
       this.logger.warn(`⚠️ Erro ao indexar RAG (não bloqueante):`, ragError);
@@ -1218,6 +1218,7 @@ export class TransactionRegistrationService implements OnModuleInit {
   private async matchWithRAG(
     text: string,
     userId: string,
+    accountId: string | null | undefined,
     aiSettings: any,
     detectedType: 'INCOME' | 'EXPENSES' | undefined | null,
   ): Promise<any | null> {
@@ -1255,6 +1256,7 @@ export class TransactionRegistrationService implements OnModuleInit {
           minScore: 0.4,
           maxResults: 3,
           transactionType: detectedType,
+          accountId,
         });
 
         this.logger.log(
@@ -1300,6 +1302,7 @@ export class TransactionRegistrationService implements OnModuleInit {
     aiSettings: any,
     ragEnabled: any,
     detectedType: 'INCOME' | 'EXPENSES' | undefined | null,
+    accountId?: string | null,
   ): Promise<{ extractedData: any; responseTime: number }> {
     this.logger.log(`🤖 FASE 2: Chamando IA para extrair transação...`);
     this.logger.debug(
@@ -1327,6 +1330,7 @@ export class TransactionRegistrationService implements OnModuleInit {
             minScore: 0.5,
             maxResults: 1,
             transactionType: detectedType,
+            accountId,
           },
         );
 

@@ -149,13 +149,15 @@ export class TransactionConfirmationService {
 
   /**
    * Busca confirmação pendente do usuário
+   * @param accountId - Quando fornecido, filtra apenas confirmações desta conta (n:m)
    */
-  async getPendingConfirmation(phoneNumber: string): Promise<TransactionConfirmation | null> {
+  async getPendingConfirmation(phoneNumber: string, accountId?: string | null): Promise<TransactionConfirmation | null> {
     return this.prisma.transactionConfirmation.findFirst({
       where: {
         phoneNumber,
         status: ConfirmationStatus.PENDING,
         deletedAt: null,
+        ...(accountId ? { accountId } : {}),
       },
       orderBy: {
         createdAt: 'desc',
@@ -165,8 +167,9 @@ export class TransactionConfirmationService {
 
   /**
    * Busca TODAS as confirmações pendentes do usuário
+   * @param accountId - Quando fornecido, filtra apenas confirmações desta conta (n:m)
    */
-  async getAllPendingConfirmations(phoneNumber: string): Promise<TransactionConfirmation[]> {
+  async getAllPendingConfirmations(phoneNumber: string, accountId?: string | null): Promise<TransactionConfirmation[]> {
     return this.prisma.transactionConfirmation.findMany({
       where: {
         phoneNumber,
@@ -175,6 +178,7 @@ export class TransactionConfirmationService {
         expiresAt: {
           gt: new Date(), // Apenas não expiradas
         },
+        ...(accountId ? { accountId } : {}),
       },
       orderBy: {
         createdAt: 'asc',
@@ -184,8 +188,9 @@ export class TransactionConfirmationService {
 
   /**
    * Conta confirmações pendentes do usuário
+   * @param accountId - Quando fornecido, filtra apenas confirmações desta conta (n:m)
    */
-  async countPendingConfirmations(phoneNumber: string): Promise<number> {
+  async countPendingConfirmations(phoneNumber: string, accountId?: string | null): Promise<number> {
     return this.prisma.transactionConfirmation.count({
       where: {
         phoneNumber,
@@ -194,6 +199,7 @@ export class TransactionConfirmationService {
         expiresAt: {
           gt: new Date(),
         },
+        ...(accountId ? { accountId } : {}),
       },
     });
   }

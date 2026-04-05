@@ -273,7 +273,7 @@ export class TransactionsService {
       );
 
       // 2a. VERIFICAR SE HÁ CONFIRMAÇÃO PENDENTE (bloqueio de contexto)
-      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
+      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber, activeAccountId);
 
       if (hasPending) {
         this.logger.log(`⏸️  Usuário tem confirmação pendente - bloqueando novas transações`);
@@ -493,9 +493,8 @@ export class TransactionsService {
       const activeAccountId = accountId || user.activeAccountId;
       this.logger.log(`🖼️ [Orchestrator] Processando imagem de ${phoneNumber} | UserId: ${user.id} | AccountId: ${activeAccountId}`);
 
-
       // Verificar se há confirmação pendente (bloqueio de contexto)
-      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
+      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber, activeAccountId);
       if (hasPending) {
         this.logger.log(`⏸️  Usuário tem confirmação pendente - bloqueando nova imagem`);
 
@@ -579,9 +578,8 @@ export class TransactionsService {
       const activeAccountId = accountId || user.activeAccountId;
       this.logger.log(`🎤 [Orchestrator] Processando áudio de ${phoneNumber} | UserId: ${user.id} | AccountId: ${activeAccountId}`);
 
-
       // Verificar se há confirmação pendente (bloqueio de contexto)
-      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
+      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber, activeAccountId);
       if (hasPending) {
         this.logger.log(`⏸️  Usuário tem confirmação pendente - bloqueando novo áudio`);
 
@@ -669,7 +667,7 @@ export class TransactionsService {
       );
 
       // Verificar se há confirmação pendente
-      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
+      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber, activeAccountId);
       if (hasPending) {
         const blockMessage =
           '⏸️  *Você tem uma transação aguardando confirmação!*\n\n' +
@@ -783,11 +781,12 @@ export class TransactionsService {
    */
   async listPendingConfirmations(
     phoneNumber: string,
+    accountId?: string | null,
   ): Promise<{ success: boolean; message: string }> {
     try {
       this.logger.log(`📋 [Orchestrator] Listando confirmações pendentes de ${phoneNumber}`);
 
-      const pending = await this.confirmationService.getAllPendingConfirmations(phoneNumber);
+      const pending = await this.confirmationService.getAllPendingConfirmations(phoneNumber, accountId);
 
       if (!pending || pending.length === 0) {
         return {
