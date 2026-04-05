@@ -42,6 +42,7 @@ export class RAGLearningService {
     userId: string,
     phoneNumber: string,
     extractedData?: any,
+    accountId?: string | null,
   ): Promise<{
     needsConfirmation: boolean;
     message?: string;
@@ -49,11 +50,11 @@ export class RAGLearningService {
   }> {
     try {
       this.logger.debug(
-        `🎓 [RAGLearningService] Iniciando detecção para userId=${userId}, text="${text}"`,
+        `🎓 [RAGLearningService] Iniciando detecção | userId=${userId} accountId=${accountId} text="${text}"`,
       );
 
-      // 1. Detectar termo desconhecido
-      const detection = await this.ragService.detectUnknownTerm(text, userId);
+      // 1. Detectar termo desconhecido (accountId-scoped)
+      const detection = await this.ragService.detectUnknownTerm(text, userId, accountId);
 
       this.logger.debug(
         `🎓 [RAGLearningService] detectUnknownTerm retornou: ${detection ? JSON.stringify(detection) : 'null'}`,
@@ -135,6 +136,7 @@ export class RAGLearningService {
         suggestedSubcategory: detection.suggestedSubcategory,
         originalText: text,
         confidence: detection.confidence,
+        accountId,  // propagado para uso no processResponse
         timestamp: Date.now(),
       };
 
@@ -231,9 +233,10 @@ export class RAGLearningService {
           `escolha a opção "Corrigir" na próxima vez.\n\n` +
           `Agora vou registrar sua transação... ⏳`;
       } else {
-        // Categoria específica - aprender
+        // Categoria específica - aprender (accountId-scoped)
         await this.userSynonymService.confirmAndLearn({
           userId,
+          accountId: context.accountId,
           originalTerm: context.detectedTerm,
           confirmedCategoryId: context.suggestedCategoryId,
           confirmedCategoryName: context.suggestedCategory,
@@ -367,9 +370,10 @@ export class RAGLearningService {
           const selected = matches[selection];
           const originalText = context.originalText; // Salvar antes de limpar
 
-          // Salvar correção
+          // Salvar correção (accountId-scoped)
           await this.userSynonymService.rejectAndCorrect({
             userId,
+            accountId: context.accountId,
             originalTerm: context.detectedTerm,
             rejectedCategoryId: context.suggestedCategoryId,
             rejectedCategoryName: context.suggestedCategory,
@@ -470,6 +474,7 @@ export class RAGLearningService {
         
         await this.userSynonymService.rejectAndCorrect({
           userId,
+          accountId: context.accountId,
           originalTerm: context.detectedTerm,
           rejectedCategoryId: context.suggestedCategoryId,
           rejectedCategoryName: context.suggestedCategory,
