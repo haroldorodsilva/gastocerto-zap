@@ -152,10 +152,19 @@ export class MessageFilterService implements IMessageFilter {
           filteredMessage.text = messageContent.videoMessage?.caption;
           break;
 
-        case 'documentMessage':
+        case 'documentMessage': {
           filteredMessage.type = MessageType.DOCUMENT;
           filteredMessage.text = messageContent.documentMessage?.caption;
+          filteredMessage.fileName = messageContent.documentMessage?.fileName;
+          filteredMessage.mimeType = messageContent.documentMessage?.mimetype;
+          try {
+            const buffer = await downloadMediaMessage(message, 'buffer', {});
+            filteredMessage.documentBuffer = buffer as Buffer;
+          } catch (error) {
+            this.logger.error(`Erro ao baixar documento: ${error.message}`);
+          }
           break;
+        }
 
         case 'stickerMessage':
           filteredMessage.type = MessageType.STICKER;

@@ -26,6 +26,10 @@ import {
   EXPENSE_KEYWORDS,
   INCOME_KEYWORDS,
 } from '@common/constants/nlp-keywords.constants';
+import {
+  PDF_EXTRACTION_SYSTEM_PROMPT,
+  PDF_EXTRACTION_USER_PROMPT,
+} from './prompts/pdf-analysis.prompt';
 import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
 import { FixedTransactionParserService } from '@features/transactions/services/parsers/fixed-transaction-parser.service';
 import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
@@ -578,6 +582,209 @@ export class TransactionRegistrationService implements OnModuleInit {
       );
     } catch (error) {
       this.logger.error(`❌ Erro ao processar áudio:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Processa documento PDF e extrai transação(ões)
+   * Usa pdf-parse para extrair texto e depois processa como texto estruturado via IA
+   */
+  async processDocumentTransaction(
+    phoneNumber: string,
+    documentBuffer: Buffer,
+    mimeType: string,
+    fileName: string,
+    messageId: string,
+    user: UserCache,
+    platform: string = 'whatsapp',
+    accountId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    requiresConfirmation: boolean;
+    confirmationId?: string;
+    transactionCount?: number;
+  }> {
+    try {
+      this.logger.log(`📄 [Registration] Processando documento "${fileName}" de ${phoneNumber}`);
+
+      if (!accountId) {
+        this.logger.error(`❌ AccountId não fornecido para ${phoneNumber}`);
+        return {
+          success: false,
+          message: '❌ Erro interno: conta não identificada.',
+          requiresConfirmation: false,
+        };
+      }
+
+      const isPdf =
+        mimeType === 'application/pdf' ||
+        fileName?.toLowerCase().endsWith('.pdf');
+
+      if (!isPdf) {
+        this.logger.warn(`⚠️ Tipo de documento não suportado: ${mimeType}`);
+        return {
+          success: false,
+          message:
+            '❌ Formato de documento não suportado.\n\n' +
+            '📄 Suporto apenas arquivos *PDF*.\n\n' +
+            '_Envie um PDF de nota fiscal, extrato ou comprovante._',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 1. Extrair texto do PDF usando pdf-parse
+      let pdfText: string;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pdfParse = require('pdf-parse');
+        const pdfData = await pdfParse(documentBuffer);
+        pdfText = pdfData.text?.trim();
+        this.logger.log(
+          `📝 Texto extraído do PDF: ${pdfText?.length || 0} chars | ${pdfData.numpages} página(s)`,
+        );
+      } catch (parseError) {
+        this.logger.error(`❌ Erro ao extrair texto do PDF: ${parseError.message}`);
+        return {
+          success: false,
+          message:
+            '❌ Não consegui ler o PDF enviado.\n\n' +
+            '_Verifique se o arquivo não está corrompido ou protegido por senha._',
+          requiresConfirmation: false,
+        };
+      }
+
+      if (!pdfText || pdfText.length < 10) {
+        this.logger.warn(`⚠️ PDF sem texto legível (possivelmente escaneado como imagem)`);
+        return {
+          success: false,
+          message:
+            '⚠️ Não encontrei texto no PDF.\n\n' +
+            '_PDFs escaneados como imagem ainda não são suportados._\n\n' +
+            '💡 *Dica:* Tire uma *foto* do documento para eu conseguir analisar!',
+          requiresConfirmation: false,
+        };
+      }
+
+      // 2. Usar IA para extrair transação(ões) do texto do PDF
+      const startTime = Date.now();
+      const aiProvider = this.aiFactory;
+      let parsedResult: any;
+
+      try {
+        const prompt = PDF_EXTRACTION_USER_PROMPT(pdfText);
+        const rawExtraction = await aiProvider.extractTransaction(
+          `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\n${prompt}`,
+          {
+            name: user.name,
+            email: user.email,
+            categories: [],
+          },
+        );
+
+        // A IA retorna JSON estruturado — tentar parsear do rawData ou do description
+        if (rawExtraction.rawData) {
+          parsedResult = rawExtraction.rawData;
+        } else {
+          // Fallback: usar os campos diretos como transação única
+          parsedResult = {
+            documentType: 'documento',
+            transactions: [rawExtraction],
+          };
+        }
+      } catch (aiError) {
+        this.logger.error(`❌ Erro na IA ao processar PDF: ${aiError.message}`);
+        return {
+          success: false,
+          message: '❌ Erro ao analisar o documento.\n\n_Tente novamente em alguns instantes._',
+          requiresConfirmation: false,
+        };
+      }
+
+      const responseTime = Date.now() - startTime;
+
+      await this.logAIUsage({
+        phoneNumber,
+        gastoCertoId: user.gastoCertoId,
+        platform,
+        operation: 'DOCUMENT_EXTRACTION',
+        inputType: 'TEXT',
+        inputText: `PDF: ${fileName} (${pdfText.length} chars)`,
+        responseTimeMs: responseTime,
+        imageSize: documentBuffer.length,
+        mimeType,
+      });
+
+      // 3. Processar transações extraídas
+      const transactions: any[] = parsedResult?.transactions || [];
+
+      if (transactions.length === 0) {
+        return {
+          success: false,
+          message:
+            '❓ Não identifiquei transações financeiras neste PDF.\n\n' +
+            '_Envie notas fiscais, extratos, comprovantes ou boletos quitados._',
+          requiresConfirmation: false,
+        };
+      }
+
+      // Para um único item (mais comum): processar normalmente
+      if (transactions.length === 1) {
+        const extractedData = transactions[0] as any;
+        extractedData.confidence = extractedData.confidence ?? 0.8;
+
+        this.logger.log(
+          `✅ Transação extraída do PDF | Tipo: ${extractedData.type} | Valor: R$ ${extractedData.amount} | Confiança: ${(extractedData.confidence * 100).toFixed(1)}%`,
+        );
+
+        // Validar e confirmar
+        return await this.createConfirmation(
+          phoneNumber,
+          extractedData,
+          messageId,
+          user,
+          platform,
+          accountId,
+        );
+      }
+
+      // Para múltiplas transações (extrato): processar o primeiro e informar o usuário
+      const firstTx = transactions[0];
+      const docType = parsedResult?.documentType || 'documento';
+      const summary = parsedResult?.summary || '';
+
+      this.logger.log(
+        `📊 PDF com ${transactions.length} transações detectadas (${docType}). Processando primeira.`,
+      );
+
+      const multipleMessage =
+        `📄 *${docType.charAt(0).toUpperCase() + docType.slice(1)} identificado*\n\n` +
+        (summary ? `📋 ${summary}\n\n` : '') +
+        `🔢 *${transactions.length} transações encontradas.*\n\n` +
+        `⚠️ _No momento processo uma transação por vez._\n` +
+        `_Para registrar todas, envie o arquivo separado por partes ou informe manualmente._\n\n` +
+        `*Primeira transação encontrada:*\n` +
+        `💰 R$ ${firstTx.amount?.toFixed(2)} — ${firstTx.description || firstTx.category}`;
+
+      // Criar confirmação para primeira transação
+      firstTx.confidence = firstTx.confidence ?? 0.75;
+      const firstResult = await this.createConfirmation(
+        phoneNumber,
+        firstTx,
+        messageId,
+        user,
+        platform,
+        accountId,
+      );
+
+      return {
+        ...firstResult,
+        message: multipleMessage + '\n\n' + firstResult.message,
+        transactionCount: transactions.length,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Erro ao processar documento:`, error);
       throw error;
     }
   }
@@ -1291,7 +1498,7 @@ export class TransactionRegistrationService implements OnModuleInit {
     phoneNumber: string;
     gastoCertoId: string;
     platform: string;
-    operation: 'TRANSACTION_EXTRACTION' | 'IMAGE_ANALYSIS' | 'AUDIO_TRANSCRIPTION';
+    operation: 'TRANSACTION_EXTRACTION' | 'IMAGE_ANALYSIS' | 'AUDIO_TRANSCRIPTION' | 'DOCUMENT_EXTRACTION';
     inputType: 'TEXT' | 'IMAGE' | 'AUDIO';
     inputText: string;
     responseTimeMs?: number;

@@ -210,11 +210,23 @@ export class MessageResponseService {
         };
       }
 
-      // TODO: Se não encontrar WhatsApp, tentar Telegram
-      // const telegramSession = await this.sessionsService.getTelegramSessionByPhone(platformId);
-      // if (telegramSession && telegramSession.isActive) {
-      //   return { sessionId: telegramSession.sessionId, platform: 'Telegram' };
-      // }
+      // Fallback: tentar sessão Telegram ativa (qualquer sessão ativa serve,
+      // pois o Telegram usa chatId como platformId, não telefone)
+      try {
+        const activeTelegramSessions = await this.sessionsService.listSessions({
+          platform: 'telegram' as any,
+          isActive: true,
+        } as any);
+
+        if (activeTelegramSessions && activeTelegramSessions.length > 0) {
+          return {
+            sessionId: activeTelegramSessions[0].sessionId,
+            platform: 'telegram',
+          };
+        }
+      } catch (_err) {
+        // listSessions pode não suportar filtro por platform — ignorar silenciosamente
+      }
 
       return null;
     } catch (error) {

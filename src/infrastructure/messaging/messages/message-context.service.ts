@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 import { RedisService } from '@common/services/redis.service';
+import { REPLY_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
 
 /**
  * Contexto de uma conversa ativa
@@ -45,7 +47,10 @@ export class MessageContextService implements OnModuleDestroy {
   // TTL padrão: 1 hora (em segundos para Redis)
   private readonly DEFAULT_TTL_SECONDS = 60 * 60;
 
-  constructor(private readonly redisService: RedisService) {
+  constructor(
+    private readonly redisService: RedisService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {
     this.logger.log('✅ MessageContextService inicializado (Redis-backed)');
   }
 
@@ -236,7 +241,8 @@ export class MessageContextService implements OnModuleDestroy {
   }
 
   /**
-   * Envia mensagem para o usuário na plataforma correta
+   * Envia mensagem para o usuário na plataforma correta.
+   * Delega para o sistema de eventos (REPLY_EVENTS) que é processado pelo MessageResponseService.
    */
   async sendMessage(platformId: string, message: string): Promise<boolean> {
     const context = await this.getContext(platformId);
@@ -247,17 +253,20 @@ export class MessageContextService implements OnModuleDestroy {
     }
 
     try {
-      if (context.platform === MessagingPlatform.WHATSAPP) {
-        // Importação dinâmica para evitar dependência circular
-        const { sendWhatsAppMessage } = await import('@infrastructure/whatsapp/simple-whatsapp-init');
-        return await sendWhatsAppMessage(platformId, message);
-      } else if (context.platform === MessagingPlatform.TELEGRAM) {
-        this.logger.warn(`⚠️ Envio de mensagens Telegram ainda não implementado`);
-        return false;
-      }
+      const eventName =
+        context.platform === MessagingPlatform.TELEGRAM
+          ? REPLY_EVENTS.TELEGRAM
+          : REPLY_EVENTS.WHATSAPP;
 
-      this.logger.warn(`⚠️ Plataforma desconhecida: ${context.platform}`);
-      return false;
+      this.eventEmitter.emit(eventName, {
+        platformId,
+        message,
+        context: 'INTENT_RESPONSE',
+        platform: context.platform,
+        sessionId: context.sessionId,
+      });
+
+      return true;
     } catch (error) {
       this.logger.error(`❌ Erro ao enviar mensagem para ${platformId}:`, error);
       return false;

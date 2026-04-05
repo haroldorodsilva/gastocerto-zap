@@ -648,6 +648,91 @@ export class TransactionsService {
   }
 
   /**
+   * Processa documento PDF e extrai transação(ões)
+   * DELEGA para TransactionRegistrationService
+   */
+  async processDocumentMessage(
+    user: UserCache,
+    documentBuffer: Buffer,
+    mimeType: string,
+    fileName: string,
+    messageId: string,
+    platform: 'whatsapp' | 'telegram' | 'webchat' = 'whatsapp',
+    platformId?: string,
+    accountId?: string,
+  ): Promise<ProcessMessageResult> {
+    try {
+      const phoneNumber = user.phoneNumber;
+      const activeAccountId = accountId || user.activeAccountId;
+      this.logger.log(
+        `📄 [Orchestrator] Processando documento "${fileName}" de ${phoneNumber} | AccountId: ${activeAccountId}`,
+      );
+
+      // Verificar se há confirmação pendente
+      const hasPending = await this.confirmationService.getPendingConfirmation(phoneNumber);
+      if (hasPending) {
+        const blockMessage =
+          '⏸️  *Você tem uma transação aguardando confirmação!*\n\n' +
+          'Por favor, primeiro responda:\n' +
+          '✅ Digite *"sim"* para confirmar\n' +
+          '❌ Digite *"não"* para cancelar\n\n' +
+          '💡 Ou digite *"pendentes"* para ver detalhes';
+
+        this.emitReply(phoneNumber, blockMessage, platform, 'CONFIRMATION_REQUEST', {
+          hasPending: true,
+          confirmationId: hasPending.id,
+        }, platformId);
+
+        return {
+          success: false,
+          message: blockMessage,
+          requiresConfirmation: true,
+          confirmationId: hasPending.id,
+        };
+      }
+
+      // Feedback imediato
+      const processingMessage =
+        '📄 *Analisando seu documento PDF...*\n\n' +
+        '🤖 Estou extraindo as informações financeiras.\n' +
+        '_Isso pode levar alguns segundos._';
+
+      this.emitReply(phoneNumber, processingMessage, platform, 'INTENT_RESPONSE', {
+        processing: true,
+        type: 'document',
+      }, platformId);
+
+      const result = await this.registrationService.processDocumentTransaction(
+        phoneNumber,
+        documentBuffer,
+        mimeType,
+        fileName,
+        messageId,
+        user,
+        platform,
+        activeAccountId,
+      );
+
+      if (result.message) {
+        const context = result.requiresConfirmation ? 'CONFIRMATION_REQUEST' : 'TRANSACTION_RESULT';
+        this.emitReply(phoneNumber, result.message, platform, context, {
+          success: result.success,
+          confirmationId: result.confirmationId,
+        }, platformId);
+      }
+
+      return { ...result, platform };
+    } catch (error) {
+      this.logger.error(`❌ Erro ao processar documento:`, error);
+      return {
+        success: false,
+        message: '❌ Erro ao processar documento PDF.',
+        requiresConfirmation: false,
+      };
+    }
+  }
+
+  /**
    * Processa confirmação de transação (sim/não)
    * DELEGA for TransactionConfirmationService
    */
@@ -807,11 +892,20 @@ export class TransactionsService {
         };
       }
 
-      // TODO: Extrair intenção da mensagem e criar PaymentRequest apropriado
-      // Por ora, retorna lista de pendentes
-      return await this.paymentService.processPayment(user, {
-        paymentType: 'pending_list',
-      });
+      // Extrair intenção do texto para montar PaymentRequest apropriado
+      const normalized = message.toLowerCase();
+      let paymentRequest: import('./contexts/payment/payment.service').PaymentRequest;
+
+      if (/fatura|cart[aã]o|cr[eé]dito/.test(normalized)) {
+        paymentRequest = { paymentType: 'credit_card' };
+      } else if (/conta\s+de\s+(luz|energia|água|agua|gás|gas|telefone|internet|aluguel)/.test(normalized)) {
+        const catMatch = normalized.match(/conta\s+de\s+(\w+)/);
+        paymentRequest = { paymentType: 'bill', category: catMatch?.[1] };
+      } else {
+        paymentRequest = { paymentType: 'pending_list' };
+      }
+
+      return await this.paymentService.processPayment(user, paymentRequest);
     } catch (error) {
       this.logger.error('Erro ao processar pagamento:', error);
       return {
@@ -1030,20 +1124,51 @@ export class TransactionsService {
           }
           break;
 
-        case 'transactions':
-          // Futura implementação: ações em transações da lista
-          return {
-            success: false,
-            message:
-              '⚠️ Ação em transações ainda não implementada.\n\n' +
-              'Use *"ver pendentes"* para listar contas que podem ser pagas.',
-          };
+        case 'transactions': {
+          // Buscar item da lista de transações pelo número
+          const item = context.items[itemNumber - 1];
+          if (!item) {
+            return {
+              success: false,
+              message: `❌ Item #${itemNumber} não encontrado. A lista tem ${context.items.length} item(s).`,
+            };
+          }
+
+          if (action === 'pay' && item.metadata?.status === 'PENDING') {
+            // Tentar pagar transação pendente diretamente
+            return await this.paymentService.paySpecificTransaction(user, item.id);
+          }
+
+          // Ação padrão: mostrar detalhes da transação
+          const t = item;
+          const typeEmoji = t.metadata?.type === 'EXPENSES' ? '💸' : '💰';
+          const statusEmoji =
+            t.metadata?.status === 'DONE' ? '✅' : t.metadata?.status === 'OVERDUE' ? '🔴' : '⏳';
+
+          let details =
+            `${typeEmoji} *Transação #${itemNumber}*\n\n` +
+            `📝 *Descrição:* ${t.description}\n` +
+            `📂 *Categoria:* ${t.category || 'Sem categoria'}\n` +
+            `💵 *Valor:* R$ ${(t.amount ?? 0).toFixed(2)}\n`;
+
+          if (t.metadata?.date) {
+            details += `📅 *Data:* ${new Date(t.metadata.date).toLocaleDateString('pt-BR')}\n`;
+          }
+          details += `${statusEmoji} *Status:* ${t.metadata?.status === 'DONE' ? 'Pago' : t.metadata?.status === 'OVERDUE' ? 'Atrasado' : 'Pendente'}\n`;
+          details += `🔑 *ID:* \`${t.id}\``;
+
+          if (t.metadata?.status === 'PENDING' || t.metadata?.status === 'OVERDUE') {
+            details += `\n\n💡 _Para pagar, diga:_ *"pagar ${itemNumber}"*`;
+          }
+
+          return { success: true, message: details };
+        }
 
         case 'confirmations':
-          // Futura implementação: confirmar item específico da lista
+          // Confirmações são tratadas pelo fluxo de sim/não — manter mensagem clara
           return {
             success: false,
-            message: '⚠️ Para confirmar transações, use *"sim"* ou *"não"*.',
+            message: '⚠️ Para confirmar transações, responda *"sim"* ou *"não"*.',
           };
 
         case 'category_correction': {
