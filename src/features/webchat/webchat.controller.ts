@@ -212,12 +212,13 @@ export class WebChatController {
     );
 
     try {
-      const result = await this.webChatService.processImageUpload(
-        userId,
-        file,
-        dto.message,
-        accountId,
-      );
+      // PDFs têm pipeline dedicado (pdf-parse → IA de texto)
+      // Imagens usam visão computacional (GPT-4V / Gemini)
+      const isPdf = file.mimetype === 'application/pdf' || file.originalname?.toLowerCase().endsWith('.pdf');
+
+      const result = isPdf
+        ? await this.webChatService.processDocumentUpload(userId, file, dto.message, accountId)
+        : await this.webChatService.processImageUpload(userId, file, dto.message, accountId);
 
       this.logger.log(`✅ [WebChat] Imagem processada: ${result.success}`);
       return result;
@@ -332,6 +333,92 @@ export class WebChatController {
         success: false,
         messageType: 'error',
         message: 'Erro ao processar áudio. Tente novamente.',
+        formatting: {
+          color: 'error',
+        },
+      };
+    }
+  }
+
+  @Post('upload/document')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Upload de documento PDF (extrato, nota fiscal, boleto)',
+    description:
+      'Envia um PDF para extração de transações. O sistema usa OCR de texto para identificar gastos, ' +
+      'receitas ou múltiplas transações de extratos bancários.',
+  })
+  @ApiHeader({
+    name: 'x-account',
+    description: 'ID da conta/perfil ativo (accountId)',
+    required: false,
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Arquivo PDF (nota fiscal, extrato, comprovante, boleto)',
+        },
+        message: {
+          type: 'string',
+          description: 'Contexto adicional opcional',
+          example: 'Extrato de fevereiro',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Documento processado com sucesso' })
+  @ApiResponse({ status: 400, description: 'Arquivo inválido ou ausente' })
+  @ApiResponse({ status: 401, description: 'Não autenticado' })
+  async uploadDocument(
+    @UploadedFile() file: Multer.File,
+    @Body() dto: UploadFileDto,
+    @Req() req: Request,
+    @Headers('x-account') accountId?: string,
+  ): Promise<UploadResponse> {
+    const user = (req as any).user as AuthenticatedUser;
+    const userId = user.id;
+
+    if (!file) {
+      throw new BadRequestException('Nenhum arquivo foi enviado');
+    }
+
+    const allowedMimeTypes = ['application/pdf'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException('Tipo de arquivo não suportado. Use apenas PDF');
+    }
+
+    const maxSize = 20 * 1024 * 1024; // 20MB
+    if (file.size > maxSize) {
+      throw new BadRequestException('Arquivo muito grande. Tamanho máximo: 20MB');
+    }
+
+    this.logger.log(
+      `📄 [WebChat] PDF recebido - userId: ${userId}, fileName: ${file.originalname}, size: ${file.size} bytes`,
+    );
+
+    try {
+      const result = await this.webChatService.processDocumentUpload(
+        userId,
+        file,
+        dto.message,
+        accountId,
+      );
+
+      this.logger.log(`✅ [WebChat] PDF processado: ${result.success}`);
+      return result;
+    } catch (error) {
+      this.logger.error(`❌ [WebChat] Erro ao processar PDF do usuário ${userId}:`, error);
+
+      return {
+        success: false,
+        messageType: 'error',
+        message: 'Erro ao processar PDF. Tente novamente.',
         formatting: {
           color: 'error',
         },

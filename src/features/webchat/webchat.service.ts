@@ -580,6 +580,90 @@ export class WebChatService {
   }
 
   /**
+   * Processa upload de documento PDF
+   * USA O MESMO FLUXO que WhatsApp/Telegram via TransactionsService
+   */
+  async processDocumentUpload(
+    userId: string,
+    file: Multer.File,
+    _additionalMessage?: string,
+    _accountId?: string,
+  ): Promise<UploadResponse> {
+    this.logger.log(
+      `📄 [WebChat] Processando documento PDF - userId: ${userId}, fileName: ${file.originalname}`,
+    );
+
+    try {
+      if (!file.buffer) {
+        return {
+          success: false,
+          messageType: 'error',
+          message: this.removeEmojis(
+            'Erro ao processar documento. Arquivo não foi carregado corretamente.',
+          ),
+          formatting: { color: 'error' },
+        };
+      }
+
+      // 1. Buscar ou criar usuário (mesmo padrão dos outros métodos)
+      let user = await this.userCacheService.getUserByGastoCertoId(userId);
+      if (!user) {
+        this.logger.log(`🆕 [WebChat] Criando usuário ${userId} automaticamente...`);
+        const apiUser = await this.gastoCertoApi.getUserById(userId);
+        if (!apiUser) {
+          throw new Error('Usuário não encontrado na API GastoCerto');
+        }
+        apiUser.phoneNumber = `webchat-${userId}`;
+        await this.userCacheService.createUserCache(apiUser);
+        user = await this.userCacheService.getUserByGastoCertoId(userId);
+      }
+
+      const phoneNumber = `webchat-${userId}`;
+      const messageId = `webchat-${randomUUID()}`;
+
+      this.logger.log(
+        `✅ [WebChat] Usuário documento: ${user.name} | AccountId: ${_accountId || 'default'}`,
+      );
+
+      // 2. Delegar para TransactionsService
+      const result = await this.transactionsService.processDocumentMessage(
+        user,
+        file.buffer,
+        file.mimetype,
+        file.originalname,
+        messageId,
+        'webchat',
+        phoneNumber,
+        _accountId,
+      );
+
+      // 3. Formatar resposta
+      return {
+        success: result.success,
+        messageType: this.mapMessageType(result),
+        message: this.removeEmojis(result.message),
+        data: {
+          fileName: file.originalname,
+          fileSize: file.size,
+          requiresConfirmation: result.requiresConfirmation,
+          confirmationId: result.confirmationId,
+        },
+        formatting: {
+          color: result.success ? 'success' : 'error',
+        },
+      };
+    } catch (error) {
+      this.logger.error(`❌ [WebChat] Erro ao processar documento PDF:`, error);
+      return {
+        success: false,
+        messageType: 'error',
+        message: this.removeEmojis('Erro ao processar documento. Tente novamente.'),
+        formatting: { color: 'error' },
+      };
+    }
+  }
+
+  /**
    * Processa upload de áudio (mensagem de voz)
    * USA O MESMO FLUXO que WhatsApp/Telegram via TransactionsService
    */
