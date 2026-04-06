@@ -998,14 +998,32 @@ export class AdminRagController {
       throw new BadRequestException(`Usuário ${userId} não encontrado no cache`);
     }
 
+    // Buscar nomes de categoria via API
+    let categoryName = categoryId;
+    let subCategoryName = subCategoryId ?? '';
+    try {
+      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(userId);
+      const allCategories = categoriesResponse?.accounts?.flatMap((a) => a.categories ?? []) ?? [];
+      const foundCategory = allCategories.find((c) => c.id === categoryId);
+      if (foundCategory) {
+        categoryName = foundCategory.name;
+        if (subCategoryId) {
+          const foundSub = foundCategory.subCategories?.find((s) => s.id === subCategoryId);
+          if (foundSub) subCategoryName = foundSub.name;
+        }
+      }
+    } catch {
+      // Non-fatal: proceed with categoryId as fallback name
+    }
+
     const synonym = await this.prisma.userSynonym.create({
       data: {
         userId: userCache.gastoCertoId,
         keyword: keyword.toLowerCase().trim(),
         categoryId,
-        categoryName: categoryId, // TODO: Buscar nome real da categoria
+        categoryName,
         subCategoryId: subCategoryId || '',
-        subCategoryName: subCategoryId || '',
+        subCategoryName,
         confidence: 0.9,
         source: 'ADMIN_APPROVED',
       },

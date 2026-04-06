@@ -423,6 +423,22 @@ export class TelegramMessageHandler {
         }
         break;
 
+      case MessageType.VIDEO:
+        this.logger.warn(`[Telegram] Video messages are not supported for ${userId}`);
+        await this.platformReply.sendReply({
+          platformId: userId,
+          message:
+            '⚠️ Vídeos não são suportados.\n\n' +
+            'Envie:\n' +
+            '• Texto: "Gastei 50 reais em alimentação"\n' +
+            '• Foto de nota fiscal ou comprovante\n' +
+            '• PDF de extrato ou nota fiscal\n' +
+            '• Áudio descrevendo o gasto',
+          context: 'ERROR',
+          platform: MessagingPlatform.TELEGRAM,
+        });
+        break;
+
       default:
         await this.platformReply.sendReply({
           platformId: userId,

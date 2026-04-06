@@ -379,6 +379,24 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
   }
 
   /**
+   * Envia documento
+   */
+  async sendDocumentMessage(
+    sessionId: string,
+    chatId: string,
+    document: Buffer,
+    fileName: string,
+    caption?: string,
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new NotFoundException(`Session ${sessionId} not found`);
+    }
+
+    await session.provider.sendDocumentMessage(chatId, document, fileName, { caption });
+  }
+
+  /**
    * Obtém sessão ativa
    */
   getSession(sessionId: string): PlatformSession | undefined {

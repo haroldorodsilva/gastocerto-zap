@@ -987,6 +987,7 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
       caption?: string;
       image?: string | Buffer;
       document?: { url: string; mimetype: string; fileName: string };
+      documentBuffer?: { data: Buffer; mimetype: string; fileName: string };
     },
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const sock = this.activeSockets.get(sessionId);
@@ -1025,7 +1026,12 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
         if (options.caption) messageContent.caption = options.caption;
       }
 
-      if (options.document) {
+      if (options.documentBuffer) {
+        messageContent.document = options.documentBuffer.data;
+        messageContent.mimetype = options.documentBuffer.mimetype;
+        messageContent.fileName = options.documentBuffer.fileName;
+        if (options.caption) messageContent.caption = options.caption;
+      } else if (options.document) {
         messageContent.document = { url: options.document.url };
         messageContent.mimetype = options.document.mimetype;
         messageContent.fileName = options.document.fileName;

@@ -54,6 +54,16 @@ export interface IMessagingProvider {
   ): Promise<MessageResult>;
 
   /**
+   * Envia mensagem com documento
+   */
+  sendDocumentMessage(
+    chatId: string,
+    document: Buffer,
+    fileName: string,
+    options?: SendMediaOptions,
+  ): Promise<MessageResult>;
+
+  /**
    * Baixa mídia de mensagem
    */
   downloadMedia(message: any): Promise<Buffer | null>;

@@ -17,6 +17,8 @@ export interface SendMessageEvent {
   platform?: MessagingPlatform; // ✨ NOVO: Plataforma de origem (telegram/whatsapp)
   sessionId?: string; // Opcional: SessionId explícito (se não fornecido, busca no contexto)
   imageBuffer?: Buffer; // Imagem para enviar junto (gráficos, etc.)
+  documentBuffer?: Buffer; // Documento para enviar junto (PDF, etc.)
+  documentName?: string; // Nome do arquivo do documento
   metadata?: {
     intent?: string;
     confidence?: number;
@@ -144,7 +146,7 @@ export class MessageResponseService {
       }
 
       // 3. Enviar mensagem via serviço correto (WhatsApp ou Telegram)
-      await this.sendMessage(targetSessionId, platformId, message, targetPlatform, event.imageBuffer);
+      await this.sendMessage(targetSessionId, platformId, message, targetPlatform, event.imageBuffer, event.documentBuffer, event.documentName);
 
       this.logger.log(
         `✅ Mensagem enviada com sucesso!\n` +
@@ -174,7 +176,7 @@ export class MessageResponseService {
         try {
           await new Promise((resolve) => setTimeout(resolve, 5000));
           await this.sendReply(
-            { platformId, message, context, metadata, sessionId, platform, imageBuffer: event.imageBuffer } as SendMessageEvent,
+            { platformId, message, context, metadata, sessionId, platform, imageBuffer: event.imageBuffer, documentBuffer: event.documentBuffer, documentName: event.documentName } as SendMessageEvent,
             expectedPlatform,
             true,
           );
@@ -244,6 +246,8 @@ export class MessageResponseService {
     message: string,
     platform: MessagingPlatform,
     imageBuffer?: Buffer,
+    documentBuffer?: Buffer,
+    documentName?: string,
   ): Promise<void> {
     try {
       if (platform === MessagingPlatform.WHATSAPP) {
@@ -253,7 +257,18 @@ export class MessageResponseService {
         // Formatar phoneNumber sem @s.whatsapp.net se necessário
         const phoneNumber = platformId.replace('@s.whatsapp.net', '');
 
-        if (imageBuffer) {
+        if (documentBuffer) {
+          // Enviar documento com caption
+          this.logger.debug(`📄 Enviando documento (${documentBuffer.length} bytes) com caption`);
+          const success = await this.whatsappSessionManager.sendAdvancedMessage(
+            sessionId,
+            phoneNumber,
+            { documentBuffer: { data: documentBuffer, mimetype: 'application/pdf', fileName: documentName || 'documento.pdf' }, caption: message },
+          );
+          if (!success) {
+            throw new Error('Failed to send WhatsApp document message');
+          }
+        } else if (imageBuffer) {
           // Enviar imagem com caption
           this.logger.debug(`🖼️ Enviando imagem (${imageBuffer.length} bytes) com caption`);
           const success = await this.whatsappSessionManager.sendAdvancedMessage(
@@ -273,7 +288,10 @@ export class MessageResponseService {
       } else if (platform === MessagingPlatform.TELEGRAM) {
         // Telegram: usar MultiPlatformSessionService
         this.logger.debug(`📤 Enviando via MultiPlatformSessionService: ${sessionId} → ${platformId}`);
-        if (imageBuffer) {
+        if (documentBuffer) {
+          this.logger.debug(`📄 Enviando documento (${documentBuffer.length} bytes) via Telegram`);
+          await this.multiPlatformService.sendDocumentMessage(sessionId, platformId, documentBuffer, documentName || 'documento.pdf', message);
+        } else if (imageBuffer) {
           this.logger.debug(`🖼️ Enviando imagem (${imageBuffer.length} bytes) via Telegram`);
           await this.multiPlatformService.sendImageMessage(sessionId, platformId, imageBuffer, message);
         } else {

@@ -16,11 +16,12 @@ import { ListContextService } from './list-context.service';
 import { CreditCardService } from '../credit-cards/credit-card.service';
 import { TransactionsController } from './transactions.controller';
 import { DiscordNotificationService } from '@common/services/discord-notification.service';
+import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
 import { TemporalParserService } from '@features/transactions/services/parsers/temporal-parser.service';
-import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
 import { FixedTransactionParserService } from '@features/transactions/services/parsers/fixed-transaction-parser.service';
 import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
-import { CreditCardInvoiceCalculatorService } from '@features/transactions/services/parsers/credit-card-invoice-calculator.service';
+import { SharedModule } from '@shared/shared.module';
+import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
 import { PaymentStatusResolverService } from './services/payment-status-resolver.service';
 import { RecurringTransactionService } from './services/recurring-transaction.service';
 import { CategoryResolverService } from './services/category-resolver.service';
@@ -59,6 +60,7 @@ const INTENT_HANDLER_CLASSES = [
 
 @Module({
   imports: [
+    SharedModule,
     HttpModule,
     AiModule,
     RAGModule,

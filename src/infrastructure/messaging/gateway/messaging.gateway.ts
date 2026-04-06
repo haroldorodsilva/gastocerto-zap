@@ -143,8 +143,7 @@ export class MessagingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       return;
     }
 
-    // TODO: Verificar se o usuário tem permissão para acessar esta sessão
-    // Por enquanto, apenas ADMIN e MASTER podem se inscrever em qualquer sessão
+    // Apenas ADMIN e MASTER podem se inscrever em sessões (as sessões não têm accountId no modelo, o controle é por role)
     if (!['ADMIN', 'MASTER'].includes(clientData.userRole || '')) {
       this.logger.warn(
         `❌ Client ${client.id} (User: ${clientData.userId}) denied access to session ${data.sessionId} - Insufficient permissions`,

@@ -272,8 +272,7 @@ export class TransactionPaymentService {
 
   /**
    * Paga conta por categoria (luz, água, etc)
-   * NOTA: Este método requer um categoryId (UUID), não um nome de categoria
-   * TODO: Implementar mapeamento de nome para categoryId
+   * Busca o categoryId pelo nome usando a API GastoCerto
    */
   private async payBillByCategory(
     user: UserCache,
@@ -292,21 +291,54 @@ export class TransactionPaymentService {
     }
 
     try {
-      this.logger.log(`🧾 Buscando contas pendentes na categoria: ${category}`);
+      this.logger.log(`🧾 Buscando categoria "${category}" para pagamento`);
 
-      // TEMPORÁRIO: Retornar mensagem informando que precisa usar categoryId
+      const validation = await this.accountManagement.validateActiveAccount(user.phoneNumber);
+      if (!validation.valid || !validation.account) {
+        return { success: false, message: '❌ Conta ativa não encontrada.' };
+      }
+
+      const categories = await this.gastoCertoApi.getAccountCategories(
+        user.gastoCertoId,
+        validation.account.id,
+      );
+
+      const matched = categories?.find(
+        (c) => c.name.toLowerCase().includes(category.toLowerCase()),
+      );
+
+      if (!matched) {
+        return {
+          success: false,
+          message:
+            `❓ Categoria "${category}" não encontrada.\n\n` +
+            'Verifique o nome da categoria e tente novamente.',
+        };
+      }
+
+      this.logger.log(`✅ Categoria encontrada: ${matched.name} (${matched.id})`);
+
+      const result = await this.gastoCertoApi.getPendingBillsByCategory(
+        user.gastoCertoId,
+        validation.account.id,
+        matched.id,
+      );
+
+      if (!result.success || !result.data?.data?.length) {
+        return {
+          success: true,
+          message: `✅ Nenhuma conta pendente encontrada na categoria *${matched.name}*.`,
+        };
+      }
+
       return {
-        success: false,
+        success: true,
         message:
-          '⚠️ *Funcionalidade em manutenção*\n\n' +
-          'Por favor, use "minhas transações" para ver suas transações pendentes.',
+          `📋 *Contas pendentes em ${matched.name}:*\n\n` +
+          result.data.data
+            .map((t: any) => `• ${t.description || 'Sem descrição'} — R$ ${t.amount?.toFixed(2) || '0.00'}`)
+            .join('\n'),
       };
-
-      // TODO: Implementar busca de categoryId por nome ou refatorar para usar outro filtro
-      // const result = await this.gastoCertoApi.getPendingBillsByCategory(
-      //   user.activeAccountId,
-      //   categoryId, // precisa do UUID da categoria
-      // );
     } catch (error: any) {
       this.logger.error(`❌ Erro ao buscar contas pendentes:`, error);
       return {

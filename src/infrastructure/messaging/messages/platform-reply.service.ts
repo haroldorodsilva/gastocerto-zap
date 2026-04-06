@@ -11,6 +11,8 @@ export interface PlatformReplyOptions {
   platform?: MessagingPlatform | string;
   metadata?: Record<string, any>;
   imageBuffer?: Buffer;
+  documentBuffer?: Buffer;
+  documentName?: string;
 }
 
 /**
@@ -74,6 +76,8 @@ export class PlatformReplyService {
       metadata,
       platform: normalizedPlatform,
       imageBuffer: options.imageBuffer,
+      documentBuffer: options.documentBuffer,
+      documentName: options.documentName,
     });
   }
 

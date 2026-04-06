@@ -291,6 +291,41 @@ export class TelegramProvider implements IMessagingProvider {
     }
   }
 
+  async sendDocumentMessage(
+    chatId: string,
+    document: Buffer,
+    fileName: string,
+    options?: SendMediaOptions,
+  ): Promise<MessageResult> {
+    try {
+      if (!this.bot) {
+        throw new Error('Bot not initialized');
+      }
+
+      const result = await this.bot.sendDocument(chatId, document, {
+        caption: options?.caption,
+        reply_to_message_id: options?.quotedMessageId
+          ? parseInt(options.quotedMessageId)
+          : undefined,
+      }, {
+        filename: fileName,
+        contentType: 'application/pdf',
+      });
+
+      return {
+        success: true,
+        messageId: result.message_id.toString(),
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error sending document: ${errorMessage}`);
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
   async downloadMedia(message: any): Promise<Buffer | null> {
     try {
       if (!this.bot) {

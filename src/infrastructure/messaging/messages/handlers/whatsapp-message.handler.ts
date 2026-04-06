@@ -366,6 +366,19 @@ export class WhatsAppMessageHandler {
           }
           break;
 
+        case MessageType.VIDEO:
+          this.logger.warn(`[WhatsApp] Video messages are not supported from ${phoneNumber}`);
+          this.sendMessage(
+            phoneNumber,
+            '⚠️ Vídeos não são suportados.\n\n' +
+              'Envie:\n' +
+              '• Texto: "Gastei 50 reais em alimentação"\n' +
+              '• Foto de nota fiscal ou comprovante\n' +
+              '• PDF de extrato ou nota fiscal\n' +
+              '• Áudio descrevendo o gasto',
+          );
+          break;
+
         default:
           this.logger.warn(`[WhatsApp] Unsupported message type: ${message.type}`);
           this.sendMessage(

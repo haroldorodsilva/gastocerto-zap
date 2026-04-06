@@ -1448,7 +1448,7 @@ export class TransactionRegistrationService implements OnModuleInit {
     if (extractedData.creditCardId) {
       try {
         const closingDay = await this.invoiceCalculator.getCardClosingDay(
-          user.id,
+          activeAccountId,
           extractedData.creditCardId,
         );
 

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { addMonths, isAfter, parseISO, format } from 'date-fns';
+import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 
 export interface InvoiceMonthResult {
   invoiceMonth: string; // "2026-01" (YYYY-MM)
@@ -13,6 +14,8 @@ export interface InvoiceMonthResult {
 @Injectable()
 export class CreditCardInvoiceCalculatorService {
   private readonly logger = new Logger(CreditCardInvoiceCalculatorService.name);
+
+  constructor(private readonly gastoCertoApi: GastoCertoApiService) {}
 
   /**
    * Mapa de meses em português
@@ -96,18 +99,20 @@ export class CreditCardInvoiceCalculatorService {
    * Busca dia de fechamento do cartão de crédito na API
    * Se não encontrar, usa padrão (dia 10)
    */
-  async getCardClosingDay(userId: string, creditCardId?: string): Promise<number> {
+  async getCardClosingDay(accountId: string, creditCardId?: string): Promise<number> {
     if (!creditCardId) {
       this.logger.warn('⚠️ Nenhum cartão informado, usando dia de fechamento padrão (10)');
-      return 10; // Padrão
+      return 10;
     }
 
     try {
-      // TODO: Buscar da API GastoCerto
-      // const card = await this.gastoCertoApi.getCreditCard(userId, creditCardId);
-      // return card.closingDay || 10;
-
-      // Por enquanto, retorna padrão
+      const result = await this.gastoCertoApi.listCreditCards(accountId);
+      const card = result?.data?.find((c) => c.id === creditCardId);
+      if (card?.closingDay) {
+        this.logger.log(`📅 Dia de fechamento do cartão ${creditCardId}: ${card.closingDay}`);
+        return card.closingDay;
+      }
+      this.logger.warn(`⚠️ Cartão ${creditCardId} não encontrado, usando dia padrão (10)`);
       return 10;
     } catch (error) {
       this.logger.error(`❌ Erro ao buscar dia de fechamento do cartão:`, error);

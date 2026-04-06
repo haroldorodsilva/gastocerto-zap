@@ -180,7 +180,7 @@ export class RecurringTransactionService {
         let invoiceMonthFormatted: string | undefined;
         if (confirmation.creditCardId) {
           const closingDay = await this.invoiceCalculator.getCardClosingDay(
-            user.gastoCertoId,
+            accountId,
             confirmation.creditCardId,
           );
           const invoiceResult = this.invoiceCalculator.calculateInvoiceMonth(
