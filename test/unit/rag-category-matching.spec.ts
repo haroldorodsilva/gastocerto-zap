@@ -261,7 +261,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
     ragService = module.get<RAGService>(RAGService);
     categoryResolutionService = module.get<CategoryResolutionService>(CategoryResolutionService);
 
-    // Indexa as categorias mockadas no cache (sem accountId — escopo por userId)
+    // Indexa as categorias mockadas no cache
     await ragService.indexUserCategories(mockUserId, mockCategories.flatMap((cat) =>
       cat.subCategory.map((sub) => ({
         id: cat.id,
@@ -273,7 +273,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
           name: sub.name,
         },
       })),
-    ));
+    ), mockAccountId);
   });
 
   /**
@@ -284,7 +284,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
     expectedCategory: string,
     expectedSubcategory: string,
   ) {
-    const matches = await ragService.findSimilarCategories(naturalPhrase, mockUserId, {
+    const matches = await ragService.findSimilarCategories(naturalPhrase, mockUserId, { accountId: mockAccountId,
       minScore: 0.2,
       maxResults: 5,
     });
@@ -1113,6 +1113,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
       const matches = await ragService.findSimilarCategories(
         'comprei um lanche e paguei 18,50',
         mockUserId,
+        { accountId: mockAccountId },
       );
       expect(matches.length).toBeGreaterThan(0);
       expect(matches[0].categoryName).toBe('Alimentação');
@@ -1122,13 +1123,14 @@ describe('RAG Category Matching - Natural Language Processing', () => {
       const matches = await ragService.findSimilarCategories(
         'Paguei a conta de água',
         mockUserId,
+        { accountId: mockAccountId },
       );
       expect(matches.length).toBeGreaterThan(0);
       expect(matches[0].categoryName).toBe('Serviços');
     });
 
     it('deve retornar resultados com score mínimo respeitado', async () => {
-      const matches = await ragService.findSimilarCategories('teste aleatório', mockUserId, {
+      const matches = await ragService.findSimilarCategories('teste aleatório', mockUserId, { accountId: mockAccountId,
         minScore: 0.5,
       });
       matches.forEach((match) => {
@@ -1137,7 +1139,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
     });
 
     it('deve limitar o número de resultados quando especificado', async () => {
-      const matches = await ragService.findSimilarCategories('comida', mockUserId, { maxResults: 3 });
+      const matches = await ragService.findSimilarCategories('comida', mockUserId, { accountId: mockAccountId, maxResults: 3 });
       expect(matches.length).toBeLessThanOrEqual(3);
     });
 
@@ -1145,6 +1147,7 @@ describe('RAG Category Matching - Natural Language Processing', () => {
       const matches = await ragService.findSimilarCategories(
         'Fui ao supermercado hoje de manhã e comprei frutas, verduras e outros itens para casa',
         mockUserId,
+        { accountId: mockAccountId },
       );
       expect(matches.length).toBeGreaterThan(0);
       expect(matches[0].categoryName).toBe('Alimentação');
@@ -1156,8 +1159,8 @@ describe('RAG Category Matching - Natural Language Processing', () => {
    */
   describe('Performance e Cache', () => {
     it('deve usar cache nas buscas subsequentes', async () => {
-      const firstCall = await ragService.findSimilarCategories('gasolina', mockUserId);
-      const secondCall = await ragService.findSimilarCategories('gasolina', mockUserId);
+      const firstCall = await ragService.findSimilarCategories('gasolina', mockUserId, { accountId: mockAccountId });
+      const secondCall = await ragService.findSimilarCategories('gasolina', mockUserId, { accountId: mockAccountId });
 
       expect(firstCall).toEqual(secondCall);
     });
@@ -1174,8 +1177,8 @@ describe('RAG Category Matching - Natural Language Processing', () => {
             name: sub.name,
           },
         })),
-      ));
-      const matches = await ragService.findSimilarCategories('combustível', mockUserId);
+      ), mockAccountId);
+      const matches = await ragService.findSimilarCategories('combustível', mockUserId, { accountId: mockAccountId });
       expect(matches.length).toBeGreaterThan(0);
     });
   });

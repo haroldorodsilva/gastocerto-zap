@@ -1036,12 +1036,18 @@ export class UserCacheService {
         return;
       }
 
-      // Indexar no RAG usando userId
-      await this.ragService.indexUserCategories(user.gastoCertoId, userCategories);
+      // Indexar no RAG usando accountId (n:m: dados isolados por conta)
+      const syncAccountId = user.activeAccountId;
+      if (!syncAccountId) {
+        this.logger.warn(`⚠️ RAG não sincronizado: usuário ${user.gastoCertoId} sem conta ativa`);
+        return;
+      }
+
+      await this.ragService.indexUserCategories(user.gastoCertoId, userCategories, syncAccountId);
 
       this.logger.log(
         `✅ Categorias sincronizadas no RAG: ${userCategories.length} categorias | ` +
-          `UserId: ${user.gastoCertoId} | Phone: ${phoneNumber} | Modo: ${aiSettings.ragAiEnabled ? 'AI' : 'BM25'}`,
+          `UserId: ${user.gastoCertoId} | AccountId: ${syncAccountId} | Phone: ${phoneNumber} | Modo: ${aiSettings.ragAiEnabled ? 'AI' : 'BM25'}`,
       );
     } catch (error) {
       this.logger.error(`Erro ao sincronizar categorias no RAG para ${phoneNumber}:`, error);

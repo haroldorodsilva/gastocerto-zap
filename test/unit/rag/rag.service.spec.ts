@@ -35,10 +35,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('rotativo', userId);
+      const matches = await service.findSimilarCategories('rotativo', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches).toHaveLength(1);
@@ -62,10 +62,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('gasolina', userId, {
+      const matches = await service.findSimilarCategories('gasolina', userId, { accountId: 'acc-1',
         minScore: 0.5, // Reduzir threshold para sinônimos
       });
 
@@ -96,10 +96,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('cartão', userId, {
+      const matches = await service.findSimilarCategories('cartão', userId, { accountId: 'acc-1',
         maxResults: 3,
       });
 
@@ -129,10 +129,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('alimentação', userId);
+      const matches = await service.findSimilarCategories('alimentação', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches.length).toBeGreaterThan(0);
@@ -158,10 +158,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('xyz123', userId, {
+      const matches = await service.findSimilarCategories('xyz123', userId, { accountId: 'acc-1',
         minScore: 0.7,
       });
 
@@ -174,7 +174,7 @@ describe('RAGService', () => {
       const userId = 'test-user-empty';
 
       // Act
-      const matches = await service.findSimilarCategories('rotativo', userId);
+      const matches = await service.findSimilarCategories('rotativo', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches).toHaveLength(0);
@@ -204,10 +204,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act - buscar por "comida" que é sinônimo de restaurante
-      const matches = await service.findSimilarCategories('comida', userId, {
+      const matches = await service.findSimilarCategories('comida', userId, { accountId: 'acc-1',
         minScore: 0.5,
       });
 
@@ -228,11 +228,11 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matchesUpper = await service.findSimilarCategories('EDUCAÇÃO', userId);
-      const matchesNoAccent = await service.findSimilarCategories('educacao', userId);
+      const matchesUpper = await service.findSimilarCategories('EDUCAÇÃO', userId, { accountId: 'acc-1' });
+      const matchesNoAccent = await service.findSimilarCategories('educacao', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matchesUpper.length).toBeGreaterThan(0);
@@ -260,8 +260,8 @@ describe('RAGService', () => {
       ];
 
       // Act
-      await service.indexUserCategories(userId, categories);
-      const matches = await service.findSimilarCategories('alimentação', userId);
+      await service.indexUserCategories(userId, categories, 'acc-1');
+      const matches = await service.findSimilarCategories('alimentação', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches.length).toBeGreaterThan(0);
@@ -280,11 +280,11 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      service.clearCache(userId);
-      const matches = await service.findSimilarCategories('alimentação', userId);
+      service.clearCache(userId, 'acc-1');
+      const matches = await service.findSimilarCategories('alimentação', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches).toHaveLength(0);
@@ -302,8 +302,8 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(user1, categories);
-      await service.indexUserCategories(user2, categories);
+      await service.indexUserCategories(user1, categories, 'acc-1');
+      await service.indexUserCategories(user2, categories, 'acc-1');
 
       // Act
       service.clearCache();
@@ -338,10 +338,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act - testar com termo extraído da mensagem
-      const matches = await service.findSimilarCategories('rotativo', userId);
+      const matches = await service.findSimilarCategories('rotativo', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches.length).toBeGreaterThan(0);
@@ -371,10 +371,10 @@ describe('RAGService', () => {
         },
       ];
 
-      await service.indexUserCategories(userId, categories);
+      await service.indexUserCategories(userId, categories, 'acc-1');
 
       // Act
-      const matches = await service.findSimilarCategories('mercado', userId);
+      const matches = await service.findSimilarCategories('mercado', userId, { accountId: 'acc-1' });
 
       // Assert
       expect(matches.length).toBeGreaterThan(0);
@@ -399,10 +399,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - "gastei" não faz match, só "supermercado"
-        const matches = await service.findSimilarCategories('gastei 56,89 no supermercado', userId, {
+        const matches = await service.findSimilarCategories('gastei 56,89 no supermercado', userId, { accountId: 'acc-1',
           minScore: 0.4, // Novo threshold reduzido
           maxResults: 3,
         });
@@ -425,10 +425,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - Texto completamente diferente
-        const matches = await service.findSimilarCategories('gastei 100 reais', userId, {
+        const matches = await service.findSimilarCategories('gastei 100 reais', userId, { accountId: 'acc-1',
           minScore: 0.4,
         });
 
@@ -471,10 +471,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act
-        const matches = await service.findSimilarCategories('supermercado', userId, {
+        const matches = await service.findSimilarCategories('supermercado', userId, { accountId: 'acc-1',
           minScore: 0.4,
         });
 
@@ -509,10 +509,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act
-        const matches = await service.findSimilarCategories('restaurante', userId, {
+        const matches = await service.findSimilarCategories('restaurante', userId, { accountId: 'acc-1',
           minScore: 0.4,
         });
 
@@ -546,10 +546,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - "gasolina" é sinônimo de "combustível"
-        const matches = await service.findSimilarCategories('gasolina', userId, {
+        const matches = await service.findSimilarCategories('gasolina', userId, { accountId: 'acc-1',
           minScore: 0.4,
         });
 
@@ -576,10 +576,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - Query com 2 tokens: "gastei" (não match) + "supermercado" (match)
-        const matches = await service.findSimilarCategories('gastei supermercado', userId, {
+        const matches = await service.findSimilarCategories('gastei supermercado', userId, { accountId: 'acc-1',
           minScore: 0.3, // Score baixo proposital
         });
 
@@ -604,10 +604,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - "feira" é sinônimo de "supermercado"
-        const matches = await service.findSimilarCategories('feira', userId, {
+        const matches = await service.findSimilarCategories('feira', userId, { accountId: 'acc-1',
           minScore: 0.3,
         });
 
@@ -639,10 +639,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act
-        const matches = await service.findSimilarCategories('gastei 56,89 no supermercado', userId, {
+        const matches = await service.findSimilarCategories('gastei 56,89 no supermercado', userId, { accountId: 'acc-1',
           minScore: 0.4, // Novo threshold
         });
 
@@ -664,10 +664,10 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
 
         // Act - Texto sem relação
-        const matches = await service.findSimilarCategories('xyz abc 123', userId, {
+        const matches = await service.findSimilarCategories('xyz abc 123', userId, { accountId: 'acc-1',
           minScore: 0.4,
         });
 
@@ -730,14 +730,14 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories(userId, categories);
+        await service.indexUserCategories(userId, categories, 'acc-1');
       });
 
       it('deve detectar: "comprei pão na padaria 15 reais"', async () => {
         const matches = await service.findSimilarCategories(
           'comprei pão na padaria 15 reais',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "padaria" e "pão" são relacionados a alimentação
@@ -755,7 +755,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'almoço no restaurante 45',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -767,7 +767,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'pedi ifood 35 reais',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -779,7 +779,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'abasteci o carro 200',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -791,7 +791,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'corrida de uber 25',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -803,7 +803,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei remédio 80',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -815,7 +815,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'ontem gastei 56 no supermercado',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -827,7 +827,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'nessa segunda comprei remédio 120',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -839,7 +839,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'semana passada abastecer o carro 180',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "abastecer" pode não ter match forte dependendo do score
@@ -857,7 +857,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'recebi no início do mês 3500',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "recebi" normalmente não está nas categorias, então pode não ter match
@@ -874,7 +874,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'anteontem fui ao cinema 40',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "anteontem" é uma palavra temporal que não deve impactar
@@ -892,7 +892,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'mês passado aluguel 1200',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -904,7 +904,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'paguei o aluguel 1500',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -916,7 +916,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'fui ao cinema 40',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -928,7 +928,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'feira hoje 120 reais',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -940,7 +940,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'gastei no posto 180',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -952,7 +952,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'xyz abc 123 teste qualquer',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toEqual([]);
@@ -962,7 +962,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           '50 reais',
           'test-frases-variadas',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toEqual([]);
@@ -1032,14 +1032,14 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories('test-user-real', categories);
+        await service.indexUserCategories('test-user-real', categories, 'acc-1');
       });
 
       it('Caso 1: "comprei 50 reais de frutas" → Alimentação > Hortifruti', async () => {
         const matches = await service.findSimilarCategories(
           'comprei 50 reais de frutas',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1052,7 +1052,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'ontem gastei no restaurante 85 reais',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1065,7 +1065,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei um calçado por 295',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1078,7 +1078,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei uma melancia ontem por 60 reais',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1091,7 +1091,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'ganhei 50 reais do meu pai',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1104,7 +1104,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'recebi de freela 5000 reais',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1117,7 +1117,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'Recebi vale alimentacao de 300 reais',
           'test-user-real',
-          { minScore: 0.25 },
+          { accountId: 'acc-1', minScore: 0.25 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1179,14 +1179,14 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories('test-no-synonym', categories);
+        await service.indexUserCategories('test-no-synonym', categories, 'acc-1');
       });
 
       it('Sem sinônimo: "comprei um mouse por 50,00" → sem match (precisa IA)', async () => {
         const matches = await service.findSimilarCategories(
           'comprei um mouse por 50,00',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "mouse" não é sinônimo de nenhuma categoria/subcategoria
@@ -1197,7 +1197,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei um teclado mecânico 300',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1207,7 +1207,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'paguei o dentista 250',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // "dentista" não existe como sinônimo de Farmácia ou Saúde
@@ -1218,7 +1218,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'gastei com presente de aniversário 150',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1228,7 +1228,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei um notebook 4500',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1238,7 +1238,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'paguei a mensalidade da escola 800',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // Não tem categoria Educação nas categorias indexadas
@@ -1249,7 +1249,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei roupa 200',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1259,7 +1259,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'assinatura Netflix 45,90',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1269,7 +1269,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'paguei 100 reais',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         // Sem termo significativo para matchear
@@ -1280,7 +1280,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           '150,00',
           'test-no-synonym',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1313,14 +1313,14 @@ describe('RAGService', () => {
           },
         ];
 
-        await service.indexUserCategories('test-mixed', categories);
+        await service.indexUserCategories('test-mixed', categories, 'acc-1');
       });
 
       it('Com sinônimo: "gastei no mercado 80" → Alimentação > Supermercado', async () => {
         const matches = await service.findSimilarCategories(
           'gastei no mercado 80',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1332,7 +1332,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'abasteci 200',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1344,7 +1344,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei remédio 50',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches.length).toBeGreaterThan(0);
@@ -1356,7 +1356,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei um mouse 50',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1366,7 +1366,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'paguei o veterinário 300',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);
@@ -1376,7 +1376,7 @@ describe('RAGService', () => {
         const matches = await service.findSimilarCategories(
           'comprei ingresso show 180',
           'test-mixed',
-          { minScore: 0.4 },
+          { accountId: 'acc-1', minScore: 0.4 },
         );
 
         expect(matches).toHaveLength(0);

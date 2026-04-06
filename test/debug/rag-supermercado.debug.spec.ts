@@ -24,12 +24,12 @@ describe('RAG Debug - Supermercado', () => {
       },
     ];
 
-    await service.indexUserCategories(userId, categories);
+    await service.indexUserCategories(userId, categories, 'acc-1');
 
     const matches = await service.findSimilarCategories(
       'gastei 56,89 no supermercado',
       userId,
-      { minScore: 0.4 },
+      { accountId: 'acc-1', minScore: 0.4 },
     );
 
     console.log('\n========== RESULTADO ==========');

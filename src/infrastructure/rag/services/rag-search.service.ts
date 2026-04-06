@@ -56,7 +56,7 @@ export class RagSearchService {
   async findSimilarCategories(
     text: string,
     userId: string,
-    config: Partial<RAGConfig> & { skipLogging?: boolean; accountId?: string | null } = {},
+    config: Partial<RAGConfig> & { skipLogging?: boolean; accountId: string } = {} as any,
   ): Promise<CategoryMatch[]> {
     const startTime = Date.now();
     const { skipLogging, accountId, ...configRest } = config;
@@ -98,8 +98,8 @@ export class RagSearchService {
       this.logger.log(`🎯 ${userSynonyms.length} sinônimos personalizados para "${text}"`);
     }
 
-    // 5. Pré-computar frequência de documentos (chave inclui accountId para isolamento)
-    const docFreqCacheKey = `df:${accountId || userId}:${finalConfig.transactionType || 'all'}`;
+    // 5. Pré-computar frequência de documentos (chave isolada por conta)
+    const docFreqCacheKey = `df:${accountId}:${finalConfig.transactionType || 'all'}`;
     const { totalDocs, docFreqMap, avgDocLength } = this.scoring.precomputeDocFrequencies(
       categories,
       docFreqCacheKey,
@@ -273,7 +273,7 @@ export class RagSearchService {
     text: string,
     userId: string,
     aiProvider: any,
-    config: Partial<RAGConfig> & { accountId?: string | null } = {},
+    config: Partial<RAGConfig> & { accountId: string } = {} as any,
   ): Promise<CategoryMatch[]> {
     const startTime = Date.now();
     const { accountId, ...configRest } = config;
@@ -339,7 +339,7 @@ export class RagSearchService {
   async detectUnknownTerm(
     text: string,
     userId: string,
-    accountId?: string | null,
+    accountId: string,
   ): Promise<{
     detectedTerm: string;
     isKnownSubcategory: boolean;

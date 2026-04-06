@@ -1242,7 +1242,7 @@ export class TransactionRegistrationService implements OnModuleInit {
           text,
           userId,
           ragProvider,
-          { minScore: 0.4, maxResults: 3, transactionType: detectedType },
+          { accountId, minScore: 0.4, maxResults: 3, transactionType: detectedType },
         );
       } else {
         // Original: Busca BM25 (sem IA)

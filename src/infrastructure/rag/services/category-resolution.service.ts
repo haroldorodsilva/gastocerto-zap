@@ -41,6 +41,7 @@ import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service
 
 export interface ResolutionOptions {
   userId: string;
+  accountId: string; // OBRIGATÓRIO: dados isolados por conta (n:m)
   text: string;
   minConfidence?: number;
   useAiFallback?: boolean;
@@ -87,7 +88,7 @@ export class CategoryResolutionService {
     const ragMatches = await this.ragService.findSimilarCategories(
       options.text,
       options.userId,
-      { minScore: 0.25 }, // Score baixo para capturar possíveis matches
+      { minScore: 0.25, accountId: options.accountId }, // Score baixo para capturar possíveis matches
     );
 
     const bestRagMatch = ragMatches.length > 0 ? ragMatches[0] : null;
@@ -289,7 +290,7 @@ export class CategoryResolutionService {
     }
 
     const [ragMatches, aiSuggestion] = await Promise.all([
-      this.ragService.findSimilarCategories(options.text, options.userId, { minScore: 0.25 }),
+      this.ragService.findSimilarCategories(options.text, options.userId, { minScore: 0.25, accountId: options.accountId }),
       options.aiProvider.suggestCategory(options.text).catch((err: any) => {
         this.logger.warn(`⚠️ [HYBRID] Erro na IA:`, err);
         return null;

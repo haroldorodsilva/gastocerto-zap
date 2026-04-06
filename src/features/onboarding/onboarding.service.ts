@@ -313,11 +313,17 @@ export class OnboardingService {
             // Importar função helper
             const { expandCategoriesForRAG } = await import('../users/user-cache.service');
             const userCategories = expandCategoriesForRAG(categoriesData.categories);
+            // accountId vem do primeiro item expandido (n:m: dados isolados por conta)
+            const onboardingAccountId = userCategories[0]?.accountId;
 
-            await this.ragService.indexUserCategories(apiUser.id, userCategories);
-            this.logger.log(
-              `🧠 RAG indexado no onboarding: ${userCategories.length} categorias | UserId: ${apiUser.id}`,
-            );
+            if (!onboardingAccountId) {
+              this.logger.warn(`⚠️ RAG não indexado no onboarding: accountId ausente nas categorias`);
+            } else {
+              await this.ragService.indexUserCategories(apiUser.id, userCategories, onboardingAccountId);
+              this.logger.log(
+                `🧠 RAG indexado no onboarding: ${userCategories.length} categorias | UserId: ${apiUser.id} | AccountId: ${onboardingAccountId}`,
+              );
+            }
           }
         } catch (ragError) {
           this.logger.warn(`⚠️ Erro ao indexar RAG no onboarding (não bloqueante):`, ragError);

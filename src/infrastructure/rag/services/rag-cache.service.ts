@@ -8,13 +8,15 @@ import { UserCategory } from './rag.interface';
 /**
  * RagCacheService
  *
- * Responsabilidade única: gerenciar o cache de categorias por usuário/conta.
+ * Responsabilidade única: gerenciar o cache de categorias por conta.
  *
- * - Redis (padrão): persistente, TTL 24h, key = `rag:categories:${scope}`
+ * - Redis (padrão): persistente, TTL 24h, key = `rag:categories:${accountId}`
  * - Map (fallback): em memória, não persistente
- * - Scope = accountId quando fornecido (n:m), userId caso contrário
+ * - Scope = SEMPRE accountId — dados isolados por conta (modelo n:m)
  *
- * Isola toda a lógica de cache do RAGService principal.
+ * IMPORTANTE: accountId é obrigatório. Dados são isolados por conta,
+ * não por usuário. Um usuário pode ter múltiplas contas com categorias
+ * independentes.
  */
 @Injectable()
 export class RagCacheService {
@@ -33,23 +35,23 @@ export class RagCacheService {
     );
   }
 
-  private buildKey(userId: string, accountId?: string | null): string {
-    // accountId isola categorias por conta no modelo n:m
-    return `rag:categories:${accountId || userId}`;
+  /** Chave de cache isolada por conta. accountId é a fonte da verdade. */
+  private buildKey(accountId: string): string {
+    return `rag:categories:${accountId}`;
   }
 
   /**
-   * Indexa categorias no cache.
-   * @param accountId - Quando fornecido, isola o cache por conta (n:m).
+   * Indexa categorias no cache da conta.
+   * @param accountId - Obrigatório: isola dados por conta (n:m).
    */
   async index(
     userId: string,
-    accountId: string | null,
+    accountId: string,
     categories: UserCategory[],
   ): Promise<void> {
-    const key = this.buildKey(userId, accountId);
+    const key = this.buildKey(accountId);
     this.logger.log(
-      `📚 Indexando ${categories.length} categorias | key: ${key}`,
+      `📚 Indexando ${categories.length} categorias | userId=${userId} accountId=${accountId} key=${key}`,
     );
 
     if (this.useRedisCache) {
@@ -62,11 +64,11 @@ export class RagCacheService {
   }
 
   /**
-   * Retorna categorias do cache.
-   * @param accountId - Quando fornecido, usa chave isolada por conta (n:m).
+   * Retorna categorias do cache da conta.
+   * @param accountId - Obrigatório: chave de isolamento por conta (n:m).
    */
-  async get(userId: string, accountId?: string | null): Promise<UserCategory[]> {
-    const key = this.buildKey(userId, accountId);
+  async get(userId: string, accountId: string): Promise<UserCategory[]> {
+    const key = this.buildKey(accountId);
 
     if (this.useRedisCache) {
       const cached = await this.cacheManager.get<string>(key);
@@ -85,10 +87,11 @@ export class RagCacheService {
   }
 
   /**
-   * Remove entrada do cache de um usuário/conta específica.
+   * Remove entrada do cache de uma conta específica.
+   * @param accountId - Obrigatório: chave de isolamento por conta (n:m).
    */
-  async clear(userId: string, accountId?: string | null): Promise<void> {
-    const key = this.buildKey(userId, accountId);
+  async clear(userId: string, accountId: string): Promise<void> {
+    const key = this.buildKey(accountId);
     if (this.useRedisCache) {
       await this.cacheManager.del(key);
     } else {

@@ -3,21 +3,23 @@ import { CategoryMatch, RAGConfig, UserCategory } from './rag.interface';
 import { RagCacheService } from './rag-cache.service';
 import { RagSearchService } from './rag-search.service';
 import { RagAnalyticsService } from './rag-analytics.service';
+import { TextProcessingService } from './text-processing.service';
+import { RagScoringService } from './rag-scoring.service';
 
 /**
  * RAGService — Facade
  *
- * Mantém a API pública original para compatibilidade com todos os callers
- * existentes (registration, account-management, user-cache, admin, etc.).
+ * API pública do módulo RAG. Delega para serviços especializados:
+ * - RagCacheService       → cache Redis/Map isolado por conta
+ * - RagSearchService      → BM25, embeddings, detectUnknownTerm
+ * - RagAnalyticsService   → logs de busca
+ * - TextProcessingService → normalize/tokenize (exposto para admin debug)
+ * - RagScoringService     → BM25 scoring (exposto para admin debug)
  *
- * Internamente, delega para os serviços especializados:
- * - RagCacheService  → operações de cache (Redis/Map)
- * - RagSearchService → BM25, embeddings, detectUnknownTerm
- * - RagAnalyticsService → logs de busca para analytics
- *
- * IMPORTANTE — accountId:
- * Todas as operações de cache, busca e sinônimos são isoladas por conta
- * no modelo n:m. Passe sempre `accountId` quando disponível.
+ * MODELO n:m — accountId OBRIGATÓRIO:
+ * Todos os dados (cache, sinônimos, doc-freq) são isolados por conta.
+ * Um usuário pode ter várias contas; cada conta tem categorias independentes.
+ * Nunca use userId como escopo de dados RAG.
  */
 @Injectable()
 export class RAGService {
@@ -27,6 +29,8 @@ export class RAGService {
     private readonly ragCache: RagCacheService,
     private readonly ragSearch: RagSearchService,
     private readonly ragAnalytics: RagAnalyticsService,
+    private readonly textProcessing: TextProcessingService,
+    private readonly ragScoring: RagScoringService,
   ) {
     this.logger.log('🧠 RAGService (facade) inicializado');
   }
@@ -34,33 +38,34 @@ export class RAGService {
   // ─────────────────────────────── Cache ───────────────────────────────────
 
   /**
-   * Indexa categorias no cache.
-   * @param accountId - Isola por conta no modelo n:m.
+   * Indexa categorias no cache da conta.
+   * @param accountId - OBRIGATÓRIO: isola por conta no modelo n:m.
    */
   async indexUserCategories(
     userId: string,
     categories: UserCategory[],
-    accountId?: string | null,
+    accountId: string,
   ): Promise<void> {
-    return this.ragCache.index(userId, accountId ?? null, categories);
+    return this.ragCache.index(userId, accountId, categories);
   }
 
   /**
-   * Retorna categorias do cache.
-   * @param accountId - Isola por conta no modelo n:m.
+   * Retorna categorias do cache da conta.
+   * @param accountId - OBRIGATÓRIO: isola por conta no modelo n:m.
    */
   async getCachedCategories(
     userId: string,
-    accountId?: string | null,
+    accountId: string,
   ): Promise<UserCategory[]> {
     return this.ragCache.get(userId, accountId);
   }
 
   /**
-   * Remove entrada do cache.
+   * Remove cache de uma conta específica.
+   * Sem argumentos, limpa todo o cache em memória (apenas para testes/admin).
    */
-  async clearCache(userId?: string, accountId?: string | null): Promise<void> {
-    if (userId) {
+  async clearCache(userId?: string, accountId?: string): Promise<void> {
+    if (userId && accountId) {
       await this.ragCache.clear(userId, accountId);
     } else {
       this.ragCache.clearAll();
@@ -71,37 +76,37 @@ export class RAGService {
 
   /**
    * Busca categorias similares via BM25 + sinônimos + bigrams.
-   * @param config.accountId - Isola cache e sinônimos por conta (n:m).
+   * @param config.accountId - OBRIGATÓRIO: isola cache e sinônimos por conta (n:m).
    */
   async findSimilarCategories(
     text: string,
     userId: string,
-    config: Partial<RAGConfig> & { skipLogging?: boolean; accountId?: string | null } = {},
+    config: Partial<RAGConfig> & { skipLogging?: boolean; accountId: string } = {} as any,
   ): Promise<CategoryMatch[]> {
     return this.ragSearch.findSimilarCategories(text, userId, config);
   }
 
   /**
    * Busca por similaridade de cosseno com embeddings de IA.
-   * @param config.accountId - Isola cache por conta (n:m).
+   * @param config.accountId - OBRIGATÓRIO: isola cache por conta (n:m).
    */
   async findSimilarCategoriesWithEmbeddings(
     text: string,
     userId: string,
     aiProvider: any,
-    config: Partial<RAGConfig> & { accountId?: string | null } = {},
+    config: Partial<RAGConfig> & { accountId: string } = {} as any,
   ): Promise<CategoryMatch[]> {
     return this.ragSearch.findSimilarCategoriesWithEmbeddings(text, userId, aiProvider, config);
   }
 
   /**
    * Detecta termo desconhecido na mensagem e sugere aprendizado.
-   * @param accountId - Isola categorias por conta (n:m).
+   * @param accountId - OBRIGATÓRIO: isola categorias por conta (n:m).
    */
   async detectUnknownTerm(
     text: string,
     userId: string,
-    accountId?: string | null,
+    accountId: string,
   ): Promise<{
     detectedTerm: string;
     isKnownSubcategory: boolean;
@@ -159,5 +164,31 @@ export class RAGService {
    */
   async deleteSearchLogs(ids: string[]): Promise<{ deletedCount: number }> {
     return this.ragAnalytics.deleteSearchLogs(ids);
+  }
+
+  // ───────────────────────── Debug / Admin ─────────────────────────────────
+
+  /**
+   * Normaliza texto (remove acentos, lowercase, etc.).
+   * Exposto para admin debug — não usar em fluxos de produção diretamente.
+   */
+  normalizeText(text: string): string {
+    return this.textProcessing.normalize(text);
+  }
+
+  /**
+   * Tokeniza texto normalizado em array de tokens.
+   * Exposto para admin debug — não usar em fluxos de produção diretamente.
+   */
+  tokenizeText(text: string): string[] {
+    return this.textProcessing.tokenize(text);
+  }
+
+  /**
+   * Calcula score BM25 entre query tokens e doc tokens.
+   * Exposto para admin debug — não usar em fluxos de produção diretamente.
+   */
+  calculateBM25Score(queryTokens: string[], docTokens: string[]): number {
+    return this.ragScoring.calculateBM25Score(queryTokens, docTokens);
   }
 }

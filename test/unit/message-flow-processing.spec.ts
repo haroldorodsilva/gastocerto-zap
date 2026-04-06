@@ -285,7 +285,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
     intentService = module.get<IntentAnalyzerService>(IntentAnalyzerService);
     ragService = module.get<RAGService>(RAGService);
 
-    // Indexa categorias default no RAG (sem accountId — cache escopo por userId)
+    // Indexa categorias default no RAG
     await ragService.indexUserCategories(
       mockUserId,
       defaultCategories.flatMap((cat) =>
@@ -297,6 +297,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
           subCategory: { id: sub.id, name: sub.name },
         })),
       ),
+      mockAccountId,
     );
   });
 
@@ -517,7 +518,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
       expectedCategory: string,
       expectedSubcategory?: string,
     ) {
-      const matches = await ragService.findSimilarCategories(phrase, mockUserId, {
+      const matches = await ragService.findSimilarCategories(phrase, mockUserId, { accountId: mockAccountId,
         minScore: 0.2,
         maxResults: 5,
       });
@@ -717,7 +718,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
 
       // Step 2: Se for transação, resolver categoria
       if (expectedIntent === MessageIntent.REGISTER_TRANSACTION && expectedCategory) {
-        const matches = await ragService.findSimilarCategories(message, mockUserId, {
+        const matches = await ragService.findSimilarCategories(message, mockUserId, { accountId: mockAccountId,
           minScore: 0.2,
           maxResults: 5,
         });
@@ -855,7 +856,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
     it.each(atypicalMessages)(
       'mensagem atípica "$msg" ($desc) - RAG pode não ter match alto sem sinônimos',
       async ({ msg }) => {
-        const matches = await ragService.findSimilarCategories(msg, mockUserId, {
+        const matches = await ragService.findSimilarCategories(msg, mockUserId, { accountId: mockAccountId,
           minScore: 0.1,
           maxResults: 5,
         });
@@ -900,11 +901,12 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
           ),
           ...synonymCategories,
         ],
+        mockAccountId,
       );
     });
 
     it('deve encontrar match para "farmácia" após indexar sinônimos', async () => {
-      const matches = await ragService.findSimilarCategories('farmácia', mockUserId, {
+      const matches = await ragService.findSimilarCategories('farmácia', mockUserId, { accountId: mockAccountId,
         minScore: 0.2,
         maxResults: 5,
       });
@@ -913,7 +915,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
     });
 
     it('deve encontrar match para "academia" após indexar sinônimos', async () => {
-      const matches = await ragService.findSimilarCategories('academia', mockUserId, {
+      const matches = await ragService.findSimilarCategories('academia', mockUserId, { accountId: mockAccountId,
         minScore: 0.2,
         maxResults: 5,
       });
@@ -922,7 +924,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
     });
 
     it('deve encontrar match para "combustível" → Transporte', async () => {
-      const matches = await ragService.findSimilarCategories('combustível', mockUserId, {
+      const matches = await ragService.findSimilarCategories('combustível', mockUserId, { accountId: mockAccountId,
         minScore: 0.2,
         maxResults: 5,
       });
@@ -931,7 +933,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
     });
 
     it('deve encontrar match para "assinatura" → Serviços', async () => {
-      const matches = await ragService.findSimilarCategories('assinatura', mockUserId, {
+      const matches = await ragService.findSimilarCategories('assinatura', mockUserId, { accountId: mockAccountId,
         minScore: 0.2,
         maxResults: 5,
       });
@@ -986,7 +988,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
 
     describe('RAG com normalização', () => {
       it('deve encontrar "SUPERMERCADO" em maiúsculas → Alimentação', async () => {
-        const matches = await ragService.findSimilarCategories('SUPERMERCADO', mockUserId, {
+        const matches = await ragService.findSimilarCategories('SUPERMERCADO', mockUserId, { accountId: mockAccountId,
           minScore: 0.2,
         });
         expect(matches.length).toBeGreaterThan(0);
@@ -994,7 +996,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
       });
 
       it('deve encontrar "farmacia" sem acento → Saúde', async () => {
-        const matches = await ragService.findSimilarCategories('farmacia', mockUserId, {
+        const matches = await ragService.findSimilarCategories('farmacia', mockUserId, { accountId: mockAccountId,
           minScore: 0.2,
         });
         expect(matches.length).toBeGreaterThan(0);
@@ -1002,7 +1004,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
       });
 
       it('deve encontrar "EDUCACAO" sem acento e maiúscula → Educação', async () => {
-        const matches = await ragService.findSimilarCategories('EDUCACAO', mockUserId, {
+        const matches = await ragService.findSimilarCategories('EDUCACAO', mockUserId, { accountId: mockAccountId,
           minScore: 0.2,
         });
         expect(matches.length).toBeGreaterThan(0);
@@ -1059,7 +1061,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
       const matches = await ragService.findSimilarCategories(
         'Fui ao supermercado comprar carne, frutas e verduras para a semana',
         mockUserId,
-        { minScore: 0.2 },
+        { accountId: mockAccountId, minScore: 0.2 },
       );
       expect(matches.length).toBeGreaterThan(0);
       expect(matches[0].categoryName).toBe('Alimentação');
@@ -1162,7 +1164,7 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
           let categoryMatch = null;
 
           if (intent === MessageIntent.REGISTER_TRANSACTION && cat) {
-            const matches = await ragService.findSimilarCategories(msg, mockUserId, {
+            const matches = await ragService.findSimilarCategories(msg, mockUserId, { accountId: mockAccountId,
               minScore: 0.2,
               maxResults: 3,
             });
