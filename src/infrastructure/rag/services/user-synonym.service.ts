@@ -5,14 +5,16 @@ import { TextProcessingService } from './text-processing.service';
 /**
  * UserSynonymService
  *
- * Gerencia sinônimos personalizados de usuários (user_synonym table).
- * Extraído do RAGService para isolar a lógica CRUD de sinônimos
- * da lógica de busca BM25.
+ * Gerencia sinônimos personalizados por CONTA (n:m).
+ * Um sinônimo aprendido na conta A não contamina a conta B.
+ *
+ * Sinônimos GLOBAIS (userId=null, accountId=null) são compartilhados entre
+ * todas as contas e servem como base de conhecimento geral.
  *
  * Responsabilidades:
- * - CRUD de sinônimos por usuário (add, list, remove, has)
- * - Busca de sinônimos (user + global) para uma query
- * - Aprendizado por confirmação/rejeição (confirmAndLearn, rejectAndCorrect)
+ * - CRUD de sinônimos (add, list, remove, has)
+ * - Busca de sinônimos (conta-específicos + globais)
+ * - Aprendizado por confirmação/rejeição
  */
 @Injectable()
 export class UserSynonymService {
@@ -24,12 +26,13 @@ export class UserSynonymService {
   ) {}
 
   /**
-   * Busca sinônimos personalizados do usuário + globais
-   * Retorna lista de keywords que batem com a query normalizada
+   * Busca sinônimos da conta + globais para uma query normalizada.
+   * @param accountId - Quando fornecido, inclui sinônimos específicos da conta.
    */
   async getUserSynonyms(
     userId: string,
     normalizedQuery: string,
+    accountId?: string | null,
   ): Promise<
     Array<{
       keyword: string;
@@ -42,58 +45,55 @@ export class UserSynonymService {
     }>
   > {
     try {
-      // Se prisma não estiver disponível (ex: testes), retornar array vazio
-      if (!this.prisma) {
-        return [];
-      }
+      if (!this.prisma) return [];
 
-      // Tokenizar query para buscar matches parciais
       const queryTokens = this.textProcessing.tokenize(normalizedQuery);
 
-      // Buscar sinônimos do usuário E globais (match exato por token)
+      // Sinônimos da conta (se accountId fornecido) + globais (userId null, accountId null)
       const synonyms = await this.prisma.userSynonym.findMany({
         where: {
           OR: [
+            // Sinônimos da conta específica
+            ...(accountId
+              ? [
+                  {
+                    userId,
+                    accountId,
+                    keyword: { in: queryTokens },
+                  },
+                ]
+              : [
+                  // Fallback legado: sinônimos do usuário sem accountId
+                  {
+                    userId,
+                    accountId: null,
+                    keyword: { in: queryTokens },
+                  },
+                ]),
+            // Sinônimos globais (base de conhecimento compartilhada)
             {
-              // Sinônimos do usuário (match exato)
-              userId,
-              keyword: {
-                in: queryTokens,
-              },
-            },
-            {
-              // Sinônimos globais (match exato)
               userId: null,
-              keyword: {
-                in: queryTokens,
-              },
+              accountId: null,
+              keyword: { in: queryTokens },
             },
           ],
         },
         orderBy: [
-          { userId: 'asc' }, // Prioriza usuário sobre GLOBAL
-          { confidence: 'desc' }, // Depois por confiança
+          { userId: 'asc' }, // Conta > Global
+          { confidence: 'desc' },
         ],
       });
 
-      // Atualizar usageCount e lastUsedAt para os sinônimos encontrados
       if (synonyms.length > 0) {
         await this.prisma.userSynonym.updateMany({
-          where: {
-            id: {
-              in: synonyms.map((s) => s.id),
-            },
-          },
-          data: {
-            usageCount: {
-              increment: 1,
-            },
-            lastUsedAt: new Date(),
-          },
+          where: { id: { in: synonyms.map((s) => s.id) } },
+          data: { usageCount: { increment: 1 }, lastUsedAt: new Date() },
         });
 
+        const contaSynonyms = synonyms.filter((s) => s.userId === userId).length;
+        const globalSynonyms = synonyms.filter((s) => s.userId === null).length;
         this.logger.log(
-          `📚 Encontrados ${synonyms.length} sinônimos (${synonyms.filter((s) => s.userId === userId).length} do usuário, ${synonyms.filter((s) => s.userId === null).length} globais)`,
+          `📚 ${synonyms.length} sinônimos | ${contaSynonyms} da conta | ${globalSynonyms} globais`,
         );
       }
 
@@ -113,10 +113,12 @@ export class UserSynonymService {
   }
 
   /**
-   * Adiciona novo sinônimo personalizado para o usuário
+   * Adiciona ou atualiza sinônimo para a conta.
+   * @param accountId - Conta onde o sinônimo é válido.
    */
   async addUserSynonym(params: {
     userId: string;
+    accountId?: string | null;
     keyword: string;
     categoryId: string;
     categoryName: string;
@@ -128,16 +130,15 @@ export class UserSynonymService {
     try {
       const normalizedKeyword = this.textProcessing.normalize(params.keyword);
 
-      // Verificar se já existe
       const existing = await this.prisma.userSynonym.findFirst({
         where: {
           userId: params.userId,
+          accountId: params.accountId ?? null,
           keyword: normalizedKeyword,
         },
       });
 
       if (existing) {
-        // Atualizar existente
         await this.prisma.userSynonym.update({
           where: { id: existing.id },
           data: {
@@ -151,10 +152,10 @@ export class UserSynonymService {
           },
         });
       } else {
-        // Criar novo
         await this.prisma.userSynonym.create({
           data: {
             userId: params.userId,
+            accountId: params.accountId ?? null,
             keyword: normalizedKeyword,
             categoryId: params.categoryId,
             categoryName: params.categoryName,
@@ -167,18 +168,21 @@ export class UserSynonymService {
       }
 
       this.logger.log(
-        `✅ Sinônimo adicionado: "${params.keyword}" → ${params.categoryName}${params.subCategoryName ? ' → ' + params.subCategoryName : ''}`,
+        `✅ Sinônimo: "${params.keyword}" → ${params.categoryName}${params.subCategoryName ? ' > ' + params.subCategoryName : ''} | accountId=${params.accountId}`,
       );
     } catch (error) {
-      this.logger.error('Erro ao adicionar sinônimo personalizado:', error);
+      this.logger.error('Erro ao adicionar sinônimo:', error);
       throw error;
     }
   }
 
   /**
-   * Lista todos sinônimos de um usuário
+   * Lista sinônimos da conta.
    */
-  async listUserSynonyms(userId: string): Promise<
+  async listUserSynonyms(
+    userId: string,
+    accountId?: string | null,
+  ): Promise<
     Array<{
       id: string;
       keyword: string;
@@ -190,7 +194,10 @@ export class UserSynonymService {
     }>
   > {
     const synonyms = await this.prisma.userSynonym.findMany({
-      where: { userId },
+      where: {
+        userId,
+        ...(accountId !== undefined ? { accountId: accountId ?? null } : {}),
+      },
       orderBy: [{ usageCount: 'desc' }, { confidence: 'desc' }],
     });
 
@@ -206,112 +213,37 @@ export class UserSynonymService {
   }
 
   /**
-   * Remove sinônimo personalizado
+   * Remove sinônimo da conta.
    */
-  async removeUserSynonym(userId: string, keyword: string): Promise<void> {
+  async removeUserSynonym(
+    userId: string,
+    keyword: string,
+    accountId?: string | null,
+  ): Promise<void> {
     const normalizedKeyword = this.textProcessing.normalize(keyword);
 
-    await this.prisma.userSynonym.delete({
+    // Buscar por userId + accountId + keyword (unique constraint atualizado)
+    const synonym = await this.prisma.userSynonym.findFirst({
       where: {
-        userId_keyword: {
-          userId,
-          keyword: normalizedKeyword,
-        },
+        userId,
+        accountId: accountId ?? null,
+        keyword: normalizedKeyword,
       },
     });
 
-    this.logger.log(`🗑️ Sinônimo removido: "${keyword}" para usuário ${userId}`);
-  }
-
-  /**
-   * Confirma sugestão e aprende para o futuro
-   *
-   * Quando usuário confirma que "marmita" → "Restaurante" está correto:
-   * 1. Salva em UserSynonym com alta confiança
-   * 2. Próximas vezes, "marmita" já vai direto para "Restaurante"
-   */
-  async confirmAndLearn(params: {
-    userId: string;
-    originalTerm: string;
-    confirmedCategoryId: string;
-    confirmedCategoryName: string;
-    confirmedSubcategoryId?: string;
-    confirmedSubcategoryName?: string;
-    confidence?: number;
-  }): Promise<void> {
-    await this.addUserSynonym({
-      userId: params.userId,
-      keyword: params.originalTerm,
-      categoryId: params.confirmedCategoryId,
-      categoryName: params.confirmedCategoryName,
-      subCategoryId: params.confirmedSubcategoryId,
-      subCategoryName: params.confirmedSubcategoryName,
-      confidence: params.confidence ?? 0.9, // Alta confiança para confirmação manual
-      source: 'USER_CONFIRMED',
-    });
-
-    this.logger.log(
-      `✅ Aprendizado confirmado: "${params.originalTerm}" → ${params.confirmedCategoryName}${params.confirmedSubcategoryName ? ' → ' + params.confirmedSubcategoryName : ''} (confiança: ${params.confidence ?? 0.9})`,
-    );
-  }
-
-  /**
-   * Rejeita sugestão e permite correção
-   *
-   * Quando usuário rejeita sugestão, pode fornecer a categoria/subcategoria correta.
-   * Sistema aprende com a correção.
-   */
-  async rejectAndCorrect(params: {
-    userId: string;
-    originalTerm: string;
-    rejectedCategoryId?: string;
-    rejectedCategoryName?: string;
-    correctCategoryId: string;
-    correctCategoryName: string;
-    correctSubcategoryId?: string;
-    correctSubcategoryName?: string;
-  }): Promise<void> {
-    // ⚠️ NÃO salvar sinônimo se a categoria corrigida for genérica
-    const isGenericCategory =
-      params.correctCategoryName === 'Outros' || params.correctCategoryName === 'Geral';
-    const isGenericSubcategory =
-      !params.correctSubcategoryName ||
-      params.correctSubcategoryName === 'Outros' ||
-      params.correctSubcategoryName === 'Geral';
-
-    if (isGenericCategory || isGenericSubcategory) {
-      this.logger.log(
-        `⚠️ Correção para categoria genérica - NÃO salvando sinônimo: "${params.originalTerm}" → ${params.correctCategoryName}`,
-      );
-      return;
+    if (synonym) {
+      await this.prisma.userSynonym.delete({ where: { id: synonym.id } });
+      this.logger.log(`🗑️ Sinônimo removido: "${keyword}" | accountId=${accountId}`);
     }
-
-    // Salvar correção como sinônimo com alta confiança
-    await this.addUserSynonym({
-      userId: params.userId,
-      keyword: params.originalTerm,
-      categoryId: params.correctCategoryId,
-      categoryName: params.correctCategoryName,
-      subCategoryId: params.correctSubcategoryId,
-      subCategoryName: params.correctSubcategoryName,
-      confidence: 0.95, // Confiança muito alta para correção manual
-      source: 'USER_CONFIRMED',
-    });
-
-    this.logger.log(
-      `✅ Correção aprendida: "${params.originalTerm}" → ${params.correctCategoryName}${params.correctSubcategoryName ? ' → ' + params.correctSubcategoryName : ''} (rejeitou: ${params.rejectedCategoryName || 'N/A'})`,
-    );
   }
 
   /**
-   * Busca sinônimo personalizado para sugestões inteligentes
-   *
-   * Verifica se usuário já tem sinônimo cadastrado para o termo.
-   * Útil para evitar perguntar novamente algo que usuário já confirmou.
+   * Verifica se existe sinônimo aprendido para o termo na conta.
    */
   async hasUserSynonym(
     userId: string,
     term: string,
+    accountId?: string | null,
   ): Promise<{
     hasSynonym: boolean;
     categoryId?: string;
@@ -322,18 +254,15 @@ export class UserSynonymService {
   }> {
     const normalized = this.textProcessing.normalize(term);
 
-    const synonym = await this.prisma.userSynonym.findUnique({
+    const synonym = await this.prisma.userSynonym.findFirst({
       where: {
-        userId_keyword: {
-          userId,
-          keyword: normalized,
-        },
+        userId,
+        accountId: accountId ?? null,
+        keyword: normalized,
       },
     });
 
-    if (!synonym) {
-      return { hasSynonym: false };
-    }
+    if (!synonym) return { hasSynonym: false };
 
     return {
       hasSynonym: true,
@@ -343,5 +272,80 @@ export class UserSynonymService {
       subCategoryName: synonym.subCategoryName || undefined,
       confidence: synonym.confidence,
     };
+  }
+
+  /**
+   * Aprende por confirmação do usuário.
+   */
+  async confirmAndLearn(params: {
+    userId: string;
+    accountId?: string | null;
+    originalTerm: string;
+    confirmedCategoryId: string;
+    confirmedCategoryName: string;
+    confirmedSubcategoryId?: string;
+    confirmedSubcategoryName?: string;
+    confidence?: number;
+  }): Promise<void> {
+    await this.addUserSynonym({
+      userId: params.userId,
+      accountId: params.accountId,
+      keyword: params.originalTerm,
+      categoryId: params.confirmedCategoryId,
+      categoryName: params.confirmedCategoryName,
+      subCategoryId: params.confirmedSubcategoryId,
+      subCategoryName: params.confirmedSubcategoryName,
+      confidence: params.confidence ?? 0.9,
+      source: 'USER_CONFIRMED',
+    });
+
+    this.logger.log(
+      `✅ Aprendizado confirmado: "${params.originalTerm}" → ${params.confirmedCategoryName}${params.confirmedSubcategoryName ? ' > ' + params.confirmedSubcategoryName : ''} | accountId=${params.accountId}`,
+    );
+  }
+
+  /**
+   * Aprende com a correção do usuário.
+   */
+  async rejectAndCorrect(params: {
+    userId: string;
+    accountId?: string | null;
+    originalTerm: string;
+    rejectedCategoryId?: string;
+    rejectedCategoryName?: string;
+    correctCategoryId: string;
+    correctCategoryName: string;
+    correctSubcategoryId?: string;
+    correctSubcategoryName?: string;
+  }): Promise<void> {
+    const isGenericCategory =
+      params.correctCategoryName === 'Outros' || params.correctCategoryName === 'Geral';
+    const isGenericSubcategory =
+      !params.correctSubcategoryName ||
+      params.correctSubcategoryName === 'Outros' ||
+      params.correctSubcategoryName === 'Geral';
+
+    if (isGenericCategory || isGenericSubcategory) {
+      this.logger.log(
+        `⚠️ Categoria genérica — NÃO salvando: "${params.originalTerm}" → ${params.correctCategoryName}`,
+      );
+      return;
+    }
+
+    await this.addUserSynonym({
+      userId: params.userId,
+      accountId: params.accountId,
+      keyword: params.originalTerm,
+      categoryId: params.correctCategoryId,
+      categoryName: params.correctCategoryName,
+      subCategoryId: params.correctSubcategoryId,
+      subCategoryName: params.correctSubcategoryName,
+      confidence: 0.95,
+      source: 'USER_CONFIRMED',
+    });
+
+    this.logger.log(
+      `✅ Correção aprendida: "${params.originalTerm}" → ${params.correctCategoryName}${params.correctSubcategoryName ? ' > ' + params.correctSubcategoryName : ''} (rejeitou: ${params.rejectedCategoryName || 'N/A'})`,
+    );
   }
 }

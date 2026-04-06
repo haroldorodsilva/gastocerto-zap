@@ -185,10 +185,10 @@ export class AccountManagementService {
                 const { expandCategoriesForRAG } = await import('../users/user-cache.service');
                 const userCategories = expandCategoriesForRAG(categoriesData.categories);
 
-                await this.ragService.indexUserCategories(user.gastoCertoId, userCategories);
+                await this.ragService.indexUserCategories(user.gastoCertoId, userCategories, targetAccount.id);
                 this.logger.log(
                   `🧠 RAG re-indexado após trocar perfil: ${userCategories.length} categorias | ` +
-                    `Perfil: ${targetAccount.name}`,
+                    `Perfil: ${targetAccount.name} | AccountId: ${targetAccount.id}`,
                 );
               }
             }

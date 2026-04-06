@@ -231,6 +231,7 @@ model RAGSearchLog {
 model UserSynonym {
   id              String        @id @default(uuid())
   userId          String?
+  accountId       String?       // n:m: sinônimos são isolados por conta
   keyword         String
   categoryId      String?
   categoryName    String
@@ -246,9 +247,10 @@ model UserSynonym {
   // Relacionamento com UserCache
   user UserCache? @relation(fields: [userId], references: [gastoCertoId], onDelete: Cascade)
 
-  @@unique([userId, keyword])
+  @@unique([userId, accountId, keyword])
   @@index([userId])
-  @@index([userId, keyword])
+  @@index([userId, accountId])
+  @@index([accountId])
   @@index([usageCount])
   @@map("user_synonyms")
 }

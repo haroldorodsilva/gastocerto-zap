@@ -12,6 +12,7 @@ import { TelegramModule } from '../../infrastructure/telegram/telegram.module';
 import { RAGModule } from '@infrastructure/rag/rag.module';
 import { UsersModule } from '../users/users.module';
 import { AiModule } from '../../infrastructure/ai/ai.module';
+import { SharedModule } from '@shared/shared.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { AiModule } from '../../infrastructure/ai/ai.module';
     RAGModule,
     UsersModule,
     AiModule,
+    SharedModule,
   ],
   controllers: [
     AdminController,

@@ -213,4 +213,20 @@ export class TextProcessingService {
   filterTokensForTermDetection(tokens: string[]): string[] {
     return tokens.filter((t) => !FILTER_WORDS_FOR_TERM_DETECTION.includes(t) && !/^\d+$/.test(t));
   }
+
+  /**
+   * Gera bigrams de uma sequência de tokens.
+   * Útil para matching de termos compostos: "material escolar", "energia elétrica".
+   *
+   * @example
+   * buildBigrams(['cartao', 'credito']) → ['cartao_credito']
+   * buildBigrams(['material', 'escolar']) → ['material_escolar']
+   */
+  buildBigrams(tokens: string[]): string[] {
+    const bigrams: string[] = [];
+    for (let i = 0; i < tokens.length - 1; i++) {
+      bigrams.push(`${tokens[i]}_${tokens[i + 1]}`);
+    }
+    return bigrams;
+  }
 }

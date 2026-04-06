@@ -52,13 +52,13 @@ export class CategoryResolverService {
       // 1. PRIORIDADE: Tentar buscar do cache RAG (formato expandido com subcategorias)
       if (this.ragService) {
         try {
-          const ragCategories = await this.ragService.getCachedCategories(userId);
+          // Pass accountId for account-scoped cache lookup (n:m fix)
+          const ragCategories = await this.ragService.getCachedCategories(userId, accountId);
           if (ragCategories && ragCategories.length > 0) {
-            // Filtrar por conta E tipo de transação
+            // Filtrar por tipo de transação (accountId já está no cache scope)
             categoriesData = ragCategories.filter((cat: any) => {
-              const matchesAccount = cat.accountId === accountId;
               const matchesType = !transactionType || cat.type === transactionType;
-              return matchesAccount && matchesType;
+              return matchesType;
             });
 
             if (categoriesData.length > 0) {

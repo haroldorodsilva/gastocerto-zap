@@ -10,16 +10,24 @@ import {
   Param,
   Body,
   BadRequestException,
+  ConflictException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { PrismaService } from '@core/database/prisma.service';
+import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
+import { UserCacheService } from '@features/users/user-cache.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
 export class AdminOnboardingController {
   private readonly logger = new Logger(AdminOnboardingController.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gastoCertoApi: GastoCertoApiService,
+    private readonly userCacheService: UserCacheService,
+  ) {}
 
   @Post('onboarding/manual')
   @HttpCode(HttpStatus.CREATED)
@@ -32,15 +40,38 @@ export class AdminOnboardingController {
       throw new BadRequestException('phoneNumber, name e email são obrigatórios');
     }
 
-    this.logger.log(`TODO: Criar usuário na API GastoCerto`);
-    this.logger.log(`- Phone: ${dto.phoneNumber}`);
-    this.logger.log(`- Name: ${dto.name}`);
-    this.logger.log(`- Email: ${dto.email}`);
-    this.logger.log(`- Notes: ${dto.notes || 'N/A'}`);
+    // Verificar se usuário já existe no cache
+    const existing = await this.userCacheService.getUser(dto.phoneNumber);
+    if (existing) {
+      throw new ConflictException(`Usuário ${dto.phoneNumber} já existe (gastoCertoId: ${existing.gastoCertoId})`);
+    }
+
+    // Criar usuário na API GastoCerto
+    let createdUser: any;
+    try {
+      createdUser = await this.gastoCertoApi.createUser({
+        name: dto.name,
+        email: dto.email,
+        phoneNumber: dto.phoneNumber,
+        source: 'admin_manual',
+        acceptedTerms: true,
+        metadata: {
+          notes: dto.notes || '',
+          createdBy: 'admin_panel',
+        },
+      });
+    } catch (apiError) {
+      this.logger.error(`Erro ao criar usuário na API GastoCerto: ${apiError.message}`);
+      throw new InternalServerErrorException(`Falha ao criar usuário na API: ${apiError.message}`);
+    }
+
+    this.logger.log(`✅ Usuário criado na API GastoCerto: ${createdUser?.id || 'N/A'}`);
 
     return {
       success: true,
-      message: `Onboarding manual enfileirado para ${dto.phoneNumber}`,
+      message: `Usuário ${dto.phoneNumber} criado com sucesso`,
+      userId: createdUser?.id,
+      email: dto.email,
     };
   }
 

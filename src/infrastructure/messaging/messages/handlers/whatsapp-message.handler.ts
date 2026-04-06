@@ -343,6 +343,29 @@ export class WhatsAppMessageHandler {
           }
           break;
 
+        case MessageType.DOCUMENT:
+          // Documento PDF: processar via IA
+          if (message.documentBuffer) {
+            this.logger.log(`[WhatsApp] Processing document message: ${message.fileName}`);
+            await this.transactionsService.processDocumentMessage(
+              user,
+              message.documentBuffer,
+              message.mimeType || 'application/pdf',
+              message.fileName || 'documento.pdf',
+              message.messageId,
+              'whatsapp',
+              phoneNumber,
+              accountId,
+            );
+          } else {
+            this.logger.warn(`[WhatsApp] Document message without buffer`);
+            this.sendMessage(
+              phoneNumber,
+              '❌ Não consegui baixar o documento.\n\n_Tente reenviar o arquivo._',
+            );
+          }
+          break;
+
         default:
           this.logger.warn(`[WhatsApp] Unsupported message type: ${message.type}`);
           this.sendMessage(
@@ -350,7 +373,8 @@ export class WhatsAppMessageHandler {
             '❌ Tipo de mensagem não suportado.\n\n' +
               'Envie:\n' +
               '• Texto: "Gastei 50 reais em alimentação"\n' +
-              '• Foto de nota fiscal\n' +
+              '• Foto de nota fiscal ou comprovante\n' +
+              '• PDF de extrato ou nota fiscal\n' +
               '• Áudio descrevendo o gasto',
           );
       }

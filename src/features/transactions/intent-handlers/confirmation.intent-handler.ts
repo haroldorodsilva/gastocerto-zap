@@ -48,7 +48,7 @@ export class ConfirmationIntentHandler implements IntentHandler {
 
       case MessageIntent.LIST_PENDING: {
         this.logger.log('✅ Delegando para listPendingConfirmations');
-        const result = await this.listPendingConfirmations(phoneNumber);
+        const result = await this.listPendingConfirmations(phoneNumber, ctx.accountId);
         return {
           success: result.success,
           message: result.message,
@@ -138,10 +138,9 @@ export class ConfirmationIntentHandler implements IntentHandler {
       let categories: any[] = [];
 
       if (effectiveUserId) {
-        const allCategories = await this.ragService.getCachedCategories(effectiveUserId);
-        categories = effectiveAccountId
-          ? allCategories.filter((cat) => cat.accountId === effectiveAccountId)
-          : allCategories;
+        // Pass accountId so the cache lookup uses the account-scoped key (n:m fix)
+        const allCategories = await this.ragService.getCachedCategories(effectiveUserId, effectiveAccountId || null);
+        categories = allCategories;
       }
 
       if (categories.length === 0) {
@@ -193,11 +192,12 @@ export class ConfirmationIntentHandler implements IntentHandler {
    */
   async listPendingConfirmations(
     phoneNumber: string,
+    accountId?: string | null,
   ): Promise<{ success: boolean; message: string }> {
     try {
       this.logger.log(`📋 Listando confirmações pendentes de ${phoneNumber}`);
 
-      const pending = await this.confirmationService.getAllPendingConfirmations(phoneNumber);
+      const pending = await this.confirmationService.getAllPendingConfirmations(phoneNumber, accountId);
 
       if (!pending || pending.length === 0) {
         return {

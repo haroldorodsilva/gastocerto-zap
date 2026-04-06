@@ -20,6 +20,8 @@ export interface IFilteredMessage {
   text?: string;
   imageBuffer?: Buffer;
   audioBuffer?: Buffer;
+  documentBuffer?: Buffer; // Buffer do documento (PDF, etc)
+  fileName?: string; // Nome original do arquivo
   mimeType?: string;
   isFromMe: boolean;
   timestamp: number;

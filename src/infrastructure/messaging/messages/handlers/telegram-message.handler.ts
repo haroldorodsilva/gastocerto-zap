@@ -401,6 +401,28 @@ export class TelegramMessageHandler {
         }
         break;
 
+      case MessageType.DOCUMENT:
+        if (message.mediaBuffer) {
+          await this.transactionsService.processDocumentMessage(
+            user,
+            message.mediaBuffer,
+            message.mimeType || 'application/pdf',
+            message.metadata?.fileName || 'documento.pdf',
+            message.id,
+            'telegram',
+            userId,
+            accountId,
+          );
+        } else {
+          await this.platformReply.sendReply({
+            platformId: userId,
+            message: '❌ Não consegui baixar o documento.\n\n_Tente reenviar o arquivo._',
+            context: 'ERROR',
+            platform: MessagingPlatform.TELEGRAM,
+          });
+        }
+        break;
+
       default:
         await this.platformReply.sendReply({
           platformId: userId,
@@ -408,7 +430,8 @@ export class TelegramMessageHandler {
             '❌ Tipo de mensagem não suportado.\n\n' +
             'Envie:\n' +
             '• Texto: "Gastei 50 reais em alimentação"\n' +
-            '• Foto de nota fiscal\n' +
+            '• Foto de nota fiscal ou comprovante\n' +
+            '• PDF de extrato ou nota fiscal\n' +
             '• Áudio descrevendo o gasto',
           context: 'ERROR',
           platform: MessagingPlatform.TELEGRAM,

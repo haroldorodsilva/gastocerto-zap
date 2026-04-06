@@ -657,49 +657,58 @@ export class AdminRagController {
       throw new BadRequestException(`Usuário ${userId} não encontrado no cache`);
     }
 
-    // Buscar sinônimos do usuário + globais
+    const targetAccountId = accountId || userCache.activeAccountId;
+
+    // Buscar sinônimos da conta + globais
     const userSynonyms = await this.prisma.userSynonym.findMany({
       where: {
-        OR: [{ userId: userCache.gastoCertoId }, { userId: null }],
+        OR: [
+          { userId: userCache.gastoCertoId, accountId: targetAccountId || undefined },
+          { userId: null, accountId: null },
+        ],
       },
       orderBy: [{ userId: 'asc' }, { confidence: 'desc' }],
     });
 
     // Indexar categorias (igual ao fluxo de mensagens)
-    try {
-      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
-        userCache.gastoCertoId,
-      );
+    if (targetAccountId) {
+      try {
+        const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
+          userCache.gastoCertoId,
+        );
 
-      if (categoriesResponse?.accounts?.length > 0) {
-        const targetAccountId = accountId || userCache.activeAccountId;
-        const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
+        if (categoriesResponse?.accounts?.length > 0) {
+          const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
 
-        if (targetAccount && targetAccount.categories.length > 0) {
-          const userCategories = expandCategoriesForRAG(targetAccount.categories);
-          await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
-          this.logger.log(
-            `[TEST-MATCH] ${userCategories.length} categorias indexadas (conta: ${targetAccount.name})`,
-          );
+          if (targetAccount && targetAccount.categories.length > 0) {
+            const userCategories = expandCategoriesForRAG(targetAccount.categories);
+            await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories, targetAccountId);
+            this.logger.log(
+              `[TEST-MATCH] ${userCategories.length} categorias indexadas (conta: ${targetAccount.name})`,
+            );
+          }
         }
+      } catch (indexError) {
+        this.logger.error('[TEST-MATCH] Erro ao indexar categorias:', indexError);
       }
-    } catch (indexError) {
-      this.logger.error('[TEST-MATCH] Erro ao indexar categorias:', indexError);
     }
 
     // Normalizar query e tokenizar
-    const queryNormalized = this.ragService['normalize'](query);
-    const queryTokens = this.ragService['tokenize'](queryNormalized);
+    const queryNormalized = this.ragService.normalizeText(query);
+    const queryTokens = this.ragService.tokenizeText(queryNormalized);
 
     // Buscar categorias indexadas
-    const cacheKey = `rag:categories:${userCache.gastoCertoId}`;
-    const redisClient = await this.ragService['cacheManager'].get<string>(cacheKey);
-    const allCategories = redisClient ? JSON.parse(redisClient) : [];
+    const allCategories = targetAccountId
+      ? await this.ragService.getCachedCategories(userCache.gastoCertoId, targetAccountId)
+      : [];
 
     // Executar matching sem criar logs
-    const result = await this.ragService.findSimilarCategories(query, userCache.gastoCertoId, {
-      skipLogging: true,
-    });
+    const result = targetAccountId
+      ? await this.ragService.findSimilarCategories(query, userCache.gastoCertoId, {
+          skipLogging: true,
+          accountId: targetAccountId,
+        })
+      : [];
 
     // Debug: se sem matches, calcular top categorias mais próximas
     let topNonMatching: any[] = [];
@@ -805,36 +814,43 @@ export class AdminRagController {
       throw new BadRequestException(`Usuário ${userId} não encontrado no cache`);
     }
 
+    const targetAccountId = accountId || userCache.activeAccountId;
+
     // Indexar categorias
-    try {
-      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
-        userCache.gastoCertoId,
-      );
+    if (targetAccountId) {
+      try {
+        const categoriesResponse = await this.gastoCertoApiService.getUserCategories(
+          userCache.gastoCertoId,
+        );
 
-      if (categoriesResponse?.accounts?.length > 0) {
-        const targetAccountId = accountId || userCache.activeAccountId;
-        const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
+        if (categoriesResponse?.accounts?.length > 0) {
+          const targetAccount = categoriesResponse.accounts.find((acc) => acc.id === targetAccountId);
 
-        if (targetAccount && targetAccount.categories.length > 0) {
-          const userCategories = expandCategoriesForRAG(targetAccount.categories);
-          await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories);
+          if (targetAccount && targetAccount.categories.length > 0) {
+            const userCategories = expandCategoriesForRAG(targetAccount.categories);
+            await this.ragService.indexUserCategories(userCache.gastoCertoId, userCategories, targetAccountId);
+          }
         }
+      } catch (indexError) {
+        this.logger.error('[ANALYZE] Erro ao indexar:', indexError);
       }
-    } catch (indexError) {
-      this.logger.error('[ANALYZE] Erro ao indexar:', indexError);
     }
 
-    const queryNormalized = this.ragService['normalize'](query);
-    const queryTokens = this.ragService['tokenize'](queryNormalized);
+    const queryNormalized = this.ragService.normalizeText(query);
+    const queryTokens = this.ragService.tokenizeText(queryNormalized);
 
-    const allCategories = await this.ragService.getCachedCategories(userCache.gastoCertoId);
+    const allCategories = targetAccountId
+      ? await this.ragService.getCachedCategories(userCache.gastoCertoId, targetAccountId)
+      : [];
 
     if (allCategories.length === 0) {
       return { query, queryNormalized, queryTokens, categories: [] };
     }
 
     // Execute real RAG and build results map
-    const ragResults = await this.ragService.findSimilarCategories(query, userCache.gastoCertoId);
+    const ragResults = targetAccountId
+      ? await this.ragService.findSimilarCategories(query, userCache.gastoCertoId, { accountId: targetAccountId })
+      : [];
     const ragResultsMap = new Map<string, any>();
     ragResults.forEach((r) => {
       ragResultsMap.set(`${r.categoryId}:${r.subCategoryId || 'null'}`, r);
@@ -846,21 +862,17 @@ export class AdminRagController {
 
       if (ragResult) {
         const reasons: string[] = [];
-        const tokens = this.ragService['tokenize'](this.ragService['normalize'](query));
+        const tokens = this.ragService.tokenizeText(this.ragService.normalizeText(query));
         const fullText = cat.subCategory?.name ? `${cat.name} ${cat.subCategory.name}` : cat.name;
-        const normalizedText = this.ragService['normalize'](fullText);
-        const categoryTokens = this.ragService['tokenize'](normalizedText);
+        const categoryTokens = this.ragService.tokenizeText(this.ragService.normalizeText(fullText));
 
-        const bm25Score = this.ragService['calculateBM25Score'](tokens, categoryTokens);
+        const bm25Score = this.ragService.calculateBM25Score(tokens, categoryTokens);
         if (bm25Score > 0) reasons.push(`BM25: ${bm25Score.toFixed(4)}`);
 
         if (cat.subCategory?.name) {
-          const normalizedSubCat = this.ragService['normalize'](cat.subCategory.name);
+          const normalizedSubCat = this.ragService.normalizeText(cat.subCategory.name);
           const subCatRegex = new RegExp(`\\b${normalizedSubCat}\\b`, 'i');
-          if (
-            normalizedSubCat.length >= 3 &&
-            subCatRegex.test(this.ragService['normalize'](query))
-          ) {
+          if (normalizedSubCat.length >= 3 && subCatRegex.test(this.ragService.normalizeText(query))) {
             reasons.push('Match direto: +10.0');
           }
         }

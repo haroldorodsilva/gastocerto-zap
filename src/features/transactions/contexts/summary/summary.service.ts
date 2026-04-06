@@ -149,7 +149,7 @@ export class TransactionSummaryService {
 
       const result = await this.gastoCertoApi.listCreditCardInvoices(
         user.activeAccountId,
-        user.gastoCertoId, // TODO: Passar creditCardId real quando disponível
+        user.defaultCreditCardId || user.gastoCertoId,
       );
 
       if (!result.success || !result.invoices || result.invoices.length === 0) {

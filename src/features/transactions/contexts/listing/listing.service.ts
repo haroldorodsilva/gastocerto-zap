@@ -9,6 +9,7 @@ import {
   getBalanceComment,
   getEmptyListMessage,
 } from '@shared/utils/response-variations';
+import { ListContextService } from '../../list-context.service';
 
 export interface ListingFilters {
   period?: 'today' | 'week' | 'month' | 'last_month' | 'custom';
@@ -64,6 +65,7 @@ export class TransactionListingService {
   constructor(
     private readonly gastoCertoApi: GastoCertoApiService,
     private readonly accountManagement: AccountManagementService,
+    private readonly listContext: ListContextService,
   ) {}
 
   /**
@@ -129,7 +131,22 @@ export class TransactionListingService {
         };
       }
 
-      // 4. Formatar mensagem de listagem
+      // 4. Armazenar contexto para referência numérica posterior ("pagar 3", "detalhar 2")
+      const contextItems = transactions.map((t: any) => ({
+        id: t.id || t.gastoCertoId || '',
+        type: 'transaction' as const,
+        description: t.description || t.category?.name || 'Transação',
+        amount: typeof t.amount === 'number' ? t.amount / 100 : t.amount,
+        category: t.category?.name || t.categoryName || '',
+        metadata: {
+          status: t.paymentStatus || t.status,
+          date: t.date || t.dueDate,
+          type: t.type,
+        },
+      }));
+      this.listContext.setListContext(user.phoneNumber, 'transactions', contextItems);
+
+      // 5. Formatar mensagem de listagem
       const message = this.formatTransactionList(result, filters);
 
       return {
