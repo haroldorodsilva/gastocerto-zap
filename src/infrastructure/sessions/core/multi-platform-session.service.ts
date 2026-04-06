@@ -496,34 +496,30 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
       return;
     }
 
-    // Detectar loop de reconexão infinito
+    // Detectar loop de reconexão — provavelmente conflito de deploy (container antigo ainda vivo)
     if (
       errorMsg.includes('Reconnection loop detected') ||
       errorMsg.includes('Max reconnection attempts reached')
     ) {
-      this.logger.error(
-        `🚨 LOOP DE RECONEXÃO DETECTADO - Sessão ${sessionId}. Desativando sessão permanentemente.`,
+      this.logger.warn(
+        `⚠️  CONFLITO DE RECONEXÃO na sessão ${sessionId}. ` +
+          `Provável sobreposição de deploy (container antigo ainda está em execução). ` +
+          `Mantendo isActive=true e agendando nova tentativa em 60s...`,
       );
 
-      // Desativar sessão no banco
+      // Limpar da memória SEM marcar isActive=false no banco
+      // Isso garante que na próxima tentativa (ou próximo deploy) a sessão volte automaticamente
       try {
         if (sessionId.startsWith('telegram-')) {
           await this.prisma.telegramSession.update({
             where: { sessionId },
             data: {
-              isActive: false,
               status: SessionStatus.ERROR,
+              // isActive permanece true para reconexão automática
             },
           });
-
-          this.logger.error(
-            `❌ Sessão ${sessionId} DESATIVADA por loop de reconexão. ` +
-              `Há outra instância rodando com o mesmo token. ` +
-              `Verifique se há múltiplos ambientes usando o mesmo token.`,
-          );
         }
 
-        // Remover da memória
         const session = this.sessions.get(sessionId);
         if (session) {
           await session.provider.disconnect().catch(() => {});
@@ -531,8 +527,18 @@ export class MultiPlatformSessionService implements OnModuleInit, OnModuleDestro
           ACTIVE_SESSIONS_GLOBAL.delete(sessionId);
         }
       } catch (dbError: any) {
-        this.logger.error(`Erro ao desativar sessão ${sessionId}: ${dbError.message}`);
+        this.logger.error(`Erro ao atualizar status da sessão ${sessionId}: ${dbError.message}`);
       }
+
+      // Agendar reconexão após 60s — tempo suficiente para container antigo encerrar
+      const retryDelay = 60_000;
+      this.logger.log(`⏳ Reconexão de ${sessionId} agendada em ${retryDelay / 1000}s...`);
+      setTimeout(() => {
+        this.logger.log(`🔄 Tentando reconexão automática pós-deploy para ${sessionId}...`);
+        this.startTelegramSession(sessionId, true).catch((err) => {
+          this.logger.error(`❌ Reconexão pós-deploy falhou para ${sessionId}: ${err.message}`);
+        });
+      }, retryDelay);
 
       return; // Não emitir evento session.error para evitar spam
     }

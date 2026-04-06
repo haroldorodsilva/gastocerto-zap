@@ -23,9 +23,9 @@ export class TelegramProvider implements IMessagingProvider {
   private callbacks: MessagingCallbacks = {};
   private connected = false;
   private conflict409Count = 0;
-  private readonly MAX_409_ERRORS = 3; // Após 3 erros 409, tentar reconexão
-  private readonly MAX_RECONNECT_ATTEMPTS = 2; // Máximo de tentativas de reconexão por erro
-  private readonly MAX_TOTAL_RECONNECTS = 3; // Máximo de reconexões no total em 5 minutos
+  private readonly MAX_409_ERRORS = 20; // Tolerância alta para deploy overlap (~6s de conflito antes de tentar reconexão)
+  private readonly MAX_RECONNECT_ATTEMPTS = 5; // Máximo de tentativas de reconexão por erro
+  private readonly MAX_TOTAL_RECONNECTS = 8; // Máximo de reconexões no total em 10 minutos
   private reconnectAttempts = 0;
   private totalReconnects = 0;
   private lastReconnectTime = 0;
@@ -464,12 +464,12 @@ export class TelegramProvider implements IMessagingProvider {
       return;
     }
 
-    // Verificar se já ultrapassou o limite total de reconexões em 5 minutos
+    // Verificar se já ultrapassou o limite total de reconexões em 10 minutos
     const now = Date.now();
-    const fiveMinutes = 5 * 60 * 1000;
+    const tenMinutes = 10 * 60 * 1000;
 
-    if (now - this.lastReconnectTime > fiveMinutes) {
-      // Reset contador se passou mais de 5 minutos
+    if (now - this.lastReconnectTime > tenMinutes) {
+      // Reset contador se passou mais de 10 minutos
       this.totalReconnects = 0;
     }
 
@@ -478,10 +478,9 @@ export class TelegramProvider implements IMessagingProvider {
 
     if (this.totalReconnects > this.MAX_TOTAL_RECONNECTS) {
       this.logger.error(
-        `❌ Máximo de ${this.MAX_TOTAL_RECONNECTS} reconexões em 5 minutos atingido para ${this.sessionName} (${this.sessionId}). ` +
-          `Possível loop infinito detectado. Desativando sessão. Erro: ${errorType}`,
+        `❌ Máximo de ${this.MAX_TOTAL_RECONNECTS} reconexões em 10 minutos atingido para ${this.sessionName} (${this.sessionId}). ` +
+          `Possível loop infinito de deploy detectado. Erro: ${errorType}`,
       );
-
       await this.disconnect();
       this.callbacks.onError?.(new Error(`Reconnection loop detected: ${errorType}`));
       return;
@@ -517,11 +516,11 @@ export class TelegramProvider implements IMessagingProvider {
       // Aguardar antes de reconectar (aumentar progressivamente)
       let baseWaitTime = Math.min(this.reconnectAttempts * 5000, 15000); // 5s, 10s, max 15s
 
-      // Para erro 409, aguardar mais tempo para outras instâncias desconectarem
+      // Para erro 409, aguardar mais tempo para o container antigo morrer no deploy
       if (errorType.includes('409 Conflict')) {
-        baseWaitTime += 5000; // +5s extra para conflitos
+        baseWaitTime = Math.min(this.reconnectAttempts * 15000, 60000); // 15s, 30s, 45s, max 60s
         this.logger.log(
-          `⚠️  Erro 409 detectado. Aguardando ${baseWaitTime}ms para outras instâncias desconectarem...`,
+          `⚠️  Erro 409 (deploy overlap). Aguardando ${baseWaitTime}ms para container antigo encerrar...`,
         );
       }
 
