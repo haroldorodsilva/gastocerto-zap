@@ -1,52 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
-import { TextProcessingService } from '@infrastructure/rag/services/text-processing.service';
-import { UserSynonymService } from '@infrastructure/rag/services/user-synonym.service';
-import { PrismaService } from '@core/database/prisma.service';
-import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { buildRagTestProviders } from '../unit/rag/rag-test.helpers';
 
 describe('RAG Debug - Supermercado', () => {
   let service: RAGService;
-  let prisma: PrismaService;
 
   beforeAll(async () => {
-    const mockPrisma = {
-      rAGSearchLog: {
-        create: jest.fn().mockResolvedValue({}),
-      },
-    };
-
-    const mockCache = {
-      get: jest.fn().mockResolvedValue(null),
-      set: jest.fn().mockResolvedValue(undefined),
-    };
-
-    const mockConfig = {
-      get: jest.fn((key: string, defaultValue?: any) => {
-        if (key === 'RAG_CACHE_REDIS') return false;
-        return defaultValue;
-      }),
-    };
-
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        RAGService,
-        TextProcessingService,
-        { provide: PrismaService, useValue: mockPrisma },
-        { provide: ConfigService, useValue: mockConfig },
-        { provide: CACHE_MANAGER, useValue: mockCache },
-        {
-          provide: UserSynonymService,
-          useValue: {
-            getUserSynonyms: jest.fn().mockResolvedValue([]),
-          },
-        },
-      ],
+      providers: [RAGService, ...buildRagTestProviders()],
     }).compile();
 
     service = module.get<RAGService>(RAGService);
-    prisma = module.get<PrismaService>(PrismaService);
   });
 
   it('deve debugar tokenização de "Alimentação > Supermercado"', async () => {

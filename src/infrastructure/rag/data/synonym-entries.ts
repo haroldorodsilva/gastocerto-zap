@@ -108,8 +108,8 @@ export const SYNONYM_ENTRIES: [string, string[]][] = [
   ['consertar', ['conserto', 'manutencao', 'manutenção', 'tecnico', 'técnico']],
 
   // Transporte
-  ['gasolina', ['combustivel', 'posto', 'abastecimento', 'gas', 'alcool']],
-  ['combustivel', ['combustível', 'gasolina', 'posto', 'abastecimento', 'gas', 'alcool', 'diesel']],
+  ['gasolina', ['combustivel', 'posto', 'abastecimento', 'etanol', 'alcool', 'diesel']],
+  ['combustivel', ['combustível', 'gasolina', 'posto', 'abastecimento', 'etanol', 'alcool', 'diesel']],
   ['posto', ['combustivel', 'gasolina', 'abastecimento']],
   ['abasteci', ['combustivel', 'gasolina', 'posto', 'abastecimento', 'abastecer']],
   ['abastecer', ['combustivel', 'gasolina', 'posto', 'abastecimento', 'abasteci']],
@@ -267,7 +267,7 @@ export const SYNONYM_ENTRIES: [string, string[]][] = [
   ['netflix', ['streaming', 'assinatura', 'filme', 'serie', 'prime']],
   ['spotify', ['musica', 'streaming', 'assinatura']],
   ['academia', ['gym', 'ginastica', 'treino', 'musculacao', 'fitness']],
-  ['celular', ['telefone', 'recarga', 'conta', 'tim', 'claro', 'vivo']],
+  ['celular', ['telefone', 'tim', 'claro', 'vivo', 'smartphone', 'eletronico', 'acessorio']],
   ['lavanderia', ['lavar', 'roupa', 'lavagem', 'lavanderia']],
   ['ar-condicionado', ['refrigeracao', 'refrigeração', 'ar', 'clima']],
   ['assistencia', ['assistência', 'tecnico', 'técnico', 'tecnica', 'técnica', 'suporte']],

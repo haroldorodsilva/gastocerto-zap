@@ -1,15 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { IntentAnalyzerService, MessageIntent } from '@features/intent/intent-analyzer.service';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
-import { TextProcessingService } from '@infrastructure/rag/services/text-processing.service';
-import { UserSynonymService } from '@infrastructure/rag/services/user-synonym.service';
 import { CategoryResolutionService } from '@infrastructure/rag/services/category-resolution.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
 import { PrismaService } from '@core/database/prisma.service';
 import { DisambiguationService } from '@features/conversation/disambiguation.service';
 import { RedisService } from '@common/services/redis.service';
-import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { buildRagTestProviders } from './rag/rag-test.helpers';
 
 /**
  * Testes de Fluxo de Processamento de Mensagens
@@ -277,32 +274,18 @@ describe('Fluxo de Processamento de Mensagens - E2E', () => {
         IntentAnalyzerService,
         DisambiguationService,
         RAGService,
-        TextProcessingService,
         CategoryResolutionService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: RedisService, useValue: redisMock },
         { provide: AIUsageLoggerService, useValue: { logUsage: jest.fn() } },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn((key: string, defaultValue?: any) => {
-              const config = { RAG_CACHE_REDIS: false, RAG_MIN_SCORE_THRESHOLD: 0.3 };
-              return config[key] !== undefined ? config[key] : defaultValue;
-            }),
-          },
-        },
-        { provide: CACHE_MANAGER, useValue: cacheMock },
-        {
-          provide: UserSynonymService,
-          useValue: { getUserSynonyms: jest.fn().mockResolvedValue([]) },
-        },
+        ...buildRagTestProviders({ prisma: prismaMock, cacheManager: cacheMock }),
       ],
     }).compile();
 
     intentService = module.get<IntentAnalyzerService>(IntentAnalyzerService);
     ragService = module.get<RAGService>(RAGService);
 
-    // Indexa categorias default no RAG
+    // Indexa categorias default no RAG (sem accountId — cache escopo por userId)
     await ragService.indexUserCategories(
       mockUserId,
       defaultCategories.flatMap((cat) =>

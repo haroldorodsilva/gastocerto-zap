@@ -63,7 +63,7 @@ export class RAGService {
     if (userId) {
       await this.ragCache.clear(userId, accountId);
     } else {
-      this.logger.warn('⚠️ clearCache sem userId — use admin endpoint para limpar tudo');
+      this.ragCache.clearAll();
     }
   }
 

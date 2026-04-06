@@ -1,12 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
-import { TextProcessingService } from '@infrastructure/rag/services/text-processing.service';
-import { UserSynonymService } from '@infrastructure/rag/services/user-synonym.service';
 import { CategoryResolutionService } from '@infrastructure/rag/services/category-resolution.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
-import { PrismaService } from '@core/database/prisma.service';
-import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { buildRagTestProviders } from './rag/rag-test.helpers';
 
 /**
  * Testes Unitários - RAG Category Matching
@@ -25,7 +21,6 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 describe('RAG Category Matching - Natural Language Processing', () => {
   let ragService: RAGService;
   let categoryResolutionService: CategoryResolutionService;
-  let prisma: PrismaService;
 
   const mockUserId = 'test-user-id';
   const mockAccountId = 'test-account-id';
@@ -254,66 +249,19 @@ describe('RAG Category Matching - Natural Language Processing', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RAGService,
-        TextProcessingService,
         CategoryResolutionService,
         {
-          provide: PrismaService,
-          useValue: {
-            category: {
-              findMany: jest.fn().mockResolvedValue(mockCategories),
-            },
-            rAGSearchLog: {
-              create: jest.fn(),
-            },
-            aIUsageLog: {
-              create: jest.fn(),
-            },
-            userSynonym: {
-              findMany: jest.fn().mockResolvedValue([]),
-              updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-          },
-        },
-        {
           provide: AIUsageLoggerService,
-          useValue: {
-            logUsage: jest.fn(),
-          },
+          useValue: { logUsage: jest.fn() },
         },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn((key: string, defaultValue?: any) => {
-              const config = {
-                RAG_CACHE_REDIS: false,
-                RAG_MIN_SCORE_THRESHOLD: 0.3,
-              };
-              return config[key] !== undefined ? config[key] : defaultValue;
-            }),
-          },
-        },
-        {
-          provide: CACHE_MANAGER,
-          useValue: {
-            get: jest.fn(),
-            set: jest.fn(),
-            del: jest.fn(),
-          },
-        },
-        {
-          provide: UserSynonymService,
-          useValue: {
-            getUserSynonyms: jest.fn().mockResolvedValue([]),
-          },
-        },
+        ...buildRagTestProviders(),
       ],
     }).compile();
 
     ragService = module.get<RAGService>(RAGService);
     categoryResolutionService = module.get<CategoryResolutionService>(CategoryResolutionService);
-    prisma = module.get<PrismaService>(PrismaService);
 
-    // Indexa as categorias mockadas no cache
+    // Indexa as categorias mockadas no cache (sem accountId — escopo por userId)
     await ragService.indexUserCategories(mockUserId, mockCategories.flatMap((cat) =>
       cat.subCategory.map((sub) => ({
         id: cat.id,

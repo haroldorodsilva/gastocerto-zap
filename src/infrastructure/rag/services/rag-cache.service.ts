@@ -85,7 +85,7 @@ export class RagCacheService {
   }
 
   /**
-   * Remove entrada do cache.
+   * Remove entrada do cache de um usuário/conta específica.
    */
   async clear(userId: string, accountId?: string | null): Promise<void> {
     const key = this.buildKey(userId, accountId);
@@ -95,5 +95,18 @@ export class RagCacheService {
       this.memoryCache.delete(key);
     }
     this.logger.debug(`🗑️ Cache removido: ${key}`);
+  }
+
+  /**
+   * Limpa todo o cache em memória (fallback Map).
+   * No Redis, não há operação equivalente segura — use admin endpoint.
+   */
+  clearAll(): void {
+    if (!this.useRedisCache) {
+      this.memoryCache.clear();
+      this.logger.debug(`🗑️ Todo cache Map limpo`);
+    } else {
+      this.logger.warn('⚠️ clearAll() não suportado no Redis — use admin endpoint');
+    }
   }
 }

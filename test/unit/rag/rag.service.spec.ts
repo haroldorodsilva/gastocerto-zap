@@ -1,72 +1,21 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { RAGService } from '../../../src/infrastructure/rag/services/rag.service';
-import { PrismaService } from '../../../src/core/database/prisma.service';
-import { TextProcessingService } from '../../../src/infrastructure/rag/services/text-processing.service';
-import { UserSynonymService } from '../../../src/infrastructure/rag/services/user-synonym.service';
 import { CategoryMatch } from '../../../src/infrastructure/rag/services/rag.interface';
+import { buildRagTestProviders } from './rag-test.helpers';
 
 describe('RAGService', () => {
   let service: RAGService;
-  let mockPrisma: any;
-  let mockCacheManager: any;
 
   beforeEach(async () => {
-    // Mock do PrismaService
-    mockPrisma = {
-      rAGSearchLog: {
-        create: jest.fn().mockResolvedValue({}),
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-      userSynonym: {
-        findMany: jest.fn().mockResolvedValue([]),
-        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-      },
-    };
-
-    // Mock do CacheManager
-    mockCacheManager = {
-      get: jest.fn().mockResolvedValue(null),
-      set: jest.fn().mockResolvedValue(undefined),
-      del: jest.fn().mockResolvedValue(undefined),
-    };
-
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        RAGService,
-        TextProcessingService,
-        {
-          provide: PrismaService,
-          useValue: mockPrisma,
-        },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn((key: string, defaultValue: any) => {
-              if (key === 'RAG_CACHE_REDIS') return false; // Usar Map nos testes
-              return defaultValue;
-            }),
-          },
-        },
-        {
-          provide: CACHE_MANAGER,
-          useValue: mockCacheManager,
-        },
-        {
-          provide: UserSynonymService,
-          useValue: {
-            getUserSynonyms: jest.fn().mockResolvedValue([]),
-          },
-        },
-      ],
+      providers: [RAGService, ...buildRagTestProviders()],
     }).compile();
 
     service = module.get<RAGService>(RAGService);
   });
 
   afterEach(async () => {
-    await service.clearCache();
+    // Cache Map é recriado a cada beforeEach — limpeza opcional por userId de teste
   });
 
   describe('findSimilarCategories', () => {
