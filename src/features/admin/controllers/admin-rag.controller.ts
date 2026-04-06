@@ -991,20 +991,25 @@ export class AdminRagController {
 
     const userCache = await this.prisma.userCache.findUnique({
       where: { gastoCertoId: userId },
-      select: { gastoCertoId: true },
+      select: { gastoCertoId: true, activeAccountId: true },
     });
 
     if (!userCache) {
       throw new BadRequestException(`Usuário ${userId} não encontrado no cache`);
     }
 
-    // Buscar nomes de categoria via API
+    if (!userCache.activeAccountId) {
+      throw new BadRequestException(`Usuário ${userId} não possui conta ativa`);
+    }
+
+    const activeAccountId = userCache.activeAccountId;
+
+    // Buscar nomes de categoria via API, filtrado pela conta ativa do usuário
     let categoryName = categoryId;
     let subCategoryName = subCategoryId ?? '';
     try {
-      const categoriesResponse = await this.gastoCertoApiService.getUserCategories(userId);
-      const allCategories = categoriesResponse?.accounts?.flatMap((a) => a.categories ?? []) ?? [];
-      const foundCategory = allCategories.find((c) => c.id === categoryId);
+      const categories = await this.gastoCertoApiService.getAccountCategories(userId, activeAccountId);
+      const foundCategory = categories?.find((c) => c.id === categoryId);
       if (foundCategory) {
         categoryName = foundCategory.name;
         if (subCategoryId) {
@@ -1019,6 +1024,7 @@ export class AdminRagController {
     const synonym = await this.prisma.userSynonym.create({
       data: {
         userId: userCache.gastoCertoId,
+        accountId: activeAccountId,
         keyword: keyword.toLowerCase().trim(),
         categoryId,
         categoryName,
