@@ -177,10 +177,10 @@ export class UserAccountApiClient extends GastoCertoApiClientBase {
     } catch (error: any) {
       this.logger.error(`❌ Erro ao verificar status de assinatura: ${error.message}`);
 
-      // Graceful degradation: permitir uso em caso de erro
+      // Fail-closed: negar acesso em caso de erro para evitar bypass de assinatura
       return {
         isActive: false,
-        canUseGastoZap: true,
+        canUseGastoZap: false,
         message: 'Não foi possível verificar sua assinatura. Tente novamente mais tarde.',
       };
     }
