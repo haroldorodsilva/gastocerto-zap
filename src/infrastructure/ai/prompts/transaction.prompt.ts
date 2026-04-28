@@ -130,8 +130,8 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
     output: {
       type: 'EXPENSES',
       amount: 150.5,
-      category: 'Serviços',
-      subCategory: 'Energia',
+      category: 'Casa',
+      subCategory: 'Energia Elétrica',
       description: null,
       date: null,
       merchant: null,
@@ -143,12 +143,123 @@ export const TRANSACTION_FEW_SHOT_EXAMPLES = [
     output: {
       type: 'INCOME',
       amount: 1500.0,
-      category: 'Recebimentos',
-      subCategory: 'Salário',
+      category: 'Salário',
+      subCategory: null,
       description: null,
       date: null,
       merchant: null,
       confidence: 0.99,
+    },
+  },
+  // Delivery / apps
+  {
+    input: 'ifood 38,90',
+    output: {
+      type: 'EXPENSES',
+      amount: 38.9,
+      category: 'Alimentação',
+      subCategory: 'Delivery',
+      description: null,
+      date: null,
+      merchant: 'iFood',
+      confidence: 0.97,
+    },
+  },
+  {
+    input: 'uber 22 reais',
+    output: {
+      type: 'EXPENSES',
+      amount: 22.0,
+      category: 'Transporte',
+      subCategory: 'Uber/99',
+      description: null,
+      date: null,
+      merchant: 'Uber',
+      confidence: 0.97,
+    },
+  },
+  // Streaming / assinatura
+  {
+    input: 'netflix 55,90',
+    output: {
+      type: 'EXPENSES',
+      amount: 55.9,
+      category: 'Lazer',
+      subCategory: 'Streaming',
+      description: null,
+      date: null,
+      merchant: 'Netflix',
+      confidence: 0.99,
+    },
+  },
+  // Farmácia
+  {
+    input: 'comprei remédio na drogasil, 43 reais',
+    output: {
+      type: 'EXPENSES',
+      amount: 43.0,
+      category: 'Saúde',
+      subCategory: 'Farmácia',
+      description: 'Remédio',
+      date: null,
+      merchant: 'Drogasil',
+      confidence: 0.95,
+    },
+  },
+  // Posto / combustível
+  {
+    input: 'coloquei gasolina, gastei 120',
+    output: {
+      type: 'EXPENSES',
+      amount: 120.0,
+      category: 'Transporte',
+      subCategory: 'Combustível',
+      description: null,
+      date: null,
+      merchant: null,
+      confidence: 0.96,
+    },
+  },
+  // Pix recebido
+  {
+    input: 'recebi um pix de 200 reais',
+    output: {
+      type: 'INCOME',
+      amount: 200.0,
+      category: 'Receitas',
+      subCategory: 'Transferência',
+      description: null,
+      date: null,
+      merchant: null,
+      confidence: 0.92,
+    },
+  },
+  // Mensalidade / assinatura
+  {
+    input: 'paguei a mensalidade da academia, 99 reais',
+    output: {
+      type: 'EXPENSES',
+      amount: 99.0,
+      category: 'Saúde',
+      subCategory: 'Academia',
+      description: null,
+      date: null,
+      merchant: null,
+      confidence: 0.96,
+    },
+  },
+  // Data relativa
+  {
+    input: 'gastei 15 no lanche ontem',
+    output: {
+      type: 'EXPENSES',
+      amount: 15.0,
+      category: 'Alimentação',
+      subCategory: 'Lanche',
+      description: null,
+      date: null, // data calculada pelo sistema com base em "ontem"
+      merchant: null,
+      confidence: 0.93,
     },
   },
 ];

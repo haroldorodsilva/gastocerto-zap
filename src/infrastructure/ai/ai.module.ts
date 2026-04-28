@@ -9,6 +9,8 @@ import { AICacheService } from '../../common/services/ai-cache.service';
 import { AIUsageLoggerService } from './ai-usage-logger.service';
 import { AIConfigService } from './ai-config.service';
 import { AINormalizationService } from './ai-normalization.service';
+import { AICredentialSelectorService } from './credentials/ai-credential-selector.service';
+import { AICredentialResetCron } from './credentials/ai-credential-reset.cron';
 @Module({
   providers: [
     AIProviderFactory,
@@ -21,6 +23,8 @@ import { AINormalizationService } from './ai-normalization.service';
     AIUsageLoggerService,
     AIConfigService,
     AINormalizationService,
+    AICredentialSelectorService,
+    AICredentialResetCron,
   ],
   exports: [
     AIProviderFactory,
@@ -28,6 +32,7 @@ import { AINormalizationService } from './ai-normalization.service';
     AICacheService,
     AIUsageLoggerService,
     AIConfigService,
+    AICredentialSelectorService,
   ],
 })
 export class AiModule {}

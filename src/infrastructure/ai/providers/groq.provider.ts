@@ -11,6 +11,7 @@ import {
   UserContext,
   AIProviderType,
 } from '../ai.interface';
+import { aiCredentialContext } from '../credentials/ai-credential.context';
 import { getTransactionSystemPrompt, TRANSACTION_USER_PROMPT_TEMPLATE } from '../prompts';
 
 /**
@@ -34,63 +35,46 @@ import { getTransactionSystemPrompt, TRANSACTION_USER_PROMPT_TEMPLATE } from '..
 @Injectable()
 export class GroqProvider implements IAIProvider {
   private readonly logger = new Logger(GroqProvider.name);
-  private apiKey: string;
-  private model: string;
+  private model: string = 'llama-3.1-70b-versatile';
   private readonly baseUrl = 'https://api.groq.com/openai/v1';
-  private initialized = false;
+  private modelsLoaded = false;
 
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
     private prismaService: PrismaService,
-  ) {
-    // Inicialização assíncrona será feita no primeiro uso
-  }
+  ) {}
 
   /**
-   * Inicializa provider com configurações do banco ou ENV
+   * 🆕 [AI3] Carrega APENAS modelo do banco. ApiKey vem do contexto.
    */
-  private async initialize(): Promise<void> {
-    if (this.initialized) return;
-
+  private async loadModels(): Promise<void> {
+    if (this.modelsLoaded) return;
     try {
-      // Buscar configuração do banco via PrismaService injetado
-      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
+      const cfg = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'groq' },
       });
-
-      if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco (descriptografar se necessário)
-        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
-        this.model = providerConfig.textModel || 'llama-3.1-70b-versatile';
-        this.logger.log(`✅ Groq Provider inicializado via BANCO - Modelo: ${this.model}`);
-        this.logger.log(`🎤 Whisper GRÁTIS disponível!`);
-      } else {
-        // Fallback para ENV (apenas dev)
-        this.apiKey = this.configService.get<string>('ai.groq.apiKey', '');
-        this.model = this.configService.get<string>('ai.groq.model', 'llama-3.1-70b-versatile');
-
-        if (this.apiKey) {
-          this.logger.warn('⚠️  Groq usando ENV (configure no banco para produção)');
-          this.logger.log(`🎤 Whisper GRÁTIS disponível!`);
-        } else {
-          this.logger.warn('⚠️  Groq API Key não configurada - Provider desabilitado');
-        }
-      }
-
-      this.initialized = true;
-    } catch (error) {
-      this.logger.error('Erro ao inicializar Groq:', error.message);
-      this.initialized = true;
+      if (cfg?.textModel) this.model = cfg.textModel;
+    } catch (err) {
+      this.logger.warn(`Groq: falha ao carregar modelo: ${(err as Error).message}`);
     }
+    this.modelsLoaded = true;
+  }
+
+  private getActiveApiKey(): string {
+    const cred = aiCredentialContext.getStore();
+    if (!cred) {
+      throw new Error('GroqProvider chamado sem credencial no contexto.');
+    }
+    return cred.apiKey;
   }
 
   /**
    * Verifica se o provider está disponível
    */
   private async isAvailable(): Promise<boolean> {
-    await this.initialize();
-    return !!this.apiKey;
+    await this.loadModels();
+    return !!aiCredentialContext.getStore();
   }
 
   /**
@@ -111,7 +95,7 @@ export class GroqProvider implements IAIProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.getActiveApiKey()}`,
         },
         body: JSON.stringify({
           model: this.model,
@@ -182,7 +166,7 @@ export class GroqProvider implements IAIProvider {
       const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.getActiveApiKey()}`,
         },
         body: formData,
       });
@@ -223,7 +207,7 @@ export class GroqProvider implements IAIProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.getActiveApiKey()}`,
         },
         body: JSON.stringify({
           model: this.model,

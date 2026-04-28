@@ -93,12 +93,21 @@ export class WhatsAppMessageHandler {
       this.logger.log(`✅ [WhatsApp] Processing message from ${phoneNumber}`);
       this.logger.log(`✅ [WhatsApp] message: ${JSON.stringify(filteredMessage)}`);
 
-      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
-      const rateLimitCheck = await this.userRateLimiter.checkLimit(phoneNumber);
+      // 🆕 [QW1] Resolver usuário via método unificado (single source of truth)
+      const user = await this.userCacheService.resolveUserByPlatform(
+        MessagingPlatform.WHATSAPP,
+        phoneNumber,
+      );
+      const userId = user?.gastoCertoId;
+
+      // 🆕 [QW2] Rate limit cross-platform por gastoCertoId quando disponível
+      // Evita bypass por troca de canal; fallback para chave canal-específica
+      const rateLimitKey = userId ?? `whatsapp:${phoneNumber}`;
+      const rateLimitCheck = await this.userRateLimiter.checkLimit(rateLimitKey);
 
       if (!rateLimitCheck.allowed) {
         this.logger.warn(
-          `🚫 [WhatsApp] Rate limit exceeded for ${phoneNumber}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
+          `🚫 [WhatsApp] Rate limit exceeded for ${rateLimitKey}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
         );
 
         // Enviar mensagem de rate limit ao usuário
@@ -112,11 +121,7 @@ export class WhatsAppMessageHandler {
       }
 
       // ✅ Registrar uso da mensagem
-      await this.userRateLimiter.recordUsage(phoneNumber);
-
-      // Buscar usuário para obter userId (não bloqueante)
-      const user = await this.userCacheService.getUser(phoneNumber);
-      const userId = user?.gastoCertoId;
+      await this.userRateLimiter.recordUsage(rateLimitKey);
 
       // ✨ Registrar contexto de WhatsApp para roteamento de respostas
       await this.contextService.registerContext(
@@ -164,23 +169,13 @@ export class WhatsAppMessageHandler {
       // ✨ NOVO: Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(phoneNumber, 'whatsapp');
 
-      // 🔄 SINCRONIZAÇÃO: Forçar sync se timer expirou OU se assinatura/canUseGastoZap está inativa
-      // (mesmo comportamento do WebChat — atualiza cache desatualizado imediatamente)
-      const needsSubscriptionSync =
-        validation.user &&
-        (
-          this.userCacheService.needsSync(validation.user) ||
-          !validation.user.canUseGastoZap ||
-          !validation.user.hasActiveSubscription
-        );
+      // 🔄 [M1] SINCRONIZAÇÃO: usar predicado unificado (cache antigo OU flags inativas)
+      const syncDecision = validation.user
+        ? this.userCacheService.shouldRefreshSubscription(validation.user)
+        : { refresh: false };
 
-      if (needsSubscriptionSync && validation.user) {
-        const syncReason = !validation.user.canUseGastoZap
-          ? 'canUseGastoZap=false'
-          : !validation.user.hasActiveSubscription
-          ? 'hasActiveSubscription=false'
-          : 'timer expirado';
-        this.logger.log(`⏰ [WhatsApp] Sincronizando assinatura para ${phoneNumber} (motivo: ${syncReason})`);
+      if (syncDecision.refresh && validation.user) {
+        this.logger.log(`⏰ [WhatsApp] Sincronizando assinatura para ${phoneNumber} (motivo: ${syncDecision.reason})`);
         await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
 
         // Revalidar usuário com dados atualizados

@@ -231,7 +231,7 @@ model RAGSearchLog {
 model UserSynonym {
   id              String        @id @default(uuid())
   userId          String?
-  accountId       String?       // n:m: sinônimos são isolados por conta
+  accountId       String? // n:m: sinônimos são isolados por conta
   keyword         String
   categoryId      String?
   categoryName    String
@@ -309,6 +309,30 @@ model AIProviderConfig {
   @@index([enabled])
   @@index([priority])
   @@map("ai_provider_configs")
+}
+
+/// 🆕 [AI1] Credenciais (chaves) por provider — múltiplas por provider para round-robin.
+/// Quando uma chave estoura quota, é marcada `isExhausted=true` e o cron diário reseta.
+model AIProviderCredential {
+  id              String    @id @default(uuid())
+  provider        String // ex: "openai", "google_gemini", "groq", "deepseek"
+  label           String // identificador legível, ex: "primary", "personal", "team-2"
+  apiKey          String // criptografada (CryptoService)
+  priority        Int       @default(100) // menor = usado primeiro
+  isActive        Boolean   @default(true)
+  isExhausted     Boolean   @default(false)
+  exhaustedAt     DateTime?
+  exhaustedReason String?   @db.VarChar(255)
+  lastUsedAt      DateTime?
+  totalRequests   Int       @default(0)
+  totalErrors     Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([provider, label])
+  @@index([provider, isActive, isExhausted, priority])
+  @@index([lastUsedAt])
+  @@map("ai_provider_credentials")
 }
 
 model AISettings {

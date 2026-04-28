@@ -10,9 +10,7 @@ import { UserCacheService } from '../../../users/user-cache.service';
 import { AccountManagementService } from '../../../accounts/account-management.service';
 import { TransactionData, TransactionType } from '@infrastructure/ai/ai.interface';
 import { UserCache } from '@prisma/client';
-import {
-  CreateTransactionConfirmationDto,
-} from '../../dto/transaction.dto';
+import { CreateTransactionConfirmationDto } from '../../dto/transaction.dto';
 import { DateUtil } from '../../../../utils/date.util';
 import { TemporalParserService } from '@features/transactions/services/parsers/temporal-parser.service';
 import { MessageLearningService } from '../../message-learning.service';
@@ -30,6 +28,7 @@ import {
   PDF_EXTRACTION_SYSTEM_PROMPT,
   PDF_EXTRACTION_USER_PROMPT,
 } from './prompts/pdf-analysis.prompt';
+import { findMerchant } from '@common/constants/merchants';
 import { InstallmentParserService } from '@features/transactions/services/parsers/installment-parser.service';
 import { FixedTransactionParserService } from '@features/transactions/services/parsers/fixed-transaction-parser.service';
 import { CreditCardParserService } from '@features/transactions/services/parsers/credit-card-parser.service';
@@ -244,7 +243,11 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       // Indexar categorias no RAG
       if (ragEnabled && categoriesData.categories.length > 0) {
-        await this.indexCategoriesInRAG(user.gastoCertoId, categoriesData.categories, activeAccountId);
+        await this.indexCategoriesInRAG(
+          user.gastoCertoId,
+          categoriesData.categories,
+          activeAccountId,
+        );
       }
 
       // 2. FASE 1: Tentar RAG match direto (rápido, sem custo)
@@ -259,14 +262,47 @@ export class TransactionRegistrationService implements OnModuleInit {
       // Detectar tipo de transação UMA VEZ e reutilizar em todas as fases RAG
       const detectedType = ragEnabled ? await this.detectTransactionType(text) : null;
 
-      if (ragEnabled) {
-        extractedData = await this.matchWithRAG(text, user.gastoCertoId, activeAccountId, aiSettings, detectedType);
+      // 🆕 [QW3] FASE 0: Tentar match por merchant conhecido (zero custo, zero IA)
+      // Catálogo de ~100 merchants brasileiros (iFood, Uber, Netflix, supermercados, etc.)
+      const merchantMatch = findMerchant(text);
+      if (merchantMatch) {
+        this.logger.log(
+          `🏪 [Merchant] Match: "${merchantMatch.matchedKeyword}" → ${merchantMatch.entry.category}` +
+            `${merchantMatch.entry.subCategory ? ` > ${merchantMatch.entry.subCategory}` : ''} (score: ${merchantMatch.score.toFixed(2)})`,
+        );
+        const merchantData: any = this.extractBasicData(text);
+        merchantData.category = merchantMatch.entry.category;
+        merchantData.subCategory = merchantMatch.entry.subCategory || null;
+        // Só substituir o tipo detectado se o merchant tiver tipo explícito
+        merchantData.type = merchantMatch.entry.type;
+        merchantData.confidence = Math.max(merchantData.confidence ?? 0, merchantMatch.score);
+        merchantData.source = 'MERCHANT_DB';
+        // Só aceitar direto se temos valor extraído com sucesso
+        if (merchantData.amount && merchantData.amount > 0) {
+          extractedData = merchantData;
+        }
+      }
+
+      if (ragEnabled && !extractedData) {
+        extractedData = await this.matchWithRAG(
+          text,
+          user.gastoCertoId,
+          activeAccountId,
+          aiSettings,
+          detectedType,
+        );
       }
 
       // 3. FASE 2+3: Se RAG não funcionou, usar IA + revalidação
       if (!extractedData) {
         const aiResult = await this.extractWithAIAndRevalidate(
-          text, userContext, user.gastoCertoId, aiSettings, ragEnabled, detectedType, activeAccountId,
+          text,
+          userContext,
+          user.gastoCertoId,
+          aiSettings,
+          ragEnabled,
+          detectedType,
+          activeAccountId,
         );
         extractedData = aiResult.extractedData;
         responseTime = aiResult.responseTime;
@@ -283,7 +319,12 @@ export class TransactionRegistrationService implements OnModuleInit {
       );
 
       // 4. Enriquecer com detecções avançadas (parcelamento, fixa, cartão, fatura, status)
-      const detectorEarlyExit = await this.enrichWithDetectors(text, extractedData, user, activeAccountId);
+      const detectorEarlyExit = await this.enrichWithDetectors(
+        text,
+        extractedData,
+        user,
+        activeAccountId,
+      );
       if (detectorEarlyExit) return detectorEarlyExit;
 
       // Registrar uso de IA apenas se foi usada
@@ -454,6 +495,14 @@ export class TransactionRegistrationService implements OnModuleInit {
           `Confiança: ${(extractedData.confidence * 100).toFixed(1)}%`,
       );
 
+      // 🆕 [QW3+QW5+QW6] Refinar categorização da imagem usando merchant DB + RAG
+      await this.refineCategoryWithMerchantOrRAG(
+        extractedData,
+        user.gastoCertoId,
+        activeAccountId,
+        'Image',
+      );
+
       // Registrar uso de IA
       await this.logAIUsage({
         phoneNumber,
@@ -618,9 +667,7 @@ export class TransactionRegistrationService implements OnModuleInit {
         };
       }
 
-      const isPdf =
-        mimeType === 'application/pdf' ||
-        fileName?.toLowerCase().endsWith('.pdf');
+      const isPdf = mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf');
 
       if (!isPdf) {
         this.logger.warn(`⚠️ Tipo de documento não suportado: ${mimeType}`);
@@ -734,6 +781,14 @@ export class TransactionRegistrationService implements OnModuleInit {
         const extractedData = transactions[0] as any;
         extractedData.confidence = extractedData.confidence ?? 0.8;
 
+        // 🆕 [M3] Refinar categorização do PDF com merchant DB + RAG (mesmo padrão de imagem)
+        await this.refineCategoryWithMerchantOrRAG(
+          extractedData,
+          user.gastoCertoId,
+          accountId,
+          'PDF',
+        );
+
         this.logger.log(
           `✅ Transação extraída do PDF | Tipo: ${extractedData.type} | Valor: R$ ${extractedData.amount} | Confiança: ${(extractedData.confidence * 100).toFixed(1)}%`,
         );
@@ -769,6 +824,10 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       // Criar confirmação para primeira transação
       firstTx.confidence = firstTx.confidence ?? 0.75;
+
+      // 🆕 [M3] Refinar categorização com merchant DB + RAG
+      await this.refineCategoryWithMerchantOrRAG(firstTx, user.gastoCertoId, accountId, 'PDF');
+
       const firstResult = await this.createConfirmation(
         phoneNumber,
         firstTx,
@@ -857,7 +916,10 @@ export class TransactionRegistrationService implements OnModuleInit {
         // Marcar erro no registro
         await this.prisma.transactionConfirmation.update({
           where: { id: confirmed.id },
-          data: { apiError: result.error || 'Erro ao enviar para API', apiRetryCount: { increment: 1 } },
+          data: {
+            apiError: result.error || 'Erro ao enviar para API',
+            apiRetryCount: { increment: 1 },
+          },
         });
         const errorMsg = result.error || 'Erro ao registrar na API';
         throw new Error(errorMsg);
@@ -911,9 +973,7 @@ export class TransactionRegistrationService implements OnModuleInit {
 
       // Usar accountId passado (OBRIGATÓRIO - não busca do cache)
       if (!accountId) {
-        this.logger.error(
-          `❌ AccountId não fornecido em createConfirmation para ${phoneNumber}`,
-        );
+        this.logger.error(`❌ AccountId não fornecido em createConfirmation para ${phoneNumber}`);
         throw new Error('AccountId é obrigatório para criar confirmação');
       }
 
@@ -1008,7 +1068,10 @@ export class TransactionRegistrationService implements OnModuleInit {
               });
 
               // 👤 Buscar nome da conta ativa
-              const accountName = this.messageFormatter.findAccountName(user.accounts, finalAccountId);
+              const accountName = this.messageFormatter.findAccountName(
+                user.accounts,
+                finalAccountId,
+              );
 
               const successMessage = this.messageFormatter.formatSuccessMessage({
                 type: data.type,
@@ -1031,14 +1094,20 @@ export class TransactionRegistrationService implements OnModuleInit {
             // Se falhar na API, marcar erro mas manter registro
             await this.prisma.transactionConfirmation.update({
               where: { id: confirmed.id },
-              data: { apiError: result.error || 'Erro ao enviar para API', apiRetryCount: { increment: 1 } },
+              data: {
+                apiError: result.error || 'Erro ao enviar para API',
+                apiRetryCount: { increment: 1 },
+              },
             });
             this.logger.warn(
               `⚠️ Auto-register falhou na API, registro ${confirmed.id} mantido para retry: ${result.error}`,
             );
 
             // 👤 Buscar nome da conta ativa
-            const accountNameRetry = this.messageFormatter.findAccountName(user.accounts, finalAccountId);
+            const accountNameRetry = this.messageFormatter.findAccountName(
+              user.accounts,
+              finalAccountId,
+            );
 
             const retryMessage = this.messageFormatter.formatSuccessMessage({
               type: data.type,
@@ -1053,7 +1122,9 @@ export class TransactionRegistrationService implements OnModuleInit {
 
             return {
               success: true,
-              message: retryMessage + '\n\n⚠️ A transação foi registrada localmente e será sincronizada em breve.',
+              message:
+                retryMessage +
+                '\n\n⚠️ A transação foi registrada localmente e será sincronizada em breve.',
               requiresConfirmation: false,
               confirmationId: confirmed.id,
             };
@@ -1117,7 +1188,8 @@ export class TransactionRegistrationService implements OnModuleInit {
       // 🛡️ Nunca deixar o usuário sem resposta
       return {
         success: false,
-        message: 'Desculpe, ocorreu um erro ao processar sua transação. Tente novamente em instantes.',
+        message:
+          'Desculpe, ocorreu um erro ao processar sua transação. Tente novamente em instantes.',
         requiresConfirmation: false,
         confirmationId: '',
       };
@@ -1164,7 +1236,11 @@ export class TransactionRegistrationService implements OnModuleInit {
    * Indexa categorias do usuário no RAG para matching semântico.
    * Expande categorias com subcategorias em entradas individuais.
    */
-  private async indexCategoriesInRAG(userId: string, categories: any[], accountId?: string | null): Promise<void> {
+  private async indexCategoriesInRAG(
+    userId: string,
+    categories: any[],
+    accountId?: string | null,
+  ): Promise<void> {
     try {
       // Expandir cada categoria com suas subcategorias (criar entrada para cada uma)
       const { expandCategoriesForRAG } = await import('../../../users/user-cache.service');
@@ -1212,6 +1288,67 @@ export class TransactionRegistrationService implements OnModuleInit {
   }
 
   /**
+   * 🆕 [QW3+QW5+QW6+M3] Refina categoria/subcategoria de uma transação extraída por IA
+   * (imagem ou PDF) usando merchant DB primeiro e RAG como fallback.
+   *
+   * Mutation in-place no `data`. Não bloqueante — qualquer erro é apenas logado.
+   *
+   * @param data Transação a refinar (mutável). Espera ao menos `description` ou `category`.
+   * @param userId gastoCertoId do usuário
+   * @param accountId conta ativa (para escopo do RAG)
+   * @param sourceLabel rótulo para logs (ex: 'Image', 'PDF')
+   */
+  private async refineCategoryWithMerchantOrRAG(
+    data: any,
+    userId: string,
+    accountId: string | null | undefined,
+    sourceLabel: string,
+  ): Promise<void> {
+    const lowConfidence = (data.confidence ?? 0) < 0.7;
+    const description = (data.description || data.category || '').trim();
+    if (!description) return;
+
+    // 1. Merchant DB (zero custo)
+    const merchantHit = findMerchant(description);
+    if (merchantHit && (lowConfidence || merchantHit.score > 0.7)) {
+      this.logger.log(
+        `🏪 [${sourceLabel}+Merchant] "${merchantHit.matchedKeyword}" → ${merchantHit.entry.category}` +
+          `${merchantHit.entry.subCategory ? ` > ${merchantHit.entry.subCategory}` : ''}`,
+      );
+      data.category = merchantHit.entry.category;
+      data.subCategory = merchantHit.entry.subCategory || data.subCategory;
+      data.confidence = Math.max(data.confidence ?? 0, merchantHit.score);
+      return;
+    }
+
+    // 2. Fallback para RAG quando confiança baixa
+    if (!lowConfidence || !this.ragService) return;
+    try {
+      const aiSettings = await this.aiConfigService.getSettings();
+      if (!aiSettings.ragEnabled) return;
+
+      const ragMatches = await this.ragService.findSimilarCategories(description, userId, {
+        accountId,
+        minScore: 0.5,
+        maxResults: 1,
+        transactionType: data.type as any,
+      });
+      if (ragMatches[0] && ragMatches[0].score >= 0.6) {
+        this.logger.log(
+          `🔍 [${sourceLabel}+RAG] Match: ${ragMatches[0].categoryName}` +
+            `${ragMatches[0].subCategoryName ? ` > ${ragMatches[0].subCategoryName}` : ''} ` +
+            `(score: ${(ragMatches[0].score * 100).toFixed(1)}%)`,
+        );
+        data.category = ragMatches[0].categoryName;
+        data.subCategory = ragMatches[0].subCategoryName || data.subCategory;
+        data.confidence = Math.max(data.confidence ?? 0, ragMatches[0].score);
+      }
+    } catch (ragErr) {
+      this.logger.warn(`[${sourceLabel}+RAG] não bloqueante:`, ragErr);
+    }
+  }
+
+  /**
    * FASE 1: Tentativa de match direto via RAG (BM25 ou embeddings).
    * Retorna dados da transação se encontrou match com score >= threshold, null caso contrário.
    */
@@ -1234,9 +1371,7 @@ export class TransactionRegistrationService implements OnModuleInit {
         this.logger.log(`🤖 Usando busca vetorial com IA (${aiSettings.ragAiProvider})...`);
 
         // Obter AI provider configurado para RAG
-        const ragProvider = await this.aiFactory.getProvider(
-          aiSettings.ragAiProvider || 'openai',
-        );
+        const ragProvider = await this.aiFactory.getProvider(aiSettings.ragAiProvider || 'openai');
 
         ragMatches = await this.ragService.findSimilarCategoriesWithEmbeddings(
           text,
@@ -1323,16 +1458,12 @@ export class TransactionRegistrationService implements OnModuleInit {
         const ragThreshold = aiSettings.ragThreshold || 0.6;
         this.logger.log(`🔍 FASE 3: Revalidando categoria da IA com RAG...`);
 
-        const ragMatches = await this.ragService.findSimilarCategories(
-          text,
-          userId,
-          {
-            minScore: 0.5,
-            maxResults: 1,
-            transactionType: detectedType,
-            accountId,
-          },
-        );
+        const ragMatches = await this.ragService.findSimilarCategories(text, userId, {
+          minScore: 0.5,
+          maxResults: 1,
+          transactionType: detectedType,
+          accountId,
+        });
 
         if (ragMatches.length > 0 && ragMatches[0].score >= ragThreshold) {
           const bestMatch = ragMatches[0];
@@ -1502,7 +1633,11 @@ export class TransactionRegistrationService implements OnModuleInit {
     phoneNumber: string;
     gastoCertoId: string;
     platform: string;
-    operation: 'TRANSACTION_EXTRACTION' | 'IMAGE_ANALYSIS' | 'AUDIO_TRANSCRIPTION' | 'DOCUMENT_EXTRACTION';
+    operation:
+      | 'TRANSACTION_EXTRACTION'
+      | 'IMAGE_ANALYSIS'
+      | 'AUDIO_TRANSCRIPTION'
+      | 'DOCUMENT_EXTRACTION';
     inputType: 'TEXT' | 'IMAGE' | 'AUDIO';
     inputText: string;
     responseTimeMs?: number;
@@ -1748,7 +1883,9 @@ export class TransactionRegistrationService implements OnModuleInit {
           const nameResult = await this.gastoCertoApi.listCreditCards(accountId);
           const found = nameResult.data?.find((c: any) => c.id === user.defaultCreditCardId);
           cardName = found?.name;
-        } catch { /* nome é opcional */ }
+        } catch {
+          /* nome é opcional */
+        }
         return {
           success: true,
           message: '',

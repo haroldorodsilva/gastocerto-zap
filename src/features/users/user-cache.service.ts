@@ -7,6 +7,7 @@ import { GastoCertoApiService } from '@shared/gasto-certo-api.service';
 import { RAGService } from '@infrastructure/rag/services/rag.service';
 import { AIConfigService } from '../../infrastructure/ai/ai-config.service';
 import { RedisService } from '@common/services/redis.service';
+import { MessagingPlatform } from '@infrastructure/messaging/messaging-provider.interface';
 
 /**
  * Expande categorias com subcategorias para indexação no RAG
@@ -110,6 +111,40 @@ export class UserCacheService {
     } catch (error) {
       this.logger.error(`Erro ao buscar usuário por gastoCertoId ${gastoCertoId}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * 🆕 Resolve usuário a partir do canal de origem (lookup unificado).
+   * Substitui os 3 métodos canal-específicos quando você sabe a plataforma:
+   *   - WHATSAPP  → getUser(phoneNumber)
+   *   - TELEGRAM  → getUserByTelegram(telegramId)
+   *   - WEBCHAT   → getUserByGastoCertoId(userId)
+   *
+   * Use este método em handlers de mensagem para garantir comportamento
+   * consistente entre canais (single source of truth).
+   */
+  async resolveUserByPlatform(
+    platform: MessagingPlatform | string,
+    platformId: string,
+  ): Promise<UserCache | null> {
+    const normalized = typeof platform === 'string' ? platform.toLowerCase() : platform;
+
+    switch (normalized) {
+      case MessagingPlatform.WHATSAPP:
+      case 'whatsapp':
+        return this.getUser(platformId);
+      case MessagingPlatform.TELEGRAM:
+      case 'telegram':
+        return this.getUserByTelegram(platformId);
+      case MessagingPlatform.WEBCHAT:
+      case 'webchat':
+        return this.getUserByGastoCertoId(platformId);
+      default:
+        this.logger.warn(
+          `resolveUserByPlatform: plataforma desconhecida "${platform}" — caindo no lookup por gastoCertoId`,
+        );
+        return this.getUserByGastoCertoId(platformId);
     }
   }
 
@@ -543,6 +578,34 @@ export class UserCacheService {
         ? user.updatedAt.getTime()
         : new Date(user.updatedAt).getTime();
     return updatedAtTime < twelveHoursAgo;
+  }
+
+  /**
+   * 🆕 [M1] Predicado unificado: deve forçar sync de assinatura agora?
+   *
+   * Retorna true quando:
+   *   - Cache antigo (>12h via needsSync), OU
+   *   - canUseGastoZap=false (plano não permite GastoZap), OU
+   *   - hasActiveSubscription=false (assinatura inativa)
+   *
+   * O motivo é retornado para logging consistente entre canais.
+   * Substitui a duplicação que existia em whatsapp/telegram handlers.
+   */
+  shouldRefreshSubscription(user: {
+    updatedAt?: Date | string;
+    canUseGastoZap?: boolean;
+    hasActiveSubscription?: boolean;
+  }): { refresh: boolean; reason?: string } {
+    if (!user.canUseGastoZap) {
+      return { refresh: true, reason: 'canUseGastoZap=false' };
+    }
+    if (!user.hasActiveSubscription) {
+      return { refresh: true, reason: 'hasActiveSubscription=false' };
+    }
+    if (this.needsSync(user)) {
+      return { refresh: true, reason: 'cache expirado (>12h)' };
+    }
+    return { refresh: false };
   }
 
   /**

@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { CryptoService } from '../../../common/services/crypto.service';
 import { PrismaService } from '../../../core/database/prisma.service';
 import { IAIProvider, TransactionData, UserContext } from '../ai.interface';
+import { aiCredentialContext } from '../credentials/ai-credential.context';
 import {
   getTransactionSystemPrompt,
   TRANSACTION_USER_PROMPT_TEMPLATE,
@@ -16,72 +17,66 @@ import {
 @Injectable()
 export class OpenAIProvider implements IAIProvider {
   private readonly logger = new Logger(OpenAIProvider.name);
-  private client: OpenAI;
-  private model: string;
-  private visionModel: string;
-  private whisperModel: string;
-  private apiKey: string;
-  private initialized = false;
+  private model: string = 'gpt-4o-mini';
+  private visionModel: string = 'gpt-4o';
+  private whisperModel: string = 'whisper-1';
+  private modelsLoaded = false;
+  /** Cache de clientes por apiKey (uma instancia por credencial) */
+  private clientCache = new Map<string, OpenAI>();
 
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
     private prismaService: PrismaService,
-  ) {
-    // Inicialização assíncrona será feita no primeiro uso
-    this.client = new OpenAI({ apiKey: 'sk-dummy-key-not-configured' });
+  ) {}
+
+  /**
+   * 🆕 [AI3] Carrega APENAS metadados (nomes de modelos) do banco.
+   * A apiKey vem da credencial ativa no contexto async (AICredentialContext).
+   */
+  private async loadModels(): Promise<void> {
+    if (this.modelsLoaded) return;
+    try {
+      const cfg = await this.prismaService.aIProviderConfig.findUnique({
+        where: { provider: 'openai' },
+      });
+      if (cfg) {
+        this.model = cfg.textModel || this.model;
+        this.visionModel = cfg.visionModel || this.visionModel;
+        this.whisperModel = cfg.audioModel || this.whisperModel;
+      }
+    } catch (err) {
+      this.logger.warn(`OpenAI: falha ao carregar modelos do banco: ${(err as Error).message}`);
+    }
+    this.modelsLoaded = true;
   }
 
   /**
-   * Inicializa provider com configurações do banco ou ENV
+   * 🆕 [AI3] Retorna o client OpenAI da credencial atual no contexto.
+   * Lança se chamado fora de `aiCredentialContext.run(...)`.
    */
-  private async initialize(): Promise<void> {
-    if (this.initialized) return;
-
-    try {
-      // Buscar configuração do banco via PrismaService injetado
-      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
-        where: { provider: 'openai' },
-      });
-
-      if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco (descriptografar se necessário)
-        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
-        this.model = providerConfig.textModel || 'gpt-4o-mini';
-        this.visionModel = providerConfig.visionModel || 'gpt-4o';
-        this.whisperModel = providerConfig.audioModel || 'whisper-1';
-        this.logger.log(`✅ OpenAI Provider inicializado via BANCO - Modelo: ${this.model}`);
-      } else {
-        // Fallback para ENV (apenas dev)
-        this.apiKey = this.configService.get<string>('ai.openai.apiKey', '');
-        this.model = this.configService.get<string>('ai.openai.model', 'gpt-4o-mini');
-        this.visionModel = this.configService.get<string>('ai.openai.visionModel', 'gpt-4o');
-        this.whisperModel = this.configService.get<string>('ai.openai.whisperModel', 'whisper-1');
-
-        if (this.apiKey) {
-          this.logger.warn('⚠️  OpenAI usando ENV (configure no banco para produção)');
-        } else {
-          this.logger.warn('⚠️  OpenAI API Key não configurada - Provider desabilitado');
-        }
-      }
-
-      if (this.apiKey) {
-        this.client = new OpenAI({ apiKey: this.apiKey });
-      }
-
-      this.initialized = true;
-    } catch (error) {
-      this.logger.error('Erro ao inicializar OpenAI:', error.message);
-      this.initialized = true; // Marcar como iniciado mesmo com erro
+  private getActiveClient(): OpenAI {
+    const cred = aiCredentialContext.getStore();
+    if (!cred) {
+      throw new Error(
+        'OpenAIProvider chamado sem credencial no contexto. Use AIProviderFactory.',
+      );
     }
+    let client = this.clientCache.get(cred.apiKey);
+    if (!client) {
+      client = new OpenAI({ apiKey: cred.apiKey });
+      this.clientCache.set(cred.apiKey, client);
+    }
+    return client;
   }
 
   /**
    * Verifica se o provider está disponível
+   * (com novo design, disponível = há credencial ativa no contexto)
    */
   private async isAvailable(): Promise<boolean> {
-    await this.initialize();
-    return !!this.apiKey;
+    await this.loadModels();
+    return !!aiCredentialContext.getStore();
   }
 
   /**
@@ -107,7 +102,7 @@ export class OpenAIProvider implements IAIProvider {
         );
       }
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.getActiveClient().chat.completions.create({
         model: this.model,
         messages: [
           { role: 'system', content: getTransactionSystemPrompt() },
@@ -148,7 +143,7 @@ export class OpenAIProvider implements IAIProvider {
 
       const base64Image = imageBuffer.toString('base64');
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.getActiveClient().chat.completions.create({
         model: this.visionModel,
         messages: [
           {
@@ -201,7 +196,7 @@ export class OpenAIProvider implements IAIProvider {
       // Whisper API requer File object
       const file = new File([audioBuffer as any], 'audio.mp3', { type: mimeType });
 
-      const response = await this.client.audio.transcriptions.create({
+      const response = await this.getActiveClient().audio.transcriptions.create({
         file: file,
         model: this.whisperModel,
         language: 'pt',
@@ -227,7 +222,7 @@ export class OpenAIProvider implements IAIProvider {
 
       const userPrompt = CATEGORY_SUGGESTION_USER_PROMPT_TEMPLATE(description, userCategories);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.getActiveClient().chat.completions.create({
         model: this.model,
         messages: [
           { role: 'system', content: CATEGORY_SUGGESTION_SYSTEM_PROMPT },
@@ -261,7 +256,7 @@ export class OpenAIProvider implements IAIProvider {
       const startTime = Date.now();
       this.logger.debug(`Gerando embedding para: "${text}"`);
 
-      const response = await this.client.embeddings.create({
+      const response = await this.getActiveClient().embeddings.create({
         model: 'text-embedding-3-small',
         input: text,
         encoding_format: 'float',

@@ -7,6 +7,7 @@ import { AdminRagController } from './controllers/admin-rag.controller';
 import { AdminSynonymsController } from './controllers/admin-synonyms.controller';
 import { AdminOnboardingController } from './controllers/admin-onboarding.controller';
 import { AdminMessagesController } from './controllers/admin-messages.controller';
+import { AdminAICredentialsController } from './controllers/admin-ai-credentials.controller';
 import { WhatsAppModule } from '@infrastructure/whatsapp/whatsapp.module';
 import { TelegramModule } from '../../infrastructure/telegram/telegram.module';
 import { RAGModule } from '@infrastructure/rag/rag.module';
@@ -32,6 +33,7 @@ import { SharedModule } from '@shared/shared.module';
     AdminSynonymsController,
     AdminOnboardingController,
     AdminMessagesController,
+    AdminAICredentialsController,
   ],
   providers: [],
 })

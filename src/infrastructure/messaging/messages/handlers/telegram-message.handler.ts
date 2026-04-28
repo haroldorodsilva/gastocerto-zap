@@ -60,12 +60,33 @@ export class TelegramMessageHandler {
     );
 
     try {
-      // 🆕 VERIFICAR RATE LIMITING (proteção contra spam)
-      const rateLimitCheck = await this.userRateLimiter.checkLimit(userId);
+      // 🆕 [QW1] Resolver usuário via método unificado (single source of truth)
+      let gastoCertoId: string | undefined;
+      let phoneNumber: string | undefined;
+
+      try {
+        const userCache = await this.userCacheService.resolveUserByPlatform(
+          MessagingPlatform.TELEGRAM,
+          userId,
+        );
+        if (userCache) {
+          gastoCertoId = userCache.gastoCertoId;
+          phoneNumber = userCache.phoneNumber;
+          this.logger.debug(`✅ Usuário encontrado: ${gastoCertoId} (phone: ${phoneNumber})`);
+        } else {
+          this.logger.debug(`Usuário ainda não cadastrado: ${userId}`);
+        }
+      } catch (error) {
+        this.logger.debug(`Erro ao buscar usuário: ${userId}`, error);
+      }
+
+      // 🆕 [QW2] Rate limit cross-platform por gastoCertoId quando disponível
+      const rateLimitKey = gastoCertoId ?? `telegram:${userId}`;
+      const rateLimitCheck = await this.userRateLimiter.checkLimit(rateLimitKey);
 
       if (!rateLimitCheck.allowed) {
         this.logger.warn(
-          `🚫 [Telegram] Rate limit exceeded for ${userId}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
+          `🚫 [Telegram] Rate limit exceeded for ${rateLimitKey}: ${rateLimitCheck.reason} (retry after ${rateLimitCheck.retryAfter}s)`,
         );
         const limitMessage = this.userRateLimiter.getRateLimitMessage(
           rateLimitCheck.reason!,
@@ -81,24 +102,7 @@ export class TelegramMessageHandler {
       }
 
       // ✅ Registrar uso da mensagem
-      await this.userRateLimiter.recordUsage(userId);
-
-      // Buscar usuário cadastrado para obter gastoCertoId e phoneNumber
-      let gastoCertoId: string | undefined;
-      let phoneNumber: string | undefined;
-
-      try {
-        const userCache = await this.userCacheService.getUserByTelegram(userId);
-        if (userCache) {
-          gastoCertoId = userCache.gastoCertoId;
-          phoneNumber = userCache.phoneNumber;
-          this.logger.debug(`✅ Usuário encontrado: ${gastoCertoId} (phone: ${phoneNumber})`);
-        } else {
-          this.logger.debug(`Usuário ainda não cadastrado: ${userId}`);
-        }
-      } catch (error) {
-        this.logger.debug(`Erro ao buscar usuário: ${userId}`, error);
-      }
+      await this.userRateLimiter.recordUsage(rateLimitKey);
 
       // Registrar contexto da plataforma para roteamento de respostas
       await this.contextService.registerContext(
@@ -144,23 +148,13 @@ export class TelegramMessageHandler {
       // Usar MessageValidationService para validação unificada
       const validation = await this.messageValidation.validateUser(userId, 'telegram');
 
-      // 🔄 SINCRONIZAÇÃO: Forçar sync se timer expirou OU se assinatura/canUseGastoZap está inativa
-      // (mesmo comportamento do WebChat — atualiza cache desatualizado imediatamente)
-      const needsSubscriptionSync =
-        validation.user &&
-        (
-          this.userCacheService.needsSync(validation.user) ||
-          !validation.user.canUseGastoZap ||
-          !validation.user.hasActiveSubscription
-        );
+      // 🔄 [M1] SINCRONIZAÇÃO: usar predicado unificado (cache antigo OU flags inativas)
+      const syncDecision = validation.user
+        ? this.userCacheService.shouldRefreshSubscription(validation.user)
+        : { refresh: false };
 
-      if (needsSubscriptionSync && validation.user) {
-        const syncReason = !validation.user.canUseGastoZap
-          ? 'canUseGastoZap=false'
-          : !validation.user.hasActiveSubscription
-          ? 'hasActiveSubscription=false'
-          : 'timer expirado';
-        this.logger.log(`⏰ [Telegram] Sincronizando assinatura para ${userId} (motivo: ${syncReason})`);
+      if (syncDecision.refresh && validation.user) {
+        this.logger.log(`⏰ [Telegram] Sincronizando assinatura para ${userId} (motivo: ${syncDecision.reason})`);
         await this.userCacheService.syncSubscriptionStatus(validation.user.gastoCertoId);
 
         // Revalidar usuário com dados atualizados

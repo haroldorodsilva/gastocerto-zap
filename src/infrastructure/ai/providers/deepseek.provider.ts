@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { CryptoService } from '../../../common/services/crypto.service';
 import { PrismaService } from '../../../core/database/prisma.service';
 import { IAIProvider, TransactionData, UserContext, AIProviderType } from '../ai.interface';
+import { aiCredentialContext } from '../credentials/ai-credential.context';
 import {
   TRANSACTION_SYSTEM_PROMPT,
   TRANSACTION_USER_PROMPT_TEMPLATE,
@@ -29,11 +30,11 @@ import {
 @Injectable()
 export class DeepSeekProvider implements IAIProvider {
   private readonly logger = new Logger(DeepSeekProvider.name);
-  private client: OpenAI;
   private model: string;
   private readonly baseUrl: string;
-  private apiKey: string;
-  private initialized = false;
+  private modelsLoaded = false;
+  /** Cache de clientes por apiKey */
+  private clientCache = new Map<string, OpenAI>();
 
   constructor(
     private configService: ConfigService,
@@ -45,67 +46,43 @@ export class DeepSeekProvider implements IAIProvider {
       'https://api.deepseek.com',
     );
     this.model = this.configService.get<string>('ai.deepseek.model', 'deepseek-chat');
-
-    // Inicializar com dummy key temporariamente
-    this.client = new OpenAI({
-      apiKey: 'sk-dummy-key-not-configured',
-      baseURL: this.baseUrl,
-    });
   }
 
   /**
-   * Inicializa o provider buscando config do banco de dados
-   * Fallback para ENV se não encontrar no banco
+   * 🆕 [AI3] Carrega APENAS metadados (modelo) do banco. ApiKey vem do contexto.
    */
-  private async initialize(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
+  private async loadModels(): Promise<void> {
+    if (this.modelsLoaded) return;
     try {
-      // Buscar configuração do banco via PrismaService injetado
-      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
+      const cfg = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'deepseek' },
       });
-
-      if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco (descriptografar se necessário)
-        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
-        this.model = providerConfig.textModel || this.model;
-        this.logger.log(`✅ DeepSeek Provider inicializado via BANCO - Modelo: ${this.model}`);
-      } else {
-        // Fallback para ENV (desenvolvimento)
-        this.apiKey = this.configService.get<string>('ai.deepseek.apiKey');
-        if (this.apiKey) {
-          this.logger.warn(
-            '⚠️  DeepSeek usando ENV (configure no banco para produção) - Modelo: ' + this.model,
-          );
-        } else {
-          this.logger.warn('⚠️  DeepSeek API Key não configurada - Provider desabilitado');
-        }
-      }
-
-      // Reinicializar cliente com API key correta
-      if (this.apiKey) {
-        this.client = new OpenAI({
-          apiKey: this.apiKey,
-          baseURL: this.baseUrl,
-        });
-      }
-
-      this.initialized = true;
-    } catch (error) {
-      this.logger.error('Erro ao inicializar DeepSeek Provider:', error);
-      this.initialized = true; // Marcar como inicializado mesmo com erro
+      if (cfg?.textModel) this.model = cfg.textModel;
+    } catch (err) {
+      this.logger.warn(`DeepSeek: falha ao carregar modelos: ${(err as Error).message}`);
     }
+    this.modelsLoaded = true;
+  }
+
+  private getActiveClient(): OpenAI {
+    const cred = aiCredentialContext.getStore();
+    if (!cred) {
+      throw new Error('DeepSeekProvider chamado sem credencial no contexto.');
+    }
+    let client = this.clientCache.get(cred.apiKey);
+    if (!client) {
+      client = new OpenAI({ apiKey: cred.apiKey, baseURL: this.baseUrl });
+      this.clientCache.set(cred.apiKey, client);
+    }
+    return client;
   }
 
   /**
    * Verifica se o provider está disponível
    */
   private async isAvailable(): Promise<boolean> {
-    await this.initialize();
-    return !!this.apiKey;
+    await this.loadModels();
+    return !!aiCredentialContext.getStore();
   }
 
   /**
@@ -122,7 +99,7 @@ export class DeepSeekProvider implements IAIProvider {
 
       const userPrompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.getActiveClient().chat.completions.create({
         model: this.model,
         messages: [
           { role: 'system', content: TRANSACTION_SYSTEM_PROMPT },
@@ -177,7 +154,7 @@ export class DeepSeekProvider implements IAIProvider {
 
       const userPrompt = CATEGORY_SUGGESTION_USER_PROMPT_TEMPLATE(description, userCategories);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.getActiveClient().chat.completions.create({
         model: this.model,
         messages: [
           { role: 'system', content: CATEGORY_SUGGESTION_SYSTEM_PROMPT },

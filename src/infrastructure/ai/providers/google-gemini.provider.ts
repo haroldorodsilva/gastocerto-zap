@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { CryptoService } from '../../../common/services/crypto.service';
 import { PrismaService } from '../../../core/database/prisma.service';
 import { IAIProvider, TransactionData, UserContext, TransactionType } from '../ai.interface';
+import { aiCredentialContext } from '../credentials/ai-credential.context';
 import {
   IMAGE_ANALYSIS_SYSTEM_PROMPT,
   IMAGE_ANALYSIS_USER_PROMPT,
@@ -30,61 +31,46 @@ import {
 @Injectable()
 export class GoogleGeminiProvider implements IAIProvider {
   private readonly logger = new Logger(GoogleGeminiProvider.name);
-  private apiKey: string;
-  private model: string;
+  private model: string = 'gemini-1.5-flash';
   private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
-  private initialized = false;
+  private modelsLoaded = false;
 
   constructor(
     private configService: ConfigService,
     private cryptoService: CryptoService,
     private prismaService: PrismaService,
-  ) {
-    // Inicialização assíncrona será feita no primeiro uso
-  }
+  ) {}
 
   /**
-   * Inicializa provider com configurações do banco ou ENV
+   * 🆕 [AI3] Carrega APENAS modelo do banco. ApiKey vem do contexto.
    */
-  private async initialize(): Promise<void> {
-    if (this.initialized) return;
-
+  private async loadModels(): Promise<void> {
+    if (this.modelsLoaded) return;
     try {
-      // Buscar configuração do banco via PrismaService injetado
-      const providerConfig = await this.prismaService.aIProviderConfig.findUnique({
+      const cfg = await this.prismaService.aIProviderConfig.findUnique({
         where: { provider: 'google_gemini' },
       });
-
-      if (providerConfig?.apiKey && providerConfig.enabled) {
-        // Usar configuração do banco (descriptografar se necessário)
-        this.apiKey = this.cryptoService.decrypt(providerConfig.apiKey);
-        this.model = providerConfig.textModel || 'gemini-1.5-flash';
-        this.logger.log(`✅ Google Gemini Provider inicializado via BANCO - Modelo: ${this.model}`);
-      } else {
-        // Fallback para ENV (apenas dev)
-        this.apiKey = this.configService.get<string>('ai.google.apiKey', '');
-        this.model = this.configService.get<string>('ai.google.model', 'gemini-1.5-flash');
-
-        if (this.apiKey) {
-          this.logger.warn('⚠️  Google Gemini usando ENV (configure no banco para produção)');
-        } else {
-          this.logger.warn('⚠️  Google AI API Key não configurada - Provider desabilitado');
-        }
-      }
-
-      this.initialized = true;
-    } catch (error) {
-      this.logger.error('Erro ao inicializar Google Gemini:', error.message);
-      this.initialized = true;
+      if (cfg?.textModel) this.model = cfg.textModel;
+    } catch (err) {
+      this.logger.warn(`Gemini: falha ao carregar modelo: ${(err as Error).message}`);
     }
+    this.modelsLoaded = true;
+  }
+
+  private getActiveApiKey(): string {
+    const cred = aiCredentialContext.getStore();
+    if (!cred) {
+      throw new Error('GoogleGeminiProvider chamado sem credencial no contexto.');
+    }
+    return cred.apiKey;
   }
 
   /**
    * Verifica se o provider está disponível
    */
   private async isAvailable(): Promise<boolean> {
-    await this.initialize();
-    return !!this.apiKey;
+    await this.loadModels();
+    return !!aiCredentialContext.getStore();
   }
 
   /**
@@ -103,7 +89,7 @@ export class GoogleGeminiProvider implements IAIProvider {
       const prompt = TRANSACTION_USER_PROMPT_TEMPLATE(text, userContext?.categories);
 
       const response = await fetch(
-        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.getActiveApiKey()}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -177,7 +163,7 @@ export class GoogleGeminiProvider implements IAIProvider {
       const prompt = `${IMAGE_ANALYSIS_SYSTEM_PROMPT}\n\n${IMAGE_ANALYSIS_USER_PROMPT}`;
 
       const response = await fetch(
-        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.getActiveApiKey()}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -253,7 +239,7 @@ export class GoogleGeminiProvider implements IAIProvider {
       prompt += '\n\nRetorne APENAS o nome da categoria (sem explicações).';
 
       const response = await fetch(
-        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+        `${this.baseUrl}/models/${this.model}:generateContent?key=${this.getActiveApiKey()}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -293,7 +279,7 @@ export class GoogleGeminiProvider implements IAIProvider {
       this.logger.debug(`[Gemini] Gerando embedding para: "${text}"`);
 
       const response = await fetch(
-        `${this.baseUrl}/models/text-embedding-004:embedContent?key=${this.apiKey}`,
+        `${this.baseUrl}/models/text-embedding-004:embedContent?key=${this.getActiveApiKey()}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

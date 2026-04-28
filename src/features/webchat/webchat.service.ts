@@ -97,9 +97,10 @@ export class WebChatService {
       };
     }
 
-    // 🆕 Rate limiting (proteção contra spam/abuso)
-    const phoneForRateLimit = `webchat-${userId}`;
-    const rateLimitCheck = await this.userRateLimiter.checkLimit(phoneForRateLimit);
+    // 🆕 [QW2] Rate limiting cross-platform por gastoCertoId
+    // userId aqui já é o gastoCertoId (vem do JWT) → chave unificada com WhatsApp/Telegram
+    const rateLimitKey = userId;
+    const rateLimitCheck = await this.userRateLimiter.checkLimit(rateLimitKey);
 
     if (!rateLimitCheck.allowed) {
       this.logger.warn(`🚫 [WebChat] Rate limit exceeded for ${userId}: ${rateLimitCheck.reason}`);
@@ -115,7 +116,7 @@ export class WebChatService {
       };
     }
 
-    await this.userRateLimiter.recordUsage(phoneForRateLimit);
+    await this.userRateLimiter.recordUsage(rateLimitKey);
 
     try {
       // 1. Buscar usuário pelo gastoCertoId

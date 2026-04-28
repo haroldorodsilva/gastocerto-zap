@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RAGService } from './rag.service';
 import { AIUsageLoggerService } from '@infrastructure/ai/ai-usage-logger.service';
+import { findMerchant } from '@common/constants/merchants';
 
 /**
  * CategoryResolutionService
@@ -73,7 +74,7 @@ export class CategoryResolutionService {
   ) {}
 
   /**
-   * Resolve categoria usando RAG + AI (se necessário)
+   * Resolve categoria usando Merchant → RAG → AI (se necessário)
    */
   async resolveCategory(options: ResolutionOptions): Promise<ResolutionResult | null> {
     const startTime = Date.now();
@@ -81,6 +82,47 @@ export class CategoryResolutionService {
     const useAiFallback = options.useAiFallback ?? true;
 
     this.logger.log(`🔍 Resolvendo categoria: "${options.text}" (minConfidence: ${minConfidence})`);
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // STEP 0: Merchant lookup determinístico (sem custo de IA)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const merchantMatch = findMerchant(options.text);
+    if (merchantMatch && merchantMatch.score >= 0.5) {
+      const responseTime = Date.now() - startTime;
+      this.logger.log(
+        `✅ Categoria via Merchant: "${merchantMatch.matchedKeyword}" → ` +
+          `${merchantMatch.entry.category}${merchantMatch.entry.subCategory ? ' → ' + merchantMatch.entry.subCategory : ''} ` +
+          `(score: ${(merchantMatch.score * 100).toFixed(1)}%) [${responseTime}ms]`,
+      );
+
+      // Log RAG com sucesso merchant (source marcado como RAG para não gerar custo extra)
+      const ragSearchLogId = await this.ragService.logSearchWithContext({
+        userId: options.userId,
+        query: options.text,
+        matches: [],
+        success: true,
+        threshold: minConfidence,
+        ragMode: 'BM25',
+        responseTime,
+        flowStep: 1,
+        totalSteps: 1,
+        finalCategoryName: merchantMatch.entry.category,
+        wasAiFallback: false,
+      });
+
+      return {
+        categoryId: `merchant:${merchantMatch.entry.category.toLowerCase().replace(/\s/g, '_')}`,
+        categoryName: merchantMatch.entry.category,
+        subCategoryId: merchantMatch.entry.subCategory
+          ? `merchant:${merchantMatch.entry.subCategory.toLowerCase().replace(/\s/g, '_')}`
+          : undefined,
+        subCategoryName: merchantMatch.entry.subCategory,
+        confidence: Math.min(0.99, merchantMatch.score),
+        source: 'RAG',
+        ragSearchLogId,
+        needsSynonymLearning: false,
+      };
+    }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // STEP 1: Busca RAG inicial
@@ -275,13 +317,52 @@ export class CategoryResolutionService {
   }
 
   /**
-   * Validação híbrida: RAG + IA em paralelo, escolhe o melhor
+   * Validação híbrida: RAG + IA em paralelo, escolhe o melhor.
+   * Merchant lookup roda antes de tudo para evitar custo desnecessário.
    */
   async resolveWithHybridValidation(options: ResolutionOptions): Promise<ResolutionResult | null> {
     const startTime = Date.now();
     const minConfidence = options.minConfidence ?? this.defaultMinConfidence;
 
     this.logger.log(`🔍 [HYBRID] Resolvendo categoria: "${options.text}"`);
+
+    // Step 0: Merchant lookup determinístico
+    const merchantMatch = findMerchant(options.text);
+    if (merchantMatch && merchantMatch.score >= 0.5) {
+      const responseTime = Date.now() - startTime;
+      this.logger.log(
+        `✅ [HYBRID] Categoria via Merchant: "${merchantMatch.matchedKeyword}" → ` +
+          `${merchantMatch.entry.category}${merchantMatch.entry.subCategory ? ' → ' + merchantMatch.entry.subCategory : ''} ` +
+          `[${responseTime}ms]`,
+      );
+
+      const ragSearchLogId = await this.ragService.logSearchWithContext({
+        userId: options.userId,
+        query: options.text,
+        matches: [],
+        success: true,
+        threshold: minConfidence,
+        ragMode: 'HYBRID',
+        responseTime,
+        flowStep: 1,
+        totalSteps: 1,
+        finalCategoryName: merchantMatch.entry.category,
+        wasAiFallback: false,
+      });
+
+      return {
+        categoryId: `merchant:${merchantMatch.entry.category.toLowerCase().replace(/\s/g, '_')}`,
+        categoryName: merchantMatch.entry.category,
+        subCategoryId: merchantMatch.entry.subCategory
+          ? `merchant:${merchantMatch.entry.subCategory.toLowerCase().replace(/\s/g, '_')}`
+          : undefined,
+        subCategoryName: merchantMatch.entry.subCategory,
+        confidence: Math.min(0.99, merchantMatch.score),
+        source: 'RAG',
+        ragSearchLogId,
+        needsSynonymLearning: false,
+      };
+    }
 
     // Executar RAG e IA em paralelo
     if (!options.aiProvider) {

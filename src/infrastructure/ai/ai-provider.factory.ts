@@ -16,6 +16,8 @@ import { AICacheService } from '../../common/services/ai-cache.service';
 import { AIUsageLoggerService } from './ai-usage-logger.service';
 import { AINormalizationService } from './ai-normalization.service';
 import { AIConfigService } from './ai-config.service';
+import { AICredentialSelectorService } from './credentials/ai-credential-selector.service';
+import { aiCredentialContext } from './credentials/ai-credential.context';
 import { AIOperationType, AIInputType } from '@prisma/client';
 
 /**
@@ -58,6 +60,7 @@ export class AIProviderFactory implements OnModuleInit {
     private readonly aiUsageLogger: AIUsageLoggerService,
     private readonly normalizationService: AINormalizationService,
     private readonly aiConfigService: AIConfigService,
+    private readonly credentialSelector: AICredentialSelectorService,
   ) {
     // Registrar providers disponíveis
     this.providers.set(AIProviderType.OPENAI, this.openaiProvider);
@@ -188,7 +191,9 @@ export class AIProviderFactory implements OnModuleInit {
     // 4. Processar com provider
     const provider = this.getProvider(providerType);
     try {
-      const rawResult = await provider.extractTransaction(text, userContext);
+      const rawResult = await this.runWithCredentialRotation(providerType, () =>
+        provider.extractTransaction(text, userContext),
+      );
 
       // Normalizar dados brutos retornados pelo provider
       const result = this.normalizationService.normalizeTransactionData(rawResult, providerType);
@@ -249,7 +254,9 @@ export class AIProviderFactory implements OnModuleInit {
     // 3. Processar
     const provider = this.getProvider(providerType);
     try {
-      const rawResult = await provider.analyzeImage(imageBuffer, mimeType);
+      const rawResult = await this.runWithCredentialRotation(providerType, () =>
+        provider.analyzeImage(imageBuffer, mimeType),
+      );
 
       // Normalizar dados brutos retornados pelo provider
       const result = this.normalizationService.normalizeTransactionData(rawResult, providerType);
@@ -308,7 +315,9 @@ export class AIProviderFactory implements OnModuleInit {
     // 3. Processar
     const provider = this.getProvider(providerType);
     try {
-      const result = await provider.transcribeAudio(audioBuffer, mimeType);
+      const result = await this.runWithCredentialRotation(providerType, () =>
+        provider.transcribeAudio(audioBuffer, mimeType),
+      );
 
       // 4. Registrar e cachear
       await this.rateLimiter.recordUsage(providerType, 800);
@@ -363,7 +372,9 @@ export class AIProviderFactory implements OnModuleInit {
           try {
             this.logger.log(`🔄 Tentando fallback: ${fallbackProviderType}`);
             const fallbackProvider = this.getProvider(fallbackProviderType);
-            const result = await fallbackProvider.suggestCategory(description, userCategories);
+            const result = await this.runWithCredentialRotation(fallbackProviderType, () =>
+              fallbackProvider.suggestCategory(description, userCategories),
+            );
             await this.rateLimiter.recordUsage(fallbackProviderType, 200);
             await this.aiCache.cacheText(cacheKey, fallbackProviderType, result, 'category');
             return result;
@@ -379,7 +390,9 @@ export class AIProviderFactory implements OnModuleInit {
     // 3. Processar
     const provider = this.getProvider(providerType);
     try {
-      const result = await provider.suggestCategory(description, userCategories);
+      const result = await this.runWithCredentialRotation(providerType, () =>
+        provider.suggestCategory(description, userCategories),
+      );
 
       // 4. Registrar e cachear
       await this.rateLimiter.recordUsage(providerType, 200);
@@ -400,7 +413,9 @@ export class AIProviderFactory implements OnModuleInit {
           try {
             this.logger.log(`🔄 Tentando fallback: ${fallbackProviderType}`);
             const fallbackProvider = this.getProvider(fallbackProviderType);
-            const result = await fallbackProvider.suggestCategory(description, userCategories);
+            const result = await this.runWithCredentialRotation(fallbackProviderType, () =>
+              fallbackProvider.suggestCategory(description, userCategories),
+            );
             await this.rateLimiter.recordUsage(fallbackProviderType, 200);
             await this.aiCache.cacheText(cacheKey, fallbackProviderType, result, 'category');
             return result;
@@ -420,6 +435,54 @@ export class AIProviderFactory implements OnModuleInit {
    */
   private toProviderType(providerName: string): AIProviderType {
     return providerName as AIProviderType;
+  }
+
+  /**
+   * 🆕 [AI3/AI4] Executa `fn` com rotação round-robin de credenciais.
+   *
+   * - Lista credenciais ativas (não esgotadas) ordenadas por priority+lastUsed.
+   * - Para cada uma, executa `fn` dentro de `aiCredentialContext.run`.
+   * - Em quota/rate-limit: marca como esgotada e tenta a próxima.
+   * - Em outro erro: marca erro e propaga (deixa o fallback de provider lidar).
+   * - Se nenhuma credencial: lança erro (provider considerado indisponível).
+   */
+  private async runWithCredentialRotation<T>(
+    providerType: AIProviderType,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const creds = await this.credentialSelector.listAvailable(providerType);
+    if (creds.length === 0) {
+      throw new Error(
+        `Nenhuma credencial disponível para provider=${providerType} (todas esgotadas ou desabilitadas)`,
+      );
+    }
+
+    let lastError: any;
+    for (const cred of creds) {
+      try {
+        const result = await aiCredentialContext.run(cred, () => fn());
+        await this.credentialSelector.markUsed(cred.credentialId);
+        return result;
+      } catch (err) {
+        lastError = err;
+        if (AICredentialSelectorService.isQuotaError(err)) {
+          await this.credentialSelector.markExhausted(
+            cred.credentialId,
+            (err as Error)?.message || 'quota/rate limit',
+          );
+          this.logger.warn(
+            `🔁 Rotação: ${providerType}/${cred.label} esgotada, tentando próxima credencial...`,
+          );
+          continue;
+        }
+        await this.credentialSelector.markError(cred.credentialId);
+        throw err;
+      }
+    }
+
+    throw new Error(
+      `Todas as credenciais de ${providerType} esgotaram. Último erro: ${(lastError as Error)?.message || 'desconhecido'}`,
+    );
   }
 
   /**
@@ -465,7 +528,9 @@ export class AIProviderFactory implements OnModuleInit {
       try {
         this.logger.log(`🔄 Tentando fallback com ${providerType}...`);
         const provider = this.getProvider(providerType);
-        const rawResult = await provider.extractTransaction(text, userContext);
+        const rawResult = await this.runWithCredentialRotation(providerType, () =>
+          provider.extractTransaction(text, userContext),
+        );
 
         // Normalizar dados brutos retornados pelo provider
         const result = this.normalizationService.normalizeTransactionData(rawResult, providerType);
@@ -501,7 +566,9 @@ export class AIProviderFactory implements OnModuleInit {
       try {
         this.logger.log(`🔄 Tentando fallback de imagem com ${providerType}...`);
         const provider = this.getProvider(providerType);
-        const rawResult = await provider.analyzeImage(imageBuffer, mimeType);
+        const rawResult = await this.runWithCredentialRotation(providerType, () =>
+          provider.analyzeImage(imageBuffer, mimeType),
+        );
 
         // Normalizar dados brutos retornados pelo provider
         const result = this.normalizationService.normalizeTransactionData(rawResult, providerType);
@@ -537,7 +604,9 @@ export class AIProviderFactory implements OnModuleInit {
       try {
         this.logger.log(`🔄 Tentando fallback de áudio com ${providerType}...`);
         const provider = this.getProvider(providerType);
-        const result = await provider.transcribeAudio(audioBuffer, mimeType);
+        const result = await this.runWithCredentialRotation(providerType, () =>
+          provider.transcribeAudio(audioBuffer, mimeType),
+        );
 
         // Registrar uso e cachear resultado do fallback
         await this.rateLimiter.recordUsage(providerType, 800);
