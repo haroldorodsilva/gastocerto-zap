@@ -35,7 +35,7 @@ import { getTransactionSystemPrompt, TRANSACTION_USER_PROMPT_TEMPLATE } from '..
 @Injectable()
 export class GroqProvider implements IAIProvider {
   private readonly logger = new Logger(GroqProvider.name);
-  private model: string = 'llama-3.1-70b-versatile';
+  private model: string = 'llama-3.3-70b-versatile';
   private readonly baseUrl = 'https://api.groq.com/openai/v1';
   private modelsLoaded = false;
 
@@ -132,7 +132,8 @@ export class GroqProvider implements IAIProvider {
 
       return result;
     } catch (error) {
-      this.logger.error('[Groq] Erro ao extrair transação:', error);
+      this.logger.error(`[Groq] Erro ao extrair transação para input: "${text}"`);
+      this.logger.error(error);
       throw error;
     }
   }

@@ -15,6 +15,7 @@ import { TransactionConfirmationService } from './transaction-confirmation.servi
 import { ListContextService } from './list-context.service';
 import { CreditCardService } from '../credit-cards/credit-card.service';
 import { PlatformReplyService } from '@infrastructure/messaging/messages/platform-reply.service';
+import { UserSynonymService } from '@infrastructure/rag/services/user-synonym.service';
 import {
   IntentHandler,
   IntentHandlerContext,
@@ -58,6 +59,7 @@ export class TransactionsService {
     private readonly listContext: ListContextService,
     private readonly conversationMemory: ConversationMemoryService,
     private readonly disambiguationService: DisambiguationService,
+    private readonly userSynonymService: UserSynonymService,
     @Inject(INTENT_HANDLERS) intentHandlers: IntentHandler[],
   ) {
     // Construir mapa de despacho: MessageIntent → IntentHandler
@@ -1200,6 +1202,23 @@ export class TransactionsService {
             meta.subCategoryId,
             meta.subCategoryName,
           );
+
+          // Feedback positivo no RAG: aprender "descrição → categoria correta"
+          if (updated.userId && updated.description) {
+            const term = updated.description.trim().toLowerCase().split(/\s+/).slice(0, 3).join(' ');
+            if (term.length >= 3) {
+              this.userSynonymService.confirmAndLearn({
+                userId: updated.userId,
+                accountId: updated.accountId ?? null,
+                originalTerm: term,
+                confirmedCategoryId: meta.categoryId,
+                confirmedCategoryName: meta.category,
+                confirmedSubcategoryId: meta.subCategoryId,
+                confirmedSubcategoryName: meta.subCategoryName,
+              }).catch((err) => this.logger.warn(`[RAG] Falha ao aprender sinônimo de correção: ${err.message}`));
+            }
+          }
+
           // Limpar contexto de seleção
           this.listContext.clearContext(user.phoneNumber);
           // Mostrar confirmação atualizada

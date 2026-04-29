@@ -51,13 +51,45 @@ export class TransactionMessageFormatterService {
   }
 
   /**
-   * Formata erros de validação de forma amigável.
+   * Formata erros de validação de forma amigável e humana.
+   * Erros específicos recebem mensagens contextuais em vez de mensagens técnicas.
    */
   formatValidationError(errors: string[]): string {
+    const hasAmountError = errors.some((e) =>
+      e.toLowerCase().includes('valor') || e.toLowerCase().includes('zero'),
+    );
+    const hasCategoryError = errors.some((e) => e.toLowerCase().includes('categoria'));
+    const hasTypeError = errors.some((e) => e.toLowerCase().includes('tipo'));
+
+    if (hasAmountError) {
+      return (
+        '🤔 Não consegui identificar o *valor* na sua mensagem.\n\n' +
+        'Pode repetir informando o valor? Exemplo:\n' +
+        '_"Comprei medicamento por R$ 45,00 parcelado em 2x"_'
+      );
+    }
+
+    if (hasCategoryError) {
+      return (
+        '🤔 Não consegui identificar a *categoria* da transação.\n\n' +
+        'Pode detalhar um pouco mais? Exemplo:\n' +
+        '_"Gastei R$ 50,00 com alimentação no mercado"_'
+      );
+    }
+
+    if (hasTypeError) {
+      return (
+        '🤔 Não entendi se foi uma *entrada* ou *saída*.\n\n' +
+        'Pode informar com mais clareza? Exemplo:\n' +
+        '_"Gastei R$ 30,00 no almoço"_ ou _"Recebi R$ 500,00 de freela"_'
+      );
+    }
+
+    // Fallback genérico — mas ainda amigável
     return (
-      '❌ *Dados inválidos*\n\n' +
-      errors.map((err) => `• ${err}`).join('\n') +
-      '\n\n_Por favor, corrija e tente novamente._'
+      '🤔 Não consegui entender completamente sua mensagem.\n\n' +
+      'Pode tentar de outra forma? Exemplo:\n' +
+      '_"Gastei R$ 50,00 em alimentação no mercado"_'
     );
   }
 

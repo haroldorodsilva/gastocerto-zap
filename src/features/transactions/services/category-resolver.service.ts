@@ -110,10 +110,11 @@ export class CategoryResolverService {
         }
       }
 
-      // 4. Procurar categoria (case-insensitive)
+      // 4. Procurar categoria (case-insensitive + normalizado)
+      const normalizedInput = this.normalizeText(categoryNameOrId);
       const matchingCategory = categoriesData.find(
         (cat: any) =>
-          cat.name.toLowerCase() === categoryNameOrId.toLowerCase() || cat.id === categoryNameOrId,
+          this.normalizeText(cat.name) === normalizedInput || cat.id === categoryNameOrId,
       );
 
       if (!matchingCategory) {
@@ -150,7 +151,7 @@ export class CategoryResolverService {
       if (matchingCategory.subCategory && typeof matchingCategory.subCategory === 'object') {
         const subCat = matchingCategory.subCategory;
         if (
-          subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
+          this.normalizeText(subCat.name) === this.normalizeText(subcategoryNameOrId) ||
           subCat.id === subcategoryNameOrId
         ) {
           subCategoryId = subCat.id;
@@ -169,7 +170,7 @@ export class CategoryResolverService {
 
         const matchingSubCategory = matchingCategory.subCategories.find(
           (subCat: any) =>
-            subCat.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
+            this.normalizeText(subCat.name) === this.normalizeText(subcategoryNameOrId) ||
             subCat.id === subcategoryNameOrId,
         );
 
@@ -186,10 +187,10 @@ export class CategoryResolverService {
       // (pode haver múltiplas entradas da mesma categoria, cada uma com uma subcategoria diferente)
       const allMatchingCategories = categoriesData.filter(
         (cat: any) =>
-          (cat.name.toLowerCase() === categoryNameOrId.toLowerCase() ||
+          (this.normalizeText(cat.name) === this.normalizeText(categoryNameOrId) ||
             cat.id === categoryNameOrId) &&
           cat.subCategory &&
-          (cat.subCategory.name.toLowerCase() === subcategoryNameOrId.toLowerCase() ||
+          (this.normalizeText(cat.subCategory.name) === this.normalizeText(subcategoryNameOrId) ||
             cat.subCategory.id === subcategoryNameOrId),
       );
 
@@ -230,5 +231,15 @@ export class CategoryResolverService {
       this.logger.error(`❌ Erro ao resolver categoria/subcategoria:`, error);
       return { categoryId: null, subCategoryId: null };
     }
+  }
+
+  /**
+   * Normaliza texto para comparação: minúsculas + remove acentos
+   */
+  private normalizeText(text: string): string {
+    return text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
   }
 }

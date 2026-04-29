@@ -151,9 +151,8 @@ export class AIProviderFactory implements OnModuleInit {
    */
   async extractTransaction(text: string, userContext?: UserContext): Promise<TransactionData> {
     // Buscar provider configurado dinamicamente
-    // Usar categoryProvider pois é uma operação de categorização
     const providerType = this.toProviderType(
-      await this.aiConfigService.getProviderForOperation('category'),
+      await this.aiConfigService.getProviderForOperation('text'),
     );
 
     // 1. Verificar cache primeiro

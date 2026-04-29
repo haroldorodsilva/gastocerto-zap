@@ -317,6 +317,7 @@ export class WebChatService {
               `webchat-${randomUUID()}`,
               user,
               'webchat', // WebChat é uma plataforma própria
+              accountId, // Passar accountId para evitar erro de AccountId não fornecido
             );
 
             return this.formatTransactionResponse(transactionResult, learningResult.message);

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { isFuture, startOfDay, parseISO, isValid } from 'date-fns';
 
 export interface TransactionData {
   type: string;
@@ -39,9 +40,10 @@ export class PaymentStatusResolverService {
    * 1. Transação FIXA → PENDING (requer confirmação mensal) + CONFIRMAÇÃO OBRIGATÓRIA
    * 2. Transação PARCELADA → PENDING (parcelas futuras não pagas ainda) + CONFIRMAÇÃO OBRIGATÓRIA
    * 3. Transação CARTÃO DE CRÉDITO → PENDING (fatura não foi paga ainda) + CONFIRMAÇÃO OBRIGATÓRIA
-   * 4. Transação NORMAL → DONE (já foi realizada/paga)
+   * 4. Transação DATA FUTURA → PENDING (ex: "mês que vem", "amanhã")
+   * 5. Transação NORMAL → DONE (já foi realizada/paga)
    *
-   * ⚠️ IMPORTANTE: Tipos 1, 2 e 3 SEMPRE exigem confirmação do usuário
+   * ⚠️ IMPORTANTE: Tipos 1, 2, 3 e 4 SEMPRE exigem confirmação do usuário
    */
   resolvePaymentStatus(
     data: TransactionData,
@@ -83,7 +85,24 @@ export class PaymentStatusResolverService {
       };
     }
 
-    // Regra 4: Transação Normal (padrão)
+    // Regra 4: Data futura (ex: "mês que vem", "dia 15 do próximo mês")
+    if (data.date) {
+      const parsed = parseISO(data.date);
+      if (isValid(parsed) && isFuture(startOfDay(parsed))) {
+        return {
+          status: 'PENDING',
+          reason: 'Transação com data futura',
+          shouldNotifyUser: true,
+          requiresConfirmation: true,
+          notificationMessage:
+            `\n\n📅 *Transação Futura Registrada*\n` +
+            `Data: ${data.date}\n` +
+            `Status: ⏳ *PENDENTE* (ainda não ocorreu)`,
+        };
+      }
+    }
+
+    // Regra 5: Transação Normal (padrão)
     return {
       status: 'DONE',
       reason: 'Transação normal/única já realizada',

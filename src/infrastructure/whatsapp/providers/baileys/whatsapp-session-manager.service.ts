@@ -521,6 +521,42 @@ export class WhatsAppSessionManager implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Exibe indicador de digitação ("composing") por `durationMs` ms e depois envia "paused".
+   * Best-effort: erros são silenciados para não bloquear o envio da mensagem.
+   */
+  async showTyping(sessionId: string, to: string, durationMs: number): Promise<void> {
+    const sock = this.activeSockets.get(sessionId);
+    if (!sock) return;
+
+    try {
+      const jid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
+      await sock.sendPresenceUpdate('composing', jid);
+      await new Promise((resolve) => setTimeout(resolve, durationMs));
+      await sock.sendPresenceUpdate('paused', jid);
+    } catch (_err) {
+      // silencia erros de presença — não crítico
+    }
+  }
+
+  /**
+   * Envia reação emoji a uma mensagem específica do usuário.
+   * Best-effort: erros são silenciados.
+   */
+  async sendReaction(sessionId: string, to: string, messageId: string, emoji: string): Promise<void> {
+    const sock = this.activeSockets.get(sessionId);
+    if (!sock) return;
+
+    try {
+      const jid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
+      await sock.sendMessage(jid, {
+        react: { text: emoji, key: { remoteJid: jid, id: messageId, fromMe: false } },
+      });
+    } catch (_err) {
+      // silencia erros de reação — não crítico
+    }
+  }
+
+  /**
    * Envia mensagem via WhatsApp
    */
   async sendMessage(sessionId: string, to: string, text: string): Promise<boolean> {

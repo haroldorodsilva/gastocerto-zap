@@ -56,7 +56,7 @@ async function main() {
       provider: 'groq',
       displayName: 'Groq',
       enabled: false,
-      textModel: 'llama-3.1-70b-versatile',
+      textModel: 'llama-3.3-70b-versatile',
       rpmLimit: 30,
       tpmLimit: 6000,
       inputCostPer1M: 0.59,
@@ -68,7 +68,7 @@ async function main() {
       priority: 1,
       fallbackEnabled: true,
       metadata: {
-        description: 'Groq Llama 3.1 70B - Muito rápido e barato',
+        description: 'Groq Llama 3.3 70B - Muito rápido e barato',
         features: ['text'],
         notes: 'Rate limits baixos, ideal para texto simples',
       },
@@ -113,6 +113,25 @@ async function main() {
     });
 
     console.log(`✅ Provider ${provider.displayName} criado`);
+  }
+
+  // Migração: atualizar modelo Groq descomissionado
+  const outdatedGroq = await prisma.aIProviderConfig.findFirst({
+    where: { provider: 'groq', textModel: 'llama-3.1-70b-versatile' },
+  });
+  if (outdatedGroq) {
+    await prisma.aIProviderConfig.update({
+      where: { id: outdatedGroq.id },
+      data: {
+        textModel: 'llama-3.3-70b-versatile',
+        metadata: {
+          description: 'Groq Llama 3.3 70B - Muito rápido e barato',
+          features: ['text'],
+          notes: 'Rate limits baixos, ideal para texto simples',
+        },
+      },
+    });
+    console.log('🔄 Groq: modelo atualizado llama-3.1-70b-versatile → llama-3.3-70b-versatile');
   }
 
   // Seed AI Settings

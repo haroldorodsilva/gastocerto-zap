@@ -97,6 +97,7 @@ export class AdminAIConfigController {
           select: {
             id: true,
             phoneNumber: true,
+            gastoCertoId: true,
             provider: true,
             model: true,
             operation: true,
@@ -114,9 +115,24 @@ export class AdminAIConfigController {
         this.prisma.aIUsageLog.count({ where }),
       ]);
 
+      // Enriquecer com nome do usuário via UserCache
+      const gastoCertoIds = [...new Set(logs.map((l) => l.gastoCertoId).filter(Boolean))] as string[];
+      const userCaches = gastoCertoIds.length
+        ? await this.prisma.userCache.findMany({
+            where: { gastoCertoId: { in: gastoCertoIds } },
+            select: { gastoCertoId: true, name: true },
+          })
+        : [];
+      const nameMap = new Map(userCaches.map((u) => [u.gastoCertoId, u.name]));
+
+      const enrichedLogs = logs.map((log) => ({
+        ...log,
+        userName: log.gastoCertoId ? (nameMap.get(log.gastoCertoId) ?? null) : null,
+      }));
+
       return {
         success: true,
-        data: logs,
+        data: enrichedLogs,
         pagination: {
           page: pageNum,
           limit: limitNum,

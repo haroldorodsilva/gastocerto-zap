@@ -280,6 +280,10 @@ export class MessageResponseService {
             throw new Error('Failed to send WhatsApp image message');
           }
         } else {
+          // Texto puro: exibir "digitando..." proporcional ao tamanho da mensagem
+          const typingMs = Math.min(3000, Math.max(600, message.length * 25));
+          await this.whatsappSessionManager.showTyping(sessionId, phoneNumber, typingMs);
+
           const success = await this.whatsappSessionManager.sendMessage(sessionId, phoneNumber, message);
           if (!success) {
             throw new Error('Failed to send WhatsApp message');

@@ -364,6 +364,16 @@ export class TransactionRegistrationService implements OnModuleInit {
       extractedData.categoryId = resolved.categoryId;
       extractedData.subCategoryId = resolved.subCategoryId;
 
+      // Se a categoria sugerida pela IA não existe na conta do usuário,
+      // limpar para "Outros" para que o fluxo de aprendizado seja acionado
+      if (resolved.categoryId === null && extractedData.category && extractedData.category !== 'Outros') {
+        this.logger.warn(
+          `⚠️ Categoria "${extractedData.category}" não existe na conta ${activeAccountId} — forçando "Outros" para acionar fluxo de aprendizado`,
+        );
+        extractedData.category = 'Outros';
+        extractedData.subCategory = null;
+      }
+
       // 4. 🎓 Verificar se precisa de aprendizado (detecção de termo desconhecido)
       this.logger.debug(
         `🎓 [DEBUG] Verificando aprendizado: messageLearningService=${!!this.messageLearningService}`,

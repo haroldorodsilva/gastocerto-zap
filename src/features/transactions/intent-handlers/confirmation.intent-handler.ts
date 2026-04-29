@@ -79,6 +79,19 @@ export class ConfirmationIntentHandler implements IntentHandler {
     try {
       this.logger.log(`✅ Processando confirmação: ${response}`);
 
+      // Tentar detecção inline de categoria: "não, foi X", "era X", "na verdade é X"
+      const inlineTerm = this.extractInlineCategoryTerm(response);
+      if (inlineTerm && (extraCtx?.userId || extraCtx?.accountId)) {
+        const inlineResult = await this.tryInlineCategoryUpdate(
+          phoneNumber,
+          inlineTerm,
+          extraCtx?.userId,
+          extraCtx?.accountId,
+        );
+        if (inlineResult) return inlineResult;
+        // Se não encontrou match → cai no fluxo normal (mostra lista)
+      }
+
       const result = await this.confirmationService.processResponse(phoneNumber, response);
 
       if (result.action === 'invalid') {
@@ -119,6 +132,124 @@ export class ConfirmationIntentHandler implements IntentHandler {
         success: false,
         message: '❌ Erro ao processar confirmação. Tente novamente.',
       };
+    }
+  }
+
+  /**
+   * Extrai termo de categoria de mensagens do tipo:
+   * "não, foi alimentação", "era transporte", "na verdade é saúde", "foi lazer"
+   * Retorna null se não detectar o padrão.
+   */
+  private extractInlineCategoryTerm(text: string): string | null {
+    const normalized = text.trim().toLowerCase();
+
+    const patterns = [
+      /^n(?:ã|a)o[,\s]+foi\s+(.+)$/,       // "não, foi X" / "nao foi X"
+      /^n(?:ã|a)o[,\s]+(?:é|e)\s+(.+)$/,   // "não, é X"
+      /^era\s+(.+)$/,                         // "era X"
+      /^na verdade[,\s]+(?:é|foi|era|e)?\s*(.+)$/,  // "na verdade é X" / "na verdade X"
+      /^foi\s+([a-záãâàéêèíîìóõôòúûùç][^\s].+)$/,  // "foi X" (min 2 palavras para evitar falso positivo)
+      /^(?:é|e)\s+([a-záãâàéêèíîìóõôòúûùç][^\s].+)$/,  // "é X" (min 2 palavras)
+      /^corrigir[,\s]+(?:para\s+)?(.+)$/,   // "corrigir para X"
+    ];
+
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (match?.[1]) {
+        const term = match[1].trim().replace(/[?!.,;]+$/, '');
+        if (term.length >= 3) return term;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Busca categorias da conta ativa e tenta match fuzzy com o termo.
+   * Se achar, atualiza a confirmação pendente e retorna mensagem atualizada.
+   * Se não achar, retorna null (cai no fluxo normal de lista).
+   */
+  private async tryInlineCategoryUpdate(
+    phoneNumber: string,
+    term: string,
+    userId?: string,
+    accountId?: string,
+  ): Promise<{ success: boolean; message: string } | null> {
+    try {
+      const effectiveUserId = userId || '';
+      if (!effectiveUserId) return null;
+
+      const allCategories = await this.ragService.getCachedCategories(effectiveUserId, accountId || null);
+      if (!allCategories.length) return null;
+
+      // Fuzzy match: verificar se term está contido no nome da categoria ou subcategoria
+      const termNorm = term.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      let bestMatch: { categoryId: string; categoryName: string; subCategoryId: string | null; subCategoryName: string | null } | null = null;
+      let bestScore = 0;
+
+      for (const cat of allCategories) {
+        const catNorm = cat.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+        // Match na categoria principal
+        if (catNorm === termNorm) {
+          bestMatch = { categoryId: cat.id, categoryName: cat.name, subCategoryId: null, subCategoryName: null };
+          bestScore = 100;
+          break;
+        }
+        if (catNorm.includes(termNorm) && termNorm.length / catNorm.length > bestScore / 100) {
+          const score = (termNorm.length / catNorm.length) * 80;
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = { categoryId: cat.id, categoryName: cat.name, subCategoryId: null, subCategoryName: null };
+          }
+        }
+
+        // Match na subcategoria
+        if (cat.subCategory) {
+          const subNorm = cat.subCategory.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          if (subNorm === termNorm) {
+            bestMatch = { categoryId: cat.id, categoryName: cat.name, subCategoryId: cat.subCategory.id, subCategoryName: cat.subCategory.name };
+            bestScore = 100;
+            break;
+          }
+          if (subNorm.includes(termNorm) && termNorm.length / subNorm.length > bestScore / 100) {
+            const score = (termNorm.length / subNorm.length) * 90; // subcategoria tem peso maior
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = { categoryId: cat.id, categoryName: cat.name, subCategoryId: cat.subCategory.id, subCategoryName: cat.subCategory.name };
+            }
+          }
+        }
+      }
+
+      // Threshold mínimo: 50% de match
+      if (!bestMatch || bestScore < 50) return null;
+
+      const confirmation = await this.confirmationService.getPendingConfirmation(phoneNumber, accountId);
+      if (!confirmation) return null;
+
+      const categoryLabel = bestMatch.subCategoryName
+        ? `${bestMatch.categoryName} > ${bestMatch.subCategoryName}`
+        : bestMatch.categoryName;
+
+      const updated = await this.confirmationService.updateCategory(
+        confirmation.id,
+        bestMatch.categoryName,
+        bestMatch.categoryId,
+        bestMatch.subCategoryId,
+        bestMatch.subCategoryName,
+      );
+
+      this.logger.log(`🔄 Categoria inline atualizada para "${categoryLabel}" (score=${bestScore.toFixed(0)}%)`);
+
+      const confirmMsg = this.confirmationService.formatConfirmationMessage(updated);
+      return {
+        success: true,
+        message: `✅ Categoria alterada para *${categoryLabel}*!\n\n${confirmMsg}`,
+      };
+    } catch (err) {
+      this.logger.warn(`[inline-category] Erro ao tentar match: ${err.message}`);
+      return null;
     }
   }
 

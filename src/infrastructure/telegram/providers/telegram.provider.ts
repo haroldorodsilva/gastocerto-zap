@@ -156,6 +156,17 @@ export class TelegramProvider implements IMessagingProvider {
     const maxRetries = 3;
     const baseDelay = 1000; // 1 segundo
 
+    // Indicador de digitação antes de enviar
+    if (this.bot) {
+      try {
+        const typingMs = Math.min(3000, Math.max(600, text.length * 25));
+        await this.bot.sendChatAction(chatId, 'typing');
+        await new Promise((resolve) => setTimeout(resolve, typingMs));
+      } catch (_err) {
+        // silenciado: falha no typing não deve impedir o envio
+      }
+    }
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         if (!this.bot) {

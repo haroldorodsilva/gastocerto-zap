@@ -161,6 +161,7 @@ export class MessageLearningService {
     messageId: string,
     user: UserCache,
     platform: string = 'whatsapp',
+    accountId?: string,
   ): Promise<{
     success: boolean;
     message: string;
@@ -180,7 +181,7 @@ export class MessageLearningService {
         messageId,
         user,
         platform,
-        undefined, // accountId: não especificado, usa validação padrão
+        accountId, // accountId: passado pelo caller (ex: webchat)
         true, // skipLearning: não verificar learning novamente
       );
 

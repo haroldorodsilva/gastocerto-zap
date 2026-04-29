@@ -17,6 +17,7 @@ import {
 } from '@features/messages/message-validation.service';
 import { TransactionsService } from '@features/transactions/transactions.service';
 import { MESSAGE_EVENTS } from '@infrastructure/messaging/messaging-events.constants';
+import { WhatsAppSessionManager } from '@infrastructure/whatsapp/providers/baileys/whatsapp-session-manager.service';
 
 /**
  * WhatsAppMessageHandler
@@ -44,6 +45,7 @@ export class WhatsAppMessageHandler {
     private readonly prisma: PrismaService,
     private readonly messageValidation: MessageValidationService,
     private readonly confirmationService: TransactionConfirmationService,
+    private readonly whatsappSessionManager: WhatsAppSessionManager,
   ) {}
 
   /**
@@ -277,7 +279,20 @@ export class WhatsAppMessageHandler {
         this.logger.log(`[WhatsApp] Processing transaction confirmation for ${phoneNumber}`);
 
         // Processar confirmação diretamente
-        await this.confirmationService.processResponse(phoneNumber, message.text);
+        const confirmResult = await this.confirmationService.processResponse(phoneNumber, message.text);
+
+        // Enviar emoji reaction na mensagem do usuário (best-effort)
+        if (confirmResult.action === 'confirmed') {
+          fireAndForget(
+            () => this.whatsappSessionManager.sendReaction(sessionId, phoneNumber, message.messageId, '✅'),
+            { label: `reaction:${phoneNumber}` },
+          );
+        } else if (confirmResult.action === 'rejected') {
+          fireAndForget(
+            () => this.whatsappSessionManager.sendReaction(sessionId, phoneNumber, message.messageId, '❌'),
+            { label: `reaction:${phoneNumber}` },
+          );
+        }
 
         return;
       }
