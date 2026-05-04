@@ -54,6 +54,13 @@ export class ConfirmationExpirationJob {
   async checkExpiringConfirmations() {
     try {
       const now = new Date();
+
+      // Saída rápida se não há nenhuma confirmação pendente no sistema
+      const hasPending = await this.prisma.transactionConfirmation.count({
+        where: { status: ConfirmationStatus.PENDING, deletedAt: null },
+      });
+      if (hasPending === 0) return;
+
       const warningTime = new Date(now.getTime() + this.WARNING_THRESHOLD_SECONDS * 1000);
 
       // Buscar confirmações pendentes que expiram nos próximos 30 segundos

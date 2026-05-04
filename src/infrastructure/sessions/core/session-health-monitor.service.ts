@@ -150,8 +150,9 @@ export class SessionHealthMonitorService {
       warnings.push(`WARNING: RSS memory ${rssMB} MB exceeds ${this.MEMORY_WARN_MB} MB`);
     }
 
-    if (heapUsagePercent > 90) {
-      warnings.push(`Heap usage at ${heapUsagePercent.toFixed(1)}% — possible memory leak`);
+    // Só alerta se percentual alto E heap grande em MB — evita falsos positivos no boot
+    if (heapUsagePercent > 90 && heapUsedMB > 200) {
+      warnings.push(`Heap usage at ${heapUsagePercent.toFixed(1)}% (${heapUsedMB} MB used) — possible memory leak`);
     }
 
     // Sessões WhatsApp

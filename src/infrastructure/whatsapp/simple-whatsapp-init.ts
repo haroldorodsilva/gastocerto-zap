@@ -43,8 +43,18 @@ export class WhatsAppSocketState {
   messageHandler: any = null;
   prisma: any = null;
   eventEmitter: any = null;
+  keepAliveInterval: NodeJS.Timeout | null = null;
+  reconnectTimer: NodeJS.Timeout | null = null;
 
   reset(): void {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.socket = null;
     this.messageHandler = null;
     this.prisma = null;
@@ -240,7 +250,11 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
     whatsAppState.socket = sock;
 
     // Keep-alive: Mostrar que o app está ativo a cada 30 segundos
-    setInterval(() => {
+    // Limpar interval anterior antes de criar um novo (evita leak em reconexões)
+    if (whatsAppState.keepAliveInterval) {
+      clearInterval(whatsAppState.keepAliveInterval);
+    }
+    whatsAppState.keepAliveInterval = setInterval(() => {
       if (sock.user) {
         const userName = sock.user.name || sock.user.verifiedName || 'WhatsApp';
         logger.debug(`💚 App ativo - Conectado como ${userName} (${sock.user.id})`);
@@ -294,8 +308,11 @@ export async function initializeSimpleWhatsApp(skipActiveCheck = false): Promise
 
         if (shouldReconnect) {
           logger.log('🔄 Reconectando...');
-          // Reconectar após 3 segundos
-          setTimeout(() => initializeSimpleWhatsApp(), 3000);
+          if (whatsAppState.reconnectTimer) clearTimeout(whatsAppState.reconnectTimer);
+          whatsAppState.reconnectTimer = setTimeout(() => {
+            whatsAppState.reconnectTimer = null;
+            void initializeSimpleWhatsApp();
+          }, 3000);
         } else {
           logger.error('❌ Deslogado. Remova .auth_info e reinicie para novo QR Code.');
         }
