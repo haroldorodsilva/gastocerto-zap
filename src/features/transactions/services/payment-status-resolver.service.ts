@@ -5,7 +5,7 @@ export interface TransactionData {
   type: string;
   amount: number;
   description?: string | null;
-  date?: string | null;
+  date?: string | Date | null;
   category: string;
   subCategory?: string | null;
   confidence: number;
@@ -87,7 +87,14 @@ export class PaymentStatusResolverService {
 
     // Regra 4: Data futura (ex: "mês que vem", "dia 15 do próximo mês")
     if (data.date) {
-      const parsed = parseISO(data.date);
+      let parsed: Date;
+      if (data.date instanceof Date) {
+        parsed = data.date;
+      } else if (typeof data.date === 'string') {
+        parsed = parseISO(data.date);
+      } else {
+        parsed = new Date(data.date as any);
+      }
       if (isValid(parsed) && isFuture(startOfDay(parsed))) {
         return {
           status: 'PENDING',
