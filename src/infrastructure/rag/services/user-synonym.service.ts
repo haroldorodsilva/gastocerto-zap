@@ -254,12 +254,22 @@ export class UserSynonymService {
   }> {
     const normalized = this.textProcessing.normalize(term);
 
+    // Prioridade: sinônimo da conta específica > sinônimo global (userId=null, accountId=null)
     const synonym = await this.prisma.userSynonym.findFirst({
       where: {
-        userId,
-        accountId: accountId ?? null,
-        keyword: normalized,
+        OR: [
+          // Sinônimo da conta específica
+          ...(accountId ? [{ userId, accountId, keyword: normalized }] : []),
+          // Fallback legado: sinônimo do usuário sem accountId
+          { userId, accountId: null, keyword: normalized },
+          // Sinônimo global (base de conhecimento compartilhada)
+          { userId: null, accountId: null, keyword: normalized },
+        ],
       },
+      orderBy: [
+        { userId: 'asc' }, // conta > global
+        { confidence: 'desc' },
+      ],
     });
 
     if (!synonym) return { hasSynonym: false };

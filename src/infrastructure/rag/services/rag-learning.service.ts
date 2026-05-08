@@ -165,7 +165,7 @@ export class RAGLearningService {
           `Razão: ${detection.reason} | Confiança: ${(detection.confidence * 100).toFixed(1)}%`,
       );
 
-      // 2. Verificar se já tem sinônimo aprendido (accountId-scoped)
+      // 2. Verificar se já tem sinônimo aprendido
       const existingSynonym = await this.userSynonymService.hasUserSynonym(userId, detection.detectedTerm, accountId);
 
       if (existingSynonym.hasSynonym) {
