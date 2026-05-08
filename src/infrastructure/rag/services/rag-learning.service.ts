@@ -91,6 +91,59 @@ export class RAGLearningService {
         }
       }
 
+      // 3. RAG não detectou nada, mas a IA usou apenas seu próprio julgamento (AI_ONLY).
+      // Neste caso, o termo pode estar correto ou errado — pedir confirmação ao usuário.
+      if (!detection && extractedData && extractedData.source === 'AI_ONLY') {
+        const category = extractedData.category || '';
+        const subCategory = extractedData.subCategory || '';
+        const isGenericCategory = category === 'Outros' || category === 'Geral';
+        const isGenericSubcategory = !subCategory || subCategory === 'Outros' || subCategory === 'Geral';
+
+        // Apenas para categorias específicas (genéricas já tratadas acima)
+        if (!isGenericCategory && !isGenericSubcategory) {
+          const detectedTerm = this.extractMainTerm(text);
+          if (detectedTerm) {
+            const existingSynonymAi = await this.userSynonymService.hasUserSynonym(userId, detectedTerm, accountId);
+            if (!existingSynonymAi.hasSynonym) {
+              this.logger.log(
+                `🎓 [RAGLearningService] AI_ONLY sem evidência RAG → sugerindo learning para "${detectedTerm}" (${category} > ${subCategory})`,
+              );
+
+              const syntheticDetection = {
+                detectedTerm,
+                suggestedCategory: category,
+                suggestedCategoryId: extractedData.categoryId,
+                suggestedSubcategory: subCategory,
+                suggestedSubcategoryId: extractedData.subCategoryId,
+                confidence: extractedData.confidence || 0.5,
+                reason: `AI classificou sem evidência RAG`,
+              };
+
+              const aiOnlyContext = {
+                detectedTerm,
+                suggestedCategoryId: extractedData.categoryId,
+                suggestedCategory: category,
+                suggestedSubcategoryId: extractedData.subCategoryId,
+                suggestedSubcategory: subCategory,
+                originalText: text,
+                confidence: extractedData.confidence || 0.5,
+                accountId,
+                timestamp: Date.now(),
+              };
+
+              await this.saveContext(phoneNumber, aiOnlyContext);
+              const message = this.buildConfirmationMessage(syntheticDetection);
+
+              return {
+                needsConfirmation: true,
+                message,
+                context: aiOnlyContext,
+              };
+            }
+          }
+        }
+      }
+
       if (!detection) {
         this.logger.debug(
           `🎓 [RAGLearningService] Nenhum termo desconhecido detectado (detection=null)`,
@@ -112,8 +165,8 @@ export class RAGLearningService {
           `Razão: ${detection.reason} | Confiança: ${(detection.confidence * 100).toFixed(1)}%`,
       );
 
-      // 2. Verificar se já tem sinônimo aprendido
-      const existingSynonym = await this.userSynonymService.hasUserSynonym(userId, detection.detectedTerm);
+      // 2. Verificar se já tem sinônimo aprendido (accountId-scoped)
+      const existingSynonym = await this.userSynonymService.hasUserSynonym(userId, detection.detectedTerm, accountId);
 
       if (existingSynonym.hasSynonym) {
         this.logger.log(
