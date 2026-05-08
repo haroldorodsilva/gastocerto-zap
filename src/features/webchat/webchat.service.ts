@@ -318,6 +318,7 @@ export class WebChatService {
               user,
               'webchat', // WebChat é uma plataforma própria
               accountId, // Passar accountId para evitar erro de AccountId não fornecido
+              learningResult.overrideCategory, // Categoria escolhida no learning flow
             );
 
             return this.formatTransactionResponse(transactionResult, learningResult.message);

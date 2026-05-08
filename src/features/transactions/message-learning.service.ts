@@ -69,6 +69,12 @@ export class MessageLearningService {
     message: string;
     shouldProcessOriginalTransaction?: boolean;
     originalText?: string;
+    overrideCategory?: {
+      categoryId?: string;
+      categoryName?: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+    };
   }> {
     if (!this.ragLearningService) {
       return { success: false, message: '❌ Serviço de aprendizado indisponível.' };
@@ -133,12 +139,20 @@ export class MessageLearningService {
     );
 
     if (correctionResult.success) {
-      // Correção aceita - retornar originalText do resultado
+      // Correção aceita - retornar originalText e categoria selecionada
       return {
         success: true,
         message: correctionResult.message,
         shouldProcessOriginalTransaction: correctionResult.shouldContinue,
-        originalText: correctionResult.originalText, // Usar originalText do resultado
+        originalText: correctionResult.originalText,
+        overrideCategory: correctionResult.selectedCategoryId
+          ? {
+              categoryId: correctionResult.selectedCategoryId,
+              categoryName: correctionResult.selectedCategoryName,
+              subCategoryId: correctionResult.selectedSubcategoryId,
+              subCategoryName: correctionResult.selectedSubcategoryName,
+            }
+          : undefined,
       };
     } else {
       // Correção inválida
@@ -162,6 +176,12 @@ export class MessageLearningService {
     user: UserCache,
     platform: string = 'whatsapp',
     accountId?: string,
+    overrideCategory?: {
+      categoryId?: string;
+      categoryName?: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+    },
   ): Promise<{
     success: boolean;
     message: string;
@@ -183,6 +203,7 @@ export class MessageLearningService {
         platform,
         accountId, // accountId: passado pelo caller (ex: webchat)
         true, // skipLearning: não verificar learning novamente
+        overrideCategory, // Categoria escolhida pelo usuário no learning flow
       );
 
       return {

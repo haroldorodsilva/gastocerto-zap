@@ -294,6 +294,8 @@ export class MessageValidationService {
           messageId,
           user,
           platform,
+          undefined, // accountId
+          result.overrideCategory, // Categoria escolhida no learning flow
         );
 
         if (transactionResult) {

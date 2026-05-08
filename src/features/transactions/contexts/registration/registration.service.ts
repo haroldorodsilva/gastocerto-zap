@@ -161,6 +161,12 @@ export class TransactionRegistrationService implements OnModuleInit {
     platform: string = 'whatsapp',
     accountId?: string, // accountId contextual passado pelo provider
     skipLearning: boolean = false, // Evita loop infinito após confirmação
+    overrideCategory?: { // Categoria escolhida pelo usuário no learning flow
+      categoryId?: string;
+      categoryName?: string;
+      subCategoryId?: string;
+      subCategoryName?: string;
+    },
   ): Promise<{
     success: boolean;
     message: string;
@@ -352,6 +358,18 @@ export class TransactionRegistrationService implements OnModuleInit {
       }
 
       // 3.5. Resolver categoria/subcategoria ANTES do aprendizado (para ter IDs corretos)
+
+      // 🎓 Se o usuário escolheu uma categoria via learning flow, aplicar antes de resolver IDs
+      if (overrideCategory?.categoryName) {
+        this.logger.log(
+          `🎓 [Override] Aplicando categoria do learning flow: ${overrideCategory.categoryName}${overrideCategory.subCategoryName ? ' > ' + overrideCategory.subCategoryName : ''}`,
+        );
+        extractedData.category = overrideCategory.categoryName;
+        extractedData.subCategory = overrideCategory.subCategoryName || null;
+        if (overrideCategory.categoryId) extractedData.categoryId = overrideCategory.categoryId;
+        if (overrideCategory.subCategoryId) extractedData.subCategoryId = overrideCategory.subCategoryId;
+      }
+
       const resolved = await this.categoryResolver.resolve(
         user.gastoCertoId,
         activeAccountId,

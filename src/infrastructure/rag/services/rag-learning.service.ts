@@ -201,6 +201,12 @@ export class RAGLearningService {
     // Verificar se usuário tem categoria "Outros" disponível
     const hasOthersCategory = context.hasOutrosCategory !== false;
 
+    // Se há pendingMatches (usuário está selecionando da lista de opções), não tratar
+    // como confirmação simples — deixar processCorrection tratar a seleção numérica
+    if (context.pendingMatches && /^\d+$/.test(normalizedResponse)) {
+      return { processed: false };
+    }
+
     // OPÇÃO 1: CONFIRMAR (apenas se hasOthersCategory = true)
     // Aceita: 1, sim, confirmar, continuar, ok
     if (
@@ -350,6 +356,10 @@ export class RAGLearningService {
     needsSelection?: boolean; // Se true, aguarda seleção numérica do usuário
     matches?: Array<{ category: any; subcategory?: any }>; // Opções encontradas
     originalText?: string; // Texto original da transação para reprocessar
+    selectedCategoryId?: string;
+    selectedCategoryName?: string;
+    selectedSubcategoryId?: string;
+    selectedSubcategoryName?: string;
   }> {
     const context = await this.getContext(phoneNumber);
 
@@ -394,6 +404,10 @@ export class RAGLearningService {
               `Agora vou registrar sua transação... ⏳`,
             shouldContinue: true,
             originalText, // Retornar texto original
+            selectedCategoryId: selected.category.id,
+            selectedCategoryName: selected.category.name,
+            selectedSubcategoryId: selected.subcategory?.id,
+            selectedSubcategoryName: selected.subcategory?.name,
           };
         } else {
           return {
