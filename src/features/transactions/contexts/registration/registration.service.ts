@@ -426,6 +426,14 @@ export class TransactionRegistrationService implements OnModuleInit {
           return confirmResult;
         }
 
+        // Se createConfirmation já fez AUTO-REGISTER (enviou para API), retornar direto
+        if (!confirmResult.requiresConfirmation) {
+          this.logger.log(
+            `✅ Confirmação ${confirmResult.confirmationId} já processada pelo auto-register (skipLearning)`,
+          );
+          return confirmResult;
+        }
+
         // Confirmar imediatamente (mudar status PENDING → CONFIRMED)
         const confirmed = await this.confirmationService.confirm(confirmResult.confirmationId);
         this.logger.log(`✅ Confirmação ${confirmed.id} auto-confirmada (skipLearning)`);
