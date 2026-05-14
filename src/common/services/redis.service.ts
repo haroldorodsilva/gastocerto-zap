@@ -30,10 +30,17 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       const redisPort = this.configService.get<number>('REDIS_PORT', 6379);
       const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
 
+      const envPrefix = this.configService.get<string>('REDIS_KEY_PREFIX') ?? this.configService.get<string>('NODE_ENV') ?? 'dev';
+      const keyPrefix = envPrefix ? `${envPrefix}:` : '';
+      if (keyPrefix) {
+        this.logger.log(`🔑 Redis: usando prefixo de ambiente "${keyPrefix}"`);
+      }
+
       const commonOptions = {
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
         lazyConnect: false,
+        ...(keyPrefix ? { keyPrefix } : {}),
         retryStrategy: (times: number) => {
           if (times > 10) {
             this.logger.error(`❌ Redis: desistindo após ${times} tentativas`);
